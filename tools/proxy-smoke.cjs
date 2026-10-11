@@ -223,6 +223,11 @@ async function main() {
   console.log("role layer ok（developer→system / function→tool|user / 幂等 / 非法输入不抛 / qoder+zcode 静默丢弃已堵）");
 
   assert(adapters.mergedModels().length > 5, "合并模型目录");
+  const rawCatPawModels = adapters.channelModelIds("catpaw");
+  assert(rawCatPawModels.includes("kimi-k3") && !rawCatPawModels.includes("AgentHub-1.0"), "反向映射候选只含 CatPaw 原始模型，不含统一请求名");
+  const selfMapCfg = { modelReverseAliases: { "AgentHub-1.0": { catpaw: "AgentHub-1.0", lobster: "glm-5.3" } } };
+  assert(adapters.resolveModelTarget("AgentHub-1.0", "catpaw", selfMapCfg) === null, "历史自映射不得被当成 CatPaw 可转发目标");
+  assert(!adapters.modelOwners("AgentHub-1.0", selfMapCfg).includes("catpaw"), "自映射渠道不得进入反向映射归属");
   assert(adapters.modelOwners("gpt-5").length === 1 && adapters.modelOwners("gpt-5")[0] === "workbuddy", "gpt-5 归属 CN workbuddy（AI 区目录已无此型号）");
   assert(adapters.modelOwners("deepseek-v4.1-flash").length === 1 && adapters.modelOwners("deepseek-v4.1-flash")[0] === "workbuddy_ai", "deepseek-v4.1-flash 归属国际版 workbuddy_ai");
   assert(adapters.modelOwners("deepseek-v4-flash")[0] === "trae", "单源模型归属");

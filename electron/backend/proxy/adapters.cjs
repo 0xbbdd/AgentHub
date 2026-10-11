@@ -3884,6 +3884,61 @@ function get(channel) {
   return ADAPTERS[channel] || null;
 }
 
+/** 渠道适配器声明的原始模型 id。
+ * 管理页配置反向映射时必须使用这份清单，不能从 mergedModels.sources 反推：
+ * mergedModels 会把统一请求名注入映射渠道，反推会让统一名自身混入“实际模型”候选。 */
+function channelModelIds(channel) {
+  const ad = get(channel);
+  if (!ad) return [];
+  const out = [];
+  for (const value of ad.models()) {
+    const id = String(value || "").trim();
+    if (id && !out.some((item) => item.toLowerCase() === id.toLowerCase())) out.push(id);
+  }
+  return out;
+}
+
+function reverseAliasEntry(model, cfg) {
+  const rev = (cfg || proxyConfig()).modelReverseAliases || {};
+  const direct = rev[String(model || "")];
+  if (direct && typeof direct === "object") return direct;
+  const lower = String(model || "").toLowerCase();
+  for (const [key, value] of Object.entries(rev)) {
+    if (key.toLowerCase() === lower && value && typeof value === "object") return value;
+  }
+  return null;
+}
+
+/** 反向映射的渠道目标。自映射（统一名 -> 同名）是历史 UI 污染，不构成可转发目标。 */
+function reverseAliasTarget(model, channel, cfg) {
+  const entry = reverseAliasEntry(model, cfg);
+  if (!entry) return null;
+  const raw = entry[channel];
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  const target = raw.trim();
+  return target.toLowerCase() === String(model || "").trim().toLowerCase() ? null : target;
+}
+
+function nativeModel(channel, model) {
+  const ad = get(channel);
+  const lower = String(model || "").trim().toLowerCase();
+  return !!ad && lower !== "" && ad.models().some((item) => String(item).toLowerCase() === lower);
+}
+
+/** 模型在某渠道上的实际可转发名。
+ * 该渠道显式配了反向映射时，只认映射结果；自映射/空映射不得再回退成“原生模型”，
+ * 否则历史脏目录里恰好混入统一名时，仍可能把统一名发给上游。
+ * 未配该渠道映射时，原生模型名可继续作为合法目标（保留 issue #78 的跨渠道备选）。 */
+function resolveModelTarget(model, channel, cfg) {
+  const normalized = String(model || "").trim();
+  if (!normalized || !get(channel)) return null;
+  const entry = reverseAliasEntry(normalized, cfg);
+  if (entry && Object.prototype.hasOwnProperty.call(entry, channel)) {
+    return reverseAliasTarget(normalized, channel, cfg);
+  }
+  return nativeModel(channel, normalized) ? normalized : null;
+}
+
 // ===== 刷新并发互斥（single-flight） =====
 // 上游 refreshToken 是轮换语义（参考项目实证：旧 refreshToken 可能一次性失效）：
 // 并发 401 各自拿同一个旧 token 刷，后发者必然失败并把好号误判 relogin。
@@ -3926,7 +3981,7 @@ function mergedModels(cfg) {
   for (const [unifiedId, chMap] of Object.entries(rev)) {
     if (!unifiedId || !chMap || typeof chMap !== "object") continue;
     const lowerUnified = unifiedId.toLowerCase();
-    const mappedSources = Object.keys(chMap).filter((ch) => ADAPTERS[ch]);
+    const mappedSources = Object.keys(chMap).filter((ch) => ADAPTERS[ch] && reverseAliasTarget(unifiedId, ch, c));
     if (!mappedSources.length) continue;
     const existing = seen.get(lowerUnified);
     if (existing) {
@@ -3961,8 +4016,9 @@ function mergedModels(cfg) {
           if (rk.toLowerCase() === lowerId) { revMap = rv; break; }
         }
       }
-      if (revMap && revMap[channel]) {
-        lookupId = revMap[channel];
+      if (revMap) {
+        const mapped = reverseAliasTarget(entry.id, channel, c);
+        if (mapped) lookupId = mapped;
       }
       const meta = catMaps[channel].get(lookupId.toLowerCase()) || catMaps[channel].get(entry.id.toLowerCase());
       if (!meta) continue;
@@ -4021,17 +4077,8 @@ function modelOwners(model, cfg) {
   const rev = c.modelReverseAliases || {};
   const lower = String(model || "").toLowerCase();
   const mapped = [];
-  const directRev = rev[model];
-  if (directRev && typeof directRev === "object") {
-    mapped.push(...Object.keys(directRev).filter((ch) => ADAPTERS[ch]));
-  } else {
-    for (const [k, map] of Object.entries(rev)) {
-      if (k.toLowerCase() === lower && map && typeof map === "object") {
-        mapped.push(...Object.keys(map).filter((ch) => ADAPTERS[ch]));
-        break;
-      }
-    }
-  }
+  const entry = reverseAliasEntry(model, c);
+  if (entry) mapped.push(...Object.keys(entry).filter((ch) => ADAPTERS[ch] && reverseAliasTarget(model, ch, c)));
   const out = [];
   const seen = new Set();
   for (const ch of mapped) {
@@ -4076,7 +4123,7 @@ function consistencyReport() {
   };
 }
 
-module.exports = { get, ADAPTERS, mergedModels, listableModels, modelOwners, channelOn, httpJson, refreshTokenLocked, setPendingCaptcha, getPendingCaptcha,
+module.exports = { get, ADAPTERS, channelModelIds, reverseAliasEntry, resolveModelTarget, mergedModels, listableModels, modelOwners, channelOn, httpJson, refreshTokenLocked, setPendingCaptcha, getPendingCaptcha,
   // 适配器契约（启动期校验 + 自测复验用）
   REQUIRED_ADAPTER_METHODS, assertAdapterContract, consistencyReport,
   // ModelScope 续期实现注入（避免 adapters ↔ discovery 循环依赖；由 index.cjs 启动时注入）

@@ -951,13 +951,21 @@ function register(ipcMain) {
   // 合并视图 + 管理态（启停/渠道覆盖/回退模型/自定义参数）；管理态由渲染层写回整体配置（app.save），服务端每请求读盘热生效
   ipcMain.handle("proxy_models", handle(() => {
     const cfg = settings();
-    return adapters.mergedModels(cfg).map((m) => ({
-      ...m,
-      enabled: !(cfg.disabledModels || []).includes(m.id),
-      override: (cfg.modelOverrides || {})[m.id] || "",
-      fallback: (cfg.modelFallback || {})[m.id] || "",
-      custom: (cfg.modelCustom || {})[m.id] || undefined,
-    }));
+    const channelModelIds = Object.fromEntries(
+      Object.keys(adapters.ADAPTERS).map((channel) => [channel, adapters.channelModelIds(channel)])
+    );
+    return adapters.mergedModels(cfg).map((m, index) => {
+      const item = {
+        ...m,
+        enabled: !(cfg.disabledModels || []).includes(m.id),
+        override: (cfg.modelOverrides || {})[m.id] || "",
+        fallback: (cfg.modelFallback || {})[m.id] || "",
+        custom: (cfg.modelCustom || {})[m.id] || undefined,
+      };
+      // 原始渠道目录只需随响应返回一次；渲染层从首条读取，避免新增 IPC 和重复传输。
+      if (index === 0) item.channelModelIds = channelModelIds;
+      return item;
+    });
   }));
   // 官方模型目录拉取（三渠道通用）：取号池里第一个 online 有 token 的账号，adapter.fetchModels 走云端接口
   // （Trae get_detail_param / WB v3/config + console models），结果写回 rules/catalog.json 热生效。
