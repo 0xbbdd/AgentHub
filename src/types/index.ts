@@ -279,6 +279,9 @@ export interface ProxyConfig {
   rateLimitPerMin: number;
   concurrency: number;
   creditsRefreshMin: number;
+  /** 号池定时同步（poolsyncSchedule）：hourly 每小时档 / daily 每天固定时刻，全关 = 仅手动；
+   *  API Keys 与模型映射随号池同步走，自动同步让新设备开箱即得 */
+  poolsyncSchedule: { hourly: boolean; hourlyInterval: number; daily: boolean; dailyTime: string };
   debugStatus: boolean;
   /** 模型 → 渠道 id 的 per-model 覆盖（渠道可扩充，故为字符串值） */
   modelOverrides: Record<string, string>;

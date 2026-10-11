@@ -17,6 +17,7 @@ const events = require("./events.cjs");
 const util = require("./util.cjs");
 const ideswitch = require("./ideswitch.cjs");
 const poolsync = require("./poolsync.cjs");
+const poolsched = require("./poolsched.cjs");
 const ccswitch = require("./ccswitch.cjs");
 const oplog = require("./oplog.cjs");
 const xlsx = require("./xlsx.cjs"); // xlsx 写入器在本目录（v1.57.0 误写 ../xlsx.cjs，顶层 require 抛错 → 启动即崩）
@@ -425,6 +426,7 @@ async function boot() {
   } catch { /* 迁移失败不阻断启动，号池页仍可手动修复 */ }
   credits.startScheduler(() => settings().creditsRefreshMin);
   startCheckinAuto();
+  poolsched.start(); // 号池定时同步（issue #89/#92）：hourly/daily 周期触发，全关时空转
   // 远程锚定指纹（remoteMid）的云端兜底：本机 anchor 缺锚（重装/换机）先从 WebDAV 拉回；
   // 有锚则顺手上传一份（内容 hash 记账，未变不重传）。fire-and-forget，WebDAV 未配置/网络
   // 失败一律静默——锚定的主事实在本机 anchor 文件里，云端只是防丢副本
@@ -445,6 +447,7 @@ async function boot() {
 function shutdown() {
   credits.stopScheduler();
   stopCheckinAuto();
+  poolsched.stop();
   discovery.cancelOAuth();
   server.stop();
 }

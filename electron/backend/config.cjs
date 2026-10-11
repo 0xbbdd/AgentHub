@@ -157,6 +157,13 @@ function defaultConfig() {
       rateLimitPerMin: 120,     // 单 Key 令牌桶限速（次/分钟，Key 可单独覆盖）
       concurrency: 8,           // 上游并发上限
       creditsRefreshMin: 30,    // 额度自动刷新周期（分钟）
+      poolsyncSchedule: {       // 号池定时同步（issue #89/#92）：全关 = 仅手动；API Key 与
+                                // 模型映射随号池同步走，自动同步让新设备开箱即得
+        hourly: false,          // 每小时档自动同步
+        hourlyInterval: 6,      // 每小时档周期（小时）：1/2/3/6/12
+        daily: false,           // 每天固定时刻同步
+        dailyTime: "04:00",
+      },
       debugStatus: false,       // /status 调试端点（默认关，仅回环地址）
       modelOverrides: {},       // 模型 → 渠道 的 per-model 覆盖（多源重叠时优先）
       humanizeJitter: true,     // 拟人抖动：每次上游请求前随机停 40~220ms（防风控识别为反代）
