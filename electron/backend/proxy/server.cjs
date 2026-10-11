@@ -696,7 +696,10 @@ async function handleChat(req, res, settings) {
         const revEntry = adapters.reverseAliasEntry(chainModel, settings);
         const mappedTarget = adapters.resolveModelTarget(chainModel, chan, settings);
         if (!mappedTarget && revEntry) {
-          lastErr = Object.assign(new Error(`渠道 ${chan} 未配置模型 "${chainModel}" 的反向映射`), { status: 400 });
+          // 首错保留：前面渠道的真实上游错误比这里的映射提示更有价值（与其余跳过路径同口径）
+          if (!lastErr) {
+            lastErr = Object.assign(new Error(`渠道 ${chan} 未配置模型 "${chainModel}" 的反向映射`), { status: 400 });
+          }
           triedChannels.push({ chan, accounts: [], note: "未配置反向映射" });
           continue;
         }
