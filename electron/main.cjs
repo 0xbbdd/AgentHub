@@ -247,17 +247,21 @@ function buildTrayMenu() {
   const cfg = config.loadConfig();
   const running = remotesync.isRunning();
   const p = remotesync.progress();
+  // 板块开关（issue #91）：关闭板块的托盘入口一并隐藏，避免绕过 UI 触发已停用模块
+  const on = (k) => {
+    const m = (cfg.modules || {})[k];
+    return !m || m.enabled !== false;
+  };
   const statusText = running
     ? `同步中…（${p.stageLabel}）`
     : remotesync.configured(cfg)
       ? `上次同步 ${fmtTime(remotesync.loadRemoteState().lastSyncAt) || "—"}`
       : "未配置 WebDAV";
-  const usageToday = usageTodaySummary();
-  const items = [
-    { label: `技能仓库：${statusText}`, enabled: false },
-    { label: usageToday != null ? `今日用量 ${formatNum(usageToday)} token` : "今日用量 —", enabled: false },
-    { type: "separator" },
-  ];
+  const usageToday = on("usage") ? usageTodaySummary() : null;
+  const items = [];
+  if (on("skills")) items.push({ label: `技能仓库：${statusText}`, enabled: false });
+  if (on("usage")) items.push({ label: usageToday != null ? `今日用量 ${formatNum(usageToday)} token` : "今日用量 —", enabled: false });
+  if (items.length) items.push({ type: "separator" });
   const st = updater.getStatus();
   if (st.status === "available" || st.status === "downloaded") {
     items.push({ label: `发现新版本 v${st.latestVersion} →`, click: () => { showWindow(); focusSettingsUpdate(); } });
@@ -265,21 +269,79 @@ function buildTrayMenu() {
   }
   items.push(
     { label: "显示主界面", click: showWindow },
-    { label: "立即同步技能", enabled: remotesync.configured(cfg) && !running, click: triggerSync },
-    { label: "立即同步用量", click: triggerUsageSync },
-    {
+    ...(on("skills") ? [{
+      label: "立即同步技能",
+      enabled: remotesync.configured(cfg) && !running,
+      click: triggerSync,
+    }] : []),
+    ...(on("usage") ? [{ label: "立即同步用量", click: triggerUsageSync }] : []),
+    ...(on("skills") ? [{
       label: scheduler.isPaused() ? "恢复定时同步" : "暂停定时同步",
       enabled: remotesync.configured(cfg) && !!(cfg.schedule && (cfg.schedule.hourly || cfg.schedule.daily)),
       click: () => { scheduler.setPaused(!scheduler.isPaused()); refreshTrayMenu(); },
-    },
-    {
+    }] : []),
+    ...(on("usage") ? [{
       label: usageScheduler.isPaused() ? "恢复用量定时同步" : "暂停用量定时同步",
       click: () => { usageScheduler.setPaused(!usageScheduler.isPaused()); refreshTrayMenu(); },
-    },
+    }] : []),
     { type: "separator" },
     { label: "退出", click: () => { quitting = true; app.quit(); } },
   );
   return Menu.buildFromTemplate(items);
+}
+
+/**
+ * 四大板块启用开关（issue #91）唯一写入口：设置页与「模块顺序」区的开关都走这里。
+ * 放在 main 而非 ipc.cjs：运行时启停要调 scheduler/watch/usageScheduler/proxy/memory，
+ * 这些设施的启停本来就归本文件管（before-quit 同款收口）。
+ * 落盘走 config.saveConfig 直写；saveConfigFromUI 对 modules 做磁盘优先，
+ * 渲染层旧快照的整份保存不会把开关状态写回去。
+ */
+function registerModuleToggle() {
+  ipcMain.handle("module_toggle", async (_e, args) => {
+    try {
+      const m = String((args && args.module) || "");
+      const enabled = !!(args && args.enabled);
+      if (!["skills", "usage", "proxy", "memory"].includes(m)) return { ok: false, message: "未知板块" };
+      const cfg = config.loadConfig();
+      const next = { ...cfg.modules, [m]: { ...((cfg.modules || {})[m] || {}), enabled } };
+      if (!enabled && Object.values(next).every((x) => !x || x.enabled === false)) {
+        return { ok: false, message: "至少保留一个启用的板块" };
+      }
+      cfg.modules = next;
+      config.saveConfig(cfg);
+      // 运行时启停：关 = 停后台设施（定时器/监听/服务/库）；开 = 重新拉起（各处均幂等）
+      if (m === "skills") {
+        if (enabled) { scheduler.start(); watch.start(); }
+        else { scheduler.stop(); watch.stop(); }
+      } else if (m === "usage") {
+        if (enabled) usageScheduler.start();
+        else {
+          usageScheduler.stop();
+          try { usagedb.close(); } catch { /* 关闭失败无碍，重新启用时惰性重开 */ }
+        }
+      } else if (m === "proxy") {
+        await proxy.setRuntime(enabled);
+        if (!enabled) {
+          // 与「记住网关开关」解耦：模块停用后重启也不该拉起网关（入口已置灰）
+          try { const c2 = config.loadConfig(); c2.proxy.restoreOnLaunch = false; config.saveConfig(c2); } catch { /* 写不回重启后也无入口可开 */ }
+        }
+      } else if (m === "memory") {
+        if (enabled) await memory.boot().catch(() => {});
+        else await memory.shutdown().catch(() => {});
+      }
+      // 渲染层各页订阅该事件刷新（左栏灰态即时生效、统计数字停止轮询）
+      try {
+        for (const w of BrowserWindow.getAllWindows()) {
+          if (!w.isDestroyed()) w.webContents.send("app:event", { event: "module-toggled", module: m, enabled });
+        }
+      } catch { /* 通知失败不影响切换结果 */ }
+      refreshTrayMenu();
+      return { ok: true, message: enabled ? "已启用" : "已停用" };
+    } catch (e) {
+      return { ok: false, message: String((e && e.message) || e) };
+    }
+  });
 }
 
 /** 新版本提示点击 → 打开配置中心 · 通用并定位到「软件更新」卡片 */
@@ -392,29 +454,41 @@ if (!gotLock) {
 
   app.whenReady().then(() => {
     // 建窗前先应用主题，避免深色配置下标题栏先白后黑闪烁
-    applyNativeTheme(config.loadConfig().theme);
+    const bootCfg = config.loadConfig();
+    applyNativeTheme(bootCfg.theme);
+    // 四大板块启用开关（issue #91）：关闭的板块后台完全不运行（不装定时器/监听/服务/库）
+    const on = (k) => {
+      const m = (bootCfg.modules || {})[k];
+      return !m || m.enabled !== false;
+    };
 
     // 用量同步：初始化本地库（惰性打开），并确保本机设备登记在册（设备列表/本机口径立即可用）
-    usagedb.get();
-    const usageCfg0 = usageConfig.loadConfig();
-    const usageLocalId = usagesync.ensureLocalDeviceId(usageCfg0);
-    usagedb.upsertDevice(usageLocalId, usageCfg0.deviceName || "这台电脑", usagesync.enabledSourceIds(usageCfg0).join(","), usagedb.getLastSyncAt(usageLocalId));
+    if (on("usage")) {
+      usagedb.get();
+      const usageCfg0 = usageConfig.loadConfig();
+      const usageLocalId = usagesync.ensureLocalDeviceId(usageCfg0);
+      usagedb.upsertDevice(usageLocalId, usageCfg0.deviceName || "这台电脑", usagesync.enabledSourceIds(usageCfg0).join(","), usagedb.getLastSyncAt(usageLocalId));
+    }
 
     ipc.register({ ipcMain, app, shell, nativeTheme });
+    registerModuleToggle();
     remotesync.setOnFinish(notifySync);
     usagesync.setOnFinish(notifyUsageSync);
     // 反代网关：规则热加载 + 额度定时刷新 + 按配置自启网关服务（服务独立于窗口存续）
     // boot() 是 async：rules.init() / store.open() / credits.startScheduler() / startCheckinAuto()
     // 都是裸调用，抛错会变成 rejected promise。原先这里没有任何 catch，
     // 未处理的 rejection 会让主进程直接退出——症状是「窗口凭空消失、无崩溃事件、无 dump、无日志」。
-    proxy.boot().catch((e) => __crashLog("proxy-boot-failed", __describe(e)));
+    if (on("proxy")) proxy.boot().catch((e) => __crashLog("proxy-boot-failed", __describe(e)));
     // 记忆中枢：仓库初始化 + 本地 HTTP API（供 MCP 桥转发）+ 目录监听；失败只影响本模块
+    //（boot 内部有 modules.memory.enabled 短路，无需在此判断）
     memory.boot().catch(() => {});
     createWindow();
     createTray();
-    scheduler.start();
-    usageScheduler.start();
-    watch.start();
+    if (on("skills")) {
+      scheduler.start();
+      watch.start();
+    }
+    if (on("usage")) usageScheduler.start();
     updater.init({ onShowWindow: showWindow, onTrayRefresh: refreshTrayMenu });
 
     // 依据配置启用开机自启（便携版不支持：注册的会是临时解压副本路径，退出即失效）。
