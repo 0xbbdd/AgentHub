@@ -450,14 +450,15 @@ function saveConfig(cfg) {
  *  渲染层的 config 快照可能过期，整份保存会把它们冲掉（issue #90）。
  *  · channelEnabled   ← proxy_channel_toggle（上游启闭）
  *  · checkinAutoRules ← proxy_checkin_auto_set（按渠道自动签到）
- *  · restoreOnLaunch  ← rememberRunning（网关启停时自动记忆）
- *  注意：只应在这三个字段**各自的写入 IPC** 里绕过本名单；它们调的是 saveConfig。 */
-const OUT_OF_BAND_PROXY_FIELDS = ["channelEnabled", "checkinAutoRules", "restoreOnLaunch"];
+ *  注意：只应在这两个字段**各自的写入 IPC** 里绕过本名单；它们调的是 saveConfig。
+ *  restoreOnLaunch 刻意不进名单：设置页「记住网关开关」就是经整份保存写盘的，
+ *  磁盘优先会架空那个开关；渲染层快照由总览页每次启停同步（ProxyHomeView），不会过期。 */
+const OUT_OF_BAND_PROXY_FIELDS = ["channelEnabled", "checkinAutoRules"];
 
 /** 设置页保存路径专用：先把 out-of-band 字段以**磁盘值**为准，再落盘。
  *
  *  为什么必须区分 saveConfig / saveConfigFromUI：
- *    那三个字段的写入方（channel 启闭、签到规则、网关启停记忆）也是调 saveConfig 落盘的。
+ *    那两个字段的写入方（channel 启闭、签到规则）也是调 saveConfig 落盘的。
  *    若把「磁盘优先」写进 saveConfig，它们自己的写入会被自己刚改的值覆盖回去 —— 功能当场失效。
  *    所以「磁盘优先」只适用于**设置页整份提交**这一条路径。
  *

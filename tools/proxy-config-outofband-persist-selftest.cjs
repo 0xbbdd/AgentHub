@@ -3,14 +3,15 @@
 // 现象（GitHub issue #90 评论 / javalover123 2026-10-10）：
 //   「似乎有个 上游启闭，关掉 有道，点击 完成，就可以了。
 //     但是，如果再次点击 保存并重启服务，再次点击 上游启闭，有道 又打开了」
-// 全库同类字段（共 3 个，都由独立 IPC 直接写盘、不经过设置页表单）：
+// 由独立 IPC 直接写盘、不经设置页表单的字段（共 2 个）：
 //   · channelEnabled   ← proxy_channel_toggle（上游启闭）
 //   · checkinAutoRules ← proxy_checkin_auto_set（按渠道自动签到）
-//   · restoreOnLaunch  ← rememberRunning（网关启停时自动记忆）
+// restoreOnLaunch 刻意不在名单里：设置页「记住网关开关」开关本身就经整份保存写盘，
+// 磁盘优先会把它架空；渲染层快照由总览页每次启停同步（ProxyHomeView），不会过期。
 //
 // 本守卫锁住两条**相反**的契约（缺一不可）：
-//   A. 设置页整份提交（saveConfigFromUI）→ 这三个字段**必须**以磁盘为准（旧快照不得冲掉）
-//   B. 那三个字段各自的写入方（saveConfig）→ **必须**能正常写盘
+//   A. 设置页整份提交（saveConfigFromUI）→ 上述两个字段**必须**以磁盘为准（旧快照不得冲掉）
+//   B. 那两个字段各自的写入方（saveConfig）→ **必须**能正常写盘
 //      （若把「磁盘优先」错写进 saveConfig，写入方的改动会被自己刚读到的旧值覆盖，功能当场失效）
 //
 // 全部在沙箱数据目录内运行，带安全闸门，绝不触碰真实配置。
@@ -42,9 +43,9 @@ if (!inSandbox) { console.error("拒绝运行：配置路径不在沙箱内"); p
 const FIELDS = config.OUT_OF_BAND_PROXY_FIELDS;
 console.log("");
 console.log("=== 前置：名单与接口存在 ===");
-ok("导出了 OUT_OF_BAND_PROXY_FIELDS", Array.isArray(FIELDS) && FIELDS.length === 3, JSON.stringify(FIELDS));
-ok("名单含三个字段",
-  ["channelEnabled", "checkinAutoRules", "restoreOnLaunch"].every((k) => FIELDS.includes(k)),
+ok("导出了 OUT_OF_BAND_PROXY_FIELDS", Array.isArray(FIELDS) && FIELDS.length === 2, JSON.stringify(FIELDS));
+ok("名单只含 channelEnabled / checkinAutoRules",
+  FIELDS.includes("channelEnabled") && FIELDS.includes("checkinAutoRules") && !FIELDS.includes("restoreOnLaunch"),
   JSON.stringify(FIELDS));
 ok("导出了 saveConfigFromUI", typeof config.saveConfigFromUI === "function");
 
@@ -54,7 +55,7 @@ function writeDiskState() {
   cfg.proxy.channelEnabled = { lobster: false };            // 有道 已关闭
   cfg.proxy.checkinAutoRules = { lobster: { enabled: true, time: "09:00", jitterMin: 30 } };
   cfg.proxy.restoreOnLaunch = true;
-  config.saveConfig(cfg);                                   // = 那三个 IPC 所用的路径
+  config.saveConfig(cfg);                                   // = 那几个 IPC 所用的路径
 }
 writeDiskState();
 const disk0 = config.loadConfig().proxy;
@@ -80,8 +81,17 @@ console.log("  保存后磁盘 checkinAutoRules = " + JSON.stringify(after.check
 console.log("  保存后磁盘 restoreOnLaunch  = " + JSON.stringify(after.restoreOnLaunch));
 ok("A1 channelEnabled 未被冲掉（有道 仍是关闭）", after.channelEnabled && after.channelEnabled.lobster === false, JSON.stringify(after.channelEnabled));
 ok("A2 checkinAutoRules 未被冲掉", !!(after.checkinAutoRules && after.checkinAutoRules.lobster), JSON.stringify(after.checkinAutoRules));
-ok("A3 restoreOnLaunch 未被冲掉", after.restoreOnLaunch === true, JSON.stringify(after.restoreOnLaunch));
+// restoreOnLaunch 是设置页自有字段（「记住网关开关」开关经整份保存写盘）：提交值必须原样生效。
+// 若磁盘优先把它顶回 true，设置页开关就被架空了——用户拨开关点保存，落盘还是旧值
+ok("A3 restoreOnLaunch 按提交值落盘（设置页开关不被架空）", after.restoreOnLaunch === false, JSON.stringify(after.restoreOnLaunch));
 ok("A4 设置页真正拥有的字段照常生效（port 改成了 9600）", Number(after.port) === 9600, String(after.port));
+// A5：反向同样成立——磁盘 false、提交 true，落盘必须是 true（开关两个方向都能改）
+{
+  const c = config.defaultConfig();
+  c.proxy.restoreOnLaunch = true;
+  config.saveConfigFromUI(c);
+  ok("A5 restoreOnLaunch 反向提交（true）同样生效", config.loadConfig().proxy.restoreOnLaunch === true);
+}
 
 // —— 契约 B：三个写入方自己的写入必须仍然生效 ——
 console.log("");
@@ -126,7 +136,7 @@ console.log("=== 契约 C：兜底不得让保存本身失败 ===");
   let threw = false;
   try { config.saveConfigFromUI({ proxy: {} }); } catch { threw = true; }
   ok("C2 保存/校验失败仍会抛错（不被读盘兜底吞掉）", threw);
-  // C3：兜底只影响那三个字段，其余字段不会被顺带改动
+  // C3：兜底只影响名单内那两个字段，其余字段不会被顺带改动
   {
     const c = config.defaultConfig();
     c.proxy.port = 9601;
