@@ -327,6 +327,14 @@ function registerModuleToggle() {
           try { const c2 = config.loadConfig(); c2.proxy.restoreOnLaunch = false; config.saveConfig(c2); } catch { /* 写不回重启后也无入口可开 */ }
         }
       } else if (m === "memory") {
+        // 与 memory_toggle 同口径双写旧字段 memory.enabled：loadConfig 每次都会执行
+        // 「旧字段 false → modules.memory.enabled=false」的迁移，只写新字段的话
+        // 旧字段残留的 false 会把刚启用的开关在下一次任意 loadConfig 时打回（审查整改）
+        try {
+          const c2 = config.loadConfig();
+          c2.memory = { ...(c2.memory || {}), enabled };
+          config.saveConfig(c2);
+        } catch { /* 双写失败时迁移仍以旧字段为准，行为退化为旧版一致 */ }
         if (enabled) await memory.boot().catch(() => {});
         else await memory.shutdown().catch(() => {});
       }

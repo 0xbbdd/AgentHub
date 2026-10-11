@@ -93,6 +93,20 @@ const shared = poolsync.exportShared();
 const mine = shared.keys.find((k) => k.id === created.id);
 ok("导出含 updatedAt", !!mine && mine.updatedAt > 0, JSON.stringify(mine && { updatedAt: mine.updatedAt }));
 
+console.log("");
+console.log("=== L5：加密口令接线（审查整改 P0 的回归锁）===");
+// moduleWebdav 必须把 passphrase 注入给 poolsync——缺了它封套会用 undefined 空口令加密
+config.saveSharedWebdav({ type: "webdav", endpoint: "https://dav.example.com/dav", username: "u", password: "pw-abc", encryptionPassphrase: "pp-123", roots: {} });
+const w1 = config.moduleWebdav("proxy");
+ok("显式加密口令注入 passphrase", w1.passphrase === "pp-123", JSON.stringify({ passphrase: typeof w1.passphrase === "string" ? w1.passphrase : w1.passphrase }));
+config.saveSharedWebdav({ type: "webdav", endpoint: "https://dav.example.com/dav", username: "u", password: "pw-abc", encryptionPassphrase: "", roots: {} });
+const w2 = config.moduleWebdav("proxy");
+ok("空口令回退沿用 password", w2.passphrase === "pw-abc", String(w2.passphrase));
+// 空口令守卫：encodeEnvelope 拒绝空口令打包
+let guarded = false;
+try { poolsync.encodeEnvelope({ a: 1 }, ""); } catch { guarded = true; }
+ok("encodeEnvelope 拒绝空口令", guarded === true);
+
 store.close(); // WAL 句柄不释放沙箱删不掉
 fs.rmSync(SANDBOX, { recursive: true, force: true });
 

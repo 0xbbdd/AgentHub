@@ -114,10 +114,26 @@ ok("换服务器时空密码正常落盘", d.endpoint === "https://new.example.c
 
 console.log("");
 console.log("=== D：显式清除通道 ====");
+// 先造出加密口令与 legacy 旧凭据，清除必须连它们一起清掉（审查整改：清不掉=永远无法回到「沿用密码」；
+// legacy 不清则清除后迁移会把旧服务器凭据复活成 #95 现象）
+{
+  config.saveSharedWebdav({ type: "webdav", endpoint: "https://clear-me.example.com/dav", username: "carol", password: "pw-clear", encryptionPassphrase: "pp-clear", roots: {} });
+  const raw = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+  raw.webdav = { endpoint: "https://legacy.example.com/dav", username: "old", password: "old-pw", root: "/agent-skills", deviceId: "d1", deviceName: "旧机" };
+  fs.writeFileSync(cfgPath, JSON.stringify(raw, null, 2), "utf8");
+}
 const cleared = config.clearSharedWebdav();
 ok("清除成功", cleared && cleared.ok);
 d = diskShared();
-ok("全字段清空", !d.endpoint && !d.username && !d.password, JSON.stringify(d));
+ok("全字段清空（含加密口令）", !d.endpoint && !d.username && !d.password && !d.encryptionPassphrase, JSON.stringify(d));
+{
+  const raw = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+  const legacy = raw.webdav || {};
+  ok("legacy webdav 段凭据同步清空（防迁移复活）", !legacy.endpoint && !legacy.username && !legacy.password, JSON.stringify(legacy));
+}
+// 清除后立即再读不复活
+const afterClear = config.loadSharedWebdav();
+ok("清除后 loadSharedWebdav 不复活旧凭据", !afterClear.endpoint, afterClear.endpoint);
 
 fs.rmSync(SANDBOX, { recursive: true, force: true });
 

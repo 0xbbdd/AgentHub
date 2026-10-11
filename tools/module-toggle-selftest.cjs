@@ -75,6 +75,25 @@ ok("toggle 后的 usage=false 不被旧快照写回 true", cfg.modules.usage.ena
 ok("toggle 后的 proxy=true 保持", cfg.modules.proxy.enabled === true, JSON.stringify(cfg.modules));
 ok("设置页自有字段按提交值落盘", cfg.theme === "light");
 
+console.log("");
+console.log("=== M4：memory 开关启用后不被旧字段迁移打回（审查整改 P1）===");
+// 磁盘残留旧字段 memory.enabled=false（老用户从记忆页关过），经新入口重新启用后
+// 任何一次 loadConfig 都不得把 modules.memory.enabled 打回 false
+{
+  const raw = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+  raw.memory = { enabled: false, rootDir: "" };
+  raw.modules.memory.enabled = true;
+  fs.writeFileSync(cfgPath, JSON.stringify(raw, null, 2), "utf8");
+}
+// 模拟 module_toggle 的 memory 双写（main.cjs 同款：modules 与旧字段一起写）
+cfg = config.loadConfig();
+cfg.modules.memory.enabled = true;
+cfg.memory = { ...(cfg.memory || {}), enabled: true };
+config.saveConfig(cfg);
+cfg = config.loadConfig();
+ok("启用后多次 loadConfig 保持启用", cfg.modules.memory.enabled === true, JSON.stringify(cfg.modules));
+ok("旧字段同步为 true（迁移不再打回）", cfg.memory.enabled === true, JSON.stringify(cfg.memory));
+
 fs.rmSync(SANDBOX, { recursive: true, force: true });
 
 console.log("");

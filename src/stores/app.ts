@@ -107,12 +107,6 @@ export const useAppStore = defineStore("app", {
       return s.config.moduleOrder.map((k) => byKey.get(k)).filter((m): m is ModuleDef => !!m)
         .map((m) => ({ ...m, enabled: !s.config.modules?.[m.key] || s.config.modules[m.key].enabled !== false }));
     },
-    /** 板块开关切换（issue #91）：走主进程唯一写入口，成功后同步内存态供 UI 即时置灰 */
-    async toggleModule(key: ModuleKey, enabled: boolean) {
-      const r = await api.moduleToggle(key, enabled);
-      if (r && r.ok && this.config.modules?.[key]) this.config.modules[key].enabled = enabled;
-      return r;
-    },
     /** 当前模块的子页面：memory 模块按 ui.tabs 白名单过滤（空=默认 5 个核心页；dashboard/browse 保底），其余模块全量返回 */
     pagesOf(s): PageDef[] {
       const all = this.moduleOf(s.activeModule).pages;
@@ -134,6 +128,13 @@ export const useAppStore = defineStore("app", {
     },
   },
   actions: {
+    /** 板块开关切换（issue #91）：走主进程唯一写入口，成功后同步内存态供 UI 即时置灰。
+     *  必须是 action 不能是 getter——Pinia getter 会被立即求值，函数值会被提前调用炸掉 */
+    async toggleModule(key: ModuleKey, enabled: boolean) {
+      const r = await api.moduleToggle(key, enabled);
+      if (r && r.ok && this.config.modules?.[key]) this.config.modules[key].enabled = enabled;
+      return r;
+    },
     async load() {
       try {
         Object.assign(this.config, await api.loadConfig());

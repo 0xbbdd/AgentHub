@@ -99,11 +99,12 @@ ok("远端显式空数组 → 本机别名清空（LWW 语义不变）", db.list
 
 console.log("");
 console.log("=== 场景 E：无别名时供应商精确价仍优先（不改变既有计费）===");
+// 通配价生效更晚也必须让位精确价（审查整改后的三级排序：精确 > 通配 > 错配兜底）
 db.savePrice({ modelId: "qwen3.7-flash", providerId: "trae", inputPerM: 1, outputPerM: 2, effectiveFrom: 0 }, "自测");
-db.savePrice({ modelId: "qwen3.7-flash", providerId: null, inputPerM: 9, outputPerM: 9, effectiveFrom: 0 }, "自测");
+db.savePrice({ modelId: "qwen3.7-flash", providerId: null, inputPerM: 9, outputPerM: 9, effectiveFrom: Date.now() }, "自测");
 db.insertRecords([rec("e1", "qwen3.7-flash", "trae", 1000)]);
 const rowE = priceRowOf("qwen3.7-flash");
-ok("精确价优先于通配价", !!rowE && rowE.providerId === "trae" && rowE.inPrice === 1, JSON.stringify(rowE));
+ok("精确价优先于通配价（通配生效更晚也一样）", !!rowE && rowE.providerId === "trae" && rowE.inPrice === 1, JSON.stringify(rowE));
 
 db.close();
 fs.rmSync(SANDBOX, { recursive: true, force: true });

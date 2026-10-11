@@ -187,9 +187,12 @@ function register(ctx) {
     try { require("./proxy/poolsync.cjs").onSharedPasswordMaybeChanged(); } catch { /* 模块未装载不影响保存 */ }
     // 首次配置（之前没配服务器，这次配上）自动跑一次号池同步：API Keys 与模型映射随
     // 共享配置包落到本机，「换台电脑」配好服务器即得，不用去发现「立即同步号池」（issue #92）。
-    // 已配置时改字段不触发；失败静默（号池面板看得到状态，定时同步下轮也会补）
+    // 已配置时改字段不触发；proxy 板块已停用时不触发（轻量模式：停用板块后台不运行）；
+    // 失败静默（号池面板看得到状态，定时同步下轮也会补）
     const after = config.loadSharedWebdav().endpoint;
-    if (!before && after) {
+    const pm = (config.loadConfig().modules || {}).proxy || {};
+    const proxyOn = !pm || pm.enabled !== false;
+    if (!before && after && proxyOn) {
       try { require("./proxy/poolsync.cjs").run({}).catch(() => {}); } catch { /* 同步互斥等静默，状态面板可见 */ }
     }
     return r;

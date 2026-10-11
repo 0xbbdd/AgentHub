@@ -441,12 +441,18 @@ function writeKeyTombstones(t) {
   } catch { /* 忽略 */ }
 }
 
-/** 供 index.cjs 在删除 API Key 时调用：记录墓碑（值为删除时间戳），同步时推给远端 */
+/** 供 index.cjs 在删除 API Key 时调用：记录墓碑（值为删除时间戳），同步时推给远端。
+ *  写失败必须留痕（审查整改）：Key 已删而墓碑永缺时，他机共享包里的这把 Key 会复活
+ *  且没有任何重试触发点——至少在操作日志里留下可诊断的错误 */
 function noteKeyRemoved(keyId) {
   if (!keyId) return;
   const t = readKeyTombstones();
   t[String(keyId)] = Date.now();
-  writeKeyTombstones(t);
+  try {
+    fs.writeFileSync(keyTombstoneFile(), JSON.stringify(t, null, 2), "utf8");
+  } catch (e) {
+    oplog.log("error", "API Key", `删除墓碑写入失败（该 Key 的删除将无法同步到其他设备）：${String((e && e.message) || e)}`);
+  }
 }
 
 // ===== 同步主流程 =====
@@ -810,8 +816,11 @@ function applyShared(snap) {
 
 /** 通用加密封套（与号池归档同一套：AES-256-GCM + scrypt 固定盐 + AHPPOOL1 magic） */
 function encodeEnvelope(snapshot, password) {
+  // 空口令守卫（审查整改）：口令没接上时宁可同步失败，也绝不用公开可推导的空密钥
+  // 加密号池归档/共享配置（里面有账号凭据与 API Key 明文）传到远端
+  if (!password) throw new Error("号池加密口令为空，拒绝打包上传（请检查统一服务器配置）");
   const plain = Buffer.from(JSON.stringify(snapshot), "utf8");
-  const key = crypto.scryptSync(String(password || ""), KDF_SALT, 32);
+  const key = crypto.scryptSync(String(password), KDF_SALT, 32);
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
   const enc = Buffer.concat([cipher.update(plain), cipher.final()]);
@@ -844,6 +853,10 @@ function decodeEnvelope(buf, password) {
  * 独立成函数是为了不动 run() 主体，改动面小、也好单独验证。
  */
 async function runSharedSync(w, persisted, result) {
+  // 口令口径：显式 passphrase 优先，缺省沿用 w.password（与 wd() 的注入语义一致；
+  // 直接以自有 w 对象调用本函数的测试/诊断路径两者都缺时才拒绝）
+  const phrase = w.passphrase || w.password;
+  if (!phrase) throw new Error("号池加密口令为空，拒绝共享配置同步（请检查统一服务器配置）");
   // 只有「远端读得成」才允许本轮上传：GET 报错（网络/鉴权）时远端是什么状态我们并不知道，
   // 这时推本机版本会把对端更新的配置盖掉（LWW 语义下对端下次同步又反过来吃掉本机改动）。
   // 读到内容但解不开（损坏/密码变过）不算「不知道」——按首次上传自愈，与号池归档同一处理。
@@ -854,7 +867,7 @@ async function runSharedSync(w, persisted, result) {
     if (got) {
       let snap = null;
       try {
-        snap = decodeEnvelope(got, w.passphrase);
+        snap = decodeEnvelope(got, phrase);
       } catch (e) {
         result.sharedDecodeError = String((e && e.message) || e);
       }
@@ -907,7 +920,7 @@ async function runSharedSync(w, persisted, result) {
     if (!remoteReadOk) {
       result.sharedUploadSkipped = true;
     } else if (persisted.sharedHash !== stable) {
-      await webdav.put(remoteUrl(w, POOL_DIR, SHARED_FILE), w, encodeEnvelope(shared, w.passphrase));
+      await webdav.put(remoteUrl(w, POOL_DIR, SHARED_FILE), w, encodeEnvelope(shared, phrase));
       persisted.sharedHash = stable;
       result.sharedUploaded = true;
     }

@@ -172,6 +172,18 @@ function stripPrefix(name, prefix) {
   return prefix ? name.replace(new RegExp("^" + prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "") : name;
 }
 
+/** ListObjectsV2 的 XML 里 Key 只做 XML 实体转义、不做百分号编码——
+ *  对它 decodeURIComponent 会把字面 %XX 序列解坏（甚至 URIError 炸掉整次列举），
+ *  这里只反转义 XML 实体（&amp; 必须最后） */
+function xmlUnescape(s) {
+  return String(s)
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
 /** 列目录（Delimiter=/ 判目录 + 自动翻页）：返回与 webdav.list 同形的条目 */
 async function list(url, cfg) {
   const { key, bucketBase } = parts(url, cfg);
@@ -187,13 +199,13 @@ async function list(url, cfg) {
     if (!res.ok) throw new Error(`PROPFIND 失败：HTTP ${res.status}`);
     const parsed = parseListXml(await res.text());
     for (const k of parsed.keys) {
-      const name = stripPrefix(decodeURIComponent(k), prefix);
+      const name = stripPrefix(xmlUnescape(k), prefix);
       if (!name || seen.has(name)) continue;
       seen.add(name);
       out.push({ href: url.replace(/\/+$/, "") + "/" + name, name, isDir: false, size: 0, modified: null });
     }
     for (const d of parsed.dirs) {
-      const name = stripPrefix(decodeURIComponent(d), prefix).replace(/\/+$/, "");
+      const name = stripPrefix(xmlUnescape(d), prefix).replace(/\/+$/, "");
       if (!name || seen.has(name)) continue;
       seen.add(name);
       out.push({ href: url.replace(/\/+$/, "") + "/" + name, name, isDir: true, size: 0, modified: null });
@@ -264,11 +276,15 @@ async function ensureDir() {
 /** 测试连接：ListObjectsV2(max-keys=1)，按状态码给可读提示（同 webdav.test 返回形状） */
 async function test(cfg) {
   const started = Date.now();
+  if (!cfg.bucket) return { ok: false, message: "请填写桶名（Bucket）" };
   try {
     const { bucketBase } = parts(`${cfg.endpoint.replace(/\/+$/, "")}/${cfg.root || ""}/`, cfg);
     const res = await request("GET", bucketBase, cfg, "", { "list-type": "2", "max-keys": "1" });
     if (res.status === 200) {
-      return { ok: true, message: `连接成功 · ${Date.now() - started}ms`, latencyMs: Date.now() - started };
+      const insecure = String(cfg.endpoint || "").toLowerCase().startsWith("http://")
+        ? "；当前使用 http://，SecretKey 将明文传输，建议改用 https"
+        : "";
+      return { ok: true, message: `连接成功 · ${Date.now() - started}ms${insecure}`, latencyMs: Date.now() - started };
     }
     if (res.status === 403) {
       return { ok: false, message: `S3 访问被拒绝（HTTP 403）· ${Date.now() - started}ms，请检查 AccessKeyId / SecretKey`, latencyMs: Date.now() - started };

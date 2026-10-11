@@ -210,17 +210,18 @@ interface MergeCandidate {
   total: number; // 目标模型关键字总数
   tokens: string[]; // 命中的关键字
   source?: string; // 目标现行价格的来源（手动/远程/内置），下拉里展示供选择参考
-  exact?: boolean; // 目标是否配置了供应商精确价（仅有精确价时，其它供应商记录归并后按估算价计）
+  exactOnly?: boolean; // 目标仅有供应商精确价（无通配价）——其它供应商记录归并后按估算价计
 }
 function mergeCandidates(aliasModelId: string): MergeCandidate[] {
   const src = new Set(tokenizeModel(aliasModelId));
-  // 目标价格侧信息：来源（manual 优先展示）+ 是否存在供应商精确价
-  const meta = new Map<string, { source?: string; exact: boolean }>();
+  // 目标价格侧信息：来源（manual 优先展示）+ 是否「仅有」供应商精确价
+  const meta = new Map<string, { source?: string; exact: boolean; generic: boolean }>();
   for (const p of prices.value) {
     if (!p.active) continue;
-    const m = meta.get(p.modelId) || { exact: false };
+    const m = meta.get(p.modelId) || { exact: false, generic: false };
     if (p.source === "manual" || !m.source) m.source = p.source;
     if (p.providerId) m.exact = true;
+    else m.generic = true;
     meta.set(p.modelId, m);
   }
   const hits: MergeCandidate[] = [];
@@ -232,12 +233,12 @@ function mergeCandidates(aliasModelId: string): MergeCandidate[] {
     const tokens = [...new Set(tokenizeModel(p.modelId))];
     const hitTokens = tokens.filter((t) => src.has(t));
     const info = meta.get(p.modelId);
-    if (hitTokens.length) hits.push({ modelId: p.modelId, hit: hitTokens.length, total: tokens.length, tokens: hitTokens, source: info?.source, exact: info?.exact });
+    if (hitTokens.length) hits.push({ modelId: p.modelId, hit: hitTokens.length, total: tokens.length, tokens: hitTokens, source: info?.source, exactOnly: !!(info?.exact && !info?.generic) });
     else missed.push(p.modelId);
   }
   // 命中占比高者优先；占比相同取关键字更多的（更精确，如 glm-5.3-flash 优于 glm-5.3）
   hits.sort((a, b) => b.hit / b.total - a.hit / a.total || b.total - a.total || a.modelId.localeCompare(b.modelId));
-  return [...hits, ...missed.sort().map((m) => ({ modelId: m, hit: 0, total: 0, tokens: [] as string[], source: meta.get(m)?.source, exact: meta.get(m)?.exact }))];
+  return [...hits, ...missed.sort().map((m) => ({ modelId: m, hit: 0, total: 0, tokens: [] as string[], source: meta.get(m)?.source, exactOnly: !!(meta.get(m)?.exact && !meta.get(m)?.generic) }))];
 }
 
 const mergeModal = reactive({
@@ -787,7 +788,7 @@ watch(() => app.activePage, (p) => {
             v-for="c in mergeModal.candidates"
             :key="c.modelId"
             :value="c.modelId"
-            :label="c.modelId + (c.hit > 0 ? ` · 命中 ${c.tokens.join(' / ')}` : '') + (c.source ? ` · ${sourceLabel[c.source] || c.source}` : '') + (c.exact ? ' · 供应商精确价' : '')"
+            :label="c.modelId + (c.hit > 0 ? ` · 命中 ${c.tokens.join(' / ')}` : '') + (c.source ? ` · ${sourceLabel[c.source] || c.source}` : '') + (c.exactOnly ? ' · 仅供应商精确价' : '')"
           />
         </el-select>
       </div>

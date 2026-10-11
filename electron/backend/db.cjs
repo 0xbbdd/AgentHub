@@ -65,7 +65,7 @@ function close() {
 /** 记录成本视图：按「记录发生时刻生效的最优匹配价」动态计费（价格修改后历史自动重算）
  *  口径：净输入×输入价 + 缓存命中×缓存读价 + 缓存写入×缓存写价 + (输出+推理)×输出价
  *  适配器口径锚点：input_tokens 含 cache_read_tokens（README 已实测），故净输入需相减
- *  匹配优先级：来源（manual 手动 > remote 远程 > builtin 种子）→ 供应商可匹配（精确/通配）→ 生效时间最新
+ *  匹配优先级：来源（manual 手动 > remote 远程 > builtin 种子）→ 供应商（精确匹配 > 通配 > 错配兜底）→ 生效时间最新
  *  模型名先经 model_alias 解析归并（无别名时用原名），归并/取消后历史费用即时重算
  *  归并记录放开生效下限：归并语义是「该模型全部记录按目标价格计费，生效日期不适用」，
  *  目标价格生效日晚于别名记录时仍按目标现行价计（否则老记录漏计、模型滞留未配置列表）
@@ -89,7 +89,8 @@ const RECORD_COST_VIEW_SQL = `
       SELECT id FROM (
         SELECT p.id AS id,
                CASE COALESCE(p.source, 'manual') WHEN 'manual' THEN 0 WHEN 'remote' THEN 1 ELSE 2 END AS sr,
-               (p.provider_id IS NULL OR p.provider_id = r.provider_id) AS pm,
+               CASE WHEN p.provider_id IS NOT NULL AND p.provider_id = r.provider_id THEN 2
+                    WHEN p.provider_id IS NULL THEN 1 ELSE 0 END AS pm,
                p.effective_from AS ef
         FROM model_price p
         WHERE p.model_id = COALESCE((SELECT target_model_id FROM model_alias WHERE alias = r.model_id), r.model_id)

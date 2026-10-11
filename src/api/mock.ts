@@ -1288,7 +1288,7 @@ export const mock = {
           password: "••••••••",
           encryptionPassphrase: "",
           s3: { bucket: "", region: "", pathStyle: false },
-          roots: { skills: "/agent-skills", usage: "/dosage-sync", proxy: "/agenthub-proxy" },
+          roots: { skills: "/agent-skills", usage: "/dosage-sync", proxy: "/agenthub-proxy", memory: "/agenthub-memory" },
         };
       case "webdav_shared_save":
         return { ok: true, message: "已保存" };

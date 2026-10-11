@@ -33,6 +33,12 @@ async function main() {
   const rules = require("../electron/backend/proxy/rules.cjs");
   const server = require("../electron/backend/proxy/server.cjs");
 
+  // —— 安全闸门（与其余自测同款）：数据目录必须落在临时沙箱内，绝不触碰真实 stats.db/规则 ——
+  const path = require("node:path");
+  const proxyDir = path.resolve(store.proxyDir()).toLowerCase();
+  const inSandbox = proxyDir.startsWith(path.resolve(tmp).toLowerCase());
+  if (!inSandbox) { console.error("拒绝运行：数据目录不在沙箱内（" + proxyDir + "）"); process.exit(2); }
+
   store.open();
   rules.init();
 

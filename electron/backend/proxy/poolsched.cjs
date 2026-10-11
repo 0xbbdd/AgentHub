@@ -70,9 +70,19 @@ function tick() {
     if (!dailyDue && !hourlyDue) return;
 
     lastHourlyAt = now;
+    const prevDailyDate = lastDailyDate;
     if (dailyDue) lastDailyDate = today;
     saveState();
-    poolsync.run({}).catch(() => {}); // 失败已由 poolsync 内部记状态，下一命中周期再跑
+    // 失败回滚记账（审查整改）：busy 跳过不推进记账、真失败也不能吞掉整个周期——
+    // daily 失败当天后续 tick 继续补跑，hourly 失败下一轮 tick 重试（60s 级）
+    const hourlyDueWas = hourlyDue;
+    const dailyDueWas = dailyDue;
+    poolsync.run({}).then((r) => {
+      if (r && r.ok !== false) return;
+      lastHourlyAt = hourlyDueWas ? now - c.interval * 60 * 60 * 1000 + 60 * 1000 : lastHourlyAt;
+      if (dailyDueWas) lastDailyDate = prevDailyDate;
+      saveState();
+    }).catch(() => {}); // 失败已由 poolsync 内部记状态，回滚后下一命中周期再跑
   } catch {
     /* 调度异常静默，下一轮重试 */
   }

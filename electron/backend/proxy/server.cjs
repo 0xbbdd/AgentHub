@@ -693,8 +693,10 @@ async function handleChat(req, res, settings) {
       }
       usedModel = chainModel;
       if (chainModel !== actualModel) {
-        // 明示模型回退（issue #90）：客户端可从响应头感知换模型，不再完全静默
+        // 明示模型回退（issue #90）：非流式用响应头；流式头已冲刷，改发 SSE 注释帧
+        //（冒号开头，客户端按规范忽略，抓包/代理可见），不再完全静默
         try { res.setHeader("x-agenthub-fallback", `${actualModel} -> ${chainModel}`); } catch { /* 头已发出时忽略 */ }
+        if (wantStream) write(`: fallback ${actualModel} -> ${chainModel}\n\n`);
       }
       // ===== 渠道候选队列（跨渠道故障转移）：主渠道尊重全部现有路由语义（单源强制 /
       // key.route / per-model 覆盖 / fixed / 生效档排序），备选 = 拥有该模型的其余渠道按

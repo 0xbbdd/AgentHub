@@ -373,20 +373,28 @@ function saveSharedWebdav(incoming) {
   if (next.password === PASSWORD_MASK) next.password = cur.password;
   // 号池加密口令同样只回掩码：精确掩码 = 未修改（issue #89）
   if (next.encryptionPassphrase === PASSWORD_MASK) next.encryptionPassphrase = cur.encryptionPassphrase;
+  // S3 模式桶名必填：空桶名会让请求 URL 变成 `https://.host` 之类，报错是「网络错误」无从定位
+  if (next.type === "s3" && !next.s3.bucket) return { ok: false, message: "S3 模式必须填写桶名（Bucket）" };
+  // 表单里把有值的加密口令清空 = 用户显式要求回到「沿用密码」，放行清除；
+  // cur 为空（解密失败）时不放行，密文仍由 saveConfig 保留（issue #95 保护）
+  const explicitPassphraseClear = next.encryptionPassphrase === "" && !!cur.encryptionPassphrase;
   const cfg = loadConfig();
   cfg.webdavShared = next;
-  saveConfig(cfg); // 加密落盘在 saveConfig 内统一处理
-  return { ok: true, message: "已保存" };
+  return saveConfig(cfg, explicitPassphraseClear ? { forceClearSharedSecrets: true } : {}); // 加密落盘在 saveConfig 内统一处理
 }
 
 /** 显式清除统一 WebDAV 服务器配置（设置页「清除配置」按钮）：全字段清空。
- *  这是唯一允许把密码清掉的入口——后台保存遇空密码会保留磁盘密文（解密失败保护），
- *  没有这个显式通道，用户将没有任何办法撤销已保存的服务器配置 */
+ *  这是唯一允许把密码/加密口令清掉的入口——后台保存遇空密码会保留磁盘密文（解密失败保护），
+ *  没有这个显式通道，用户将没有任何办法撤销已保存的服务器配置。
+ *  同步清掉 legacy webdav 段凭据：否则清除后 webdavShared.endpoint 为空，再迁移会把
+ *  旧服务器凭据原样「复活」（issue #95 现象） */
 function clearSharedWebdav() {
   const cfg = loadConfig();
   cfg.webdavShared = normalizeShared({});
-  saveConfig(cfg);
-  return { ok: true, message: "已清除统一服务器配置" };
+  cfg.webdav.endpoint = "";
+  cfg.webdav.username = "";
+  cfg.webdav.password = "";
+  return saveConfig(cfg, { forceClearSharedSecrets: true });
 }
 
 /** 统一配置掩码版（给渲染层）：有密码/加密口令则回掩码，绝不回明文 */
@@ -406,12 +414,14 @@ function maskedSharedWebdav() {
 function moduleWebdav(moduleKey) {
   const s = loadSharedWebdav();
   const root = (s.roots && s.roots[moduleKey]) || "";
+  const passphrase = sharedEncryptionPassphrase();
   if (s.type === "s3") {
     return {
       __s3: true,
       endpoint: s.endpoint,
       username: s.username,
       password: s.password,
+      passphrase, // 号池压缩包加密口令（显式口令优先，缺省=SecretKey）——poolsync 封套全走它
       bucket: s.s3.bucket,
       region: s.s3.region,
       pathStyle: s.s3.pathStyle,
@@ -422,6 +432,7 @@ function moduleWebdav(moduleKey) {
     endpoint: s.endpoint,
     username: s.username,
     password: s.password,
+    passphrase,
     root,
   };
 }
@@ -514,8 +525,10 @@ function validateToolConfig(cfg) {
   return errors;
 }
 
-/** 保存配置（先写临时文件再原子替换，写一半断电不留半个 JSON） */
-function saveConfig(cfg) {
+/** 保存配置（先写临时文件再原子替换，写一半断电不留半个 JSON）。
+ *  opts.forceClearSharedSecrets：显式清除意图（clearSharedWebdav / 表单清空加密口令）——
+ *  绕过下述解密失败保留规则；后台读改写保存绝不传它 */
+function saveConfig(cfg, opts = {}) {
   const errors = validateToolConfig(cfg);
   if (errors.length) {
     const e = new Error("配置校验未通过：" + errors.slice(0, 3).join("；"));
@@ -542,7 +555,8 @@ function saveConfig(cfg) {
         disk.webdavShared.password = dsh.password;
       }
       if (dsh && typeof dsh.encryptionPassphrase === "string" && dsh.encryptionPassphrase
-          && !disk.webdavShared.encryptionPassphrase) {
+          && !disk.webdavShared.encryptionPassphrase
+          && !(opts && opts.forceClearSharedSecrets)) {
         disk.webdavShared.encryptionPassphrase = dsh.encryptionPassphrase;
       }
     } catch { /* 读不到就按原值落盘 */ }

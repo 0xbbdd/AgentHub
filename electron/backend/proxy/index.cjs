@@ -474,7 +474,9 @@ function setRuntime(on) {
   poolsched.stop();
   discovery.cancelOAuth();
   server.stop();
+  try { poolsync.cancel(); } catch { /* 在途号池同步一并收尾，符合「停用后不运行」承诺 */ }
   try { store.close(); } catch { /* 关闭失败无碍，句柄随进程退出 */ }
+  events.emit({ type: "status" }); // 侧栏网关卡片立即回到已停止态，不等下一次轮询
   return Promise.resolve();
 }
 
