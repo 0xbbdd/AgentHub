@@ -137,6 +137,7 @@ export const webdavSharedSave = (cfg: SharedWebdavConfig) =>
   call<{ ok: boolean; message: string }>("webdav_shared_save", { config: JSON.parse(JSON.stringify(cfg)) });
 export const webdavSharedTest = (cfg: Partial<SharedWebdavConfig>) =>
   call<{ ok: boolean; message: string; latencyMs?: number }>("webdav_shared_test", { config: JSON.parse(JSON.stringify(cfg)) });
+export const webdavSharedClear = () => call<{ ok: boolean; message: string }>("webdav_shared_clear");
 
 // ===== 反代网关：号池 WebDAV 同步（统一服务器 + proxy 根目录；channel 可选 = 只同步某渠道） =====
 export interface ProxyPoolSyncStatus {

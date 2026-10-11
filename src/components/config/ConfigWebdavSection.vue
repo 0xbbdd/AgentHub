@@ -80,6 +80,23 @@ async function saveShared() {
     sharedSaving.value = false;
   }
 }
+// 显式清除（后端唯一允许清掉已存密码的入口；后台保存遇空密码会保留密文，防解密失败被覆盖）
+async function clearShared() {
+  if (!window.confirm("确定清除统一 WebDAV 服务器配置吗？\n\n地址、账号、密码与四个模块根目录将全部清空，四个模块的跨设备同步会立即停用（本机数据不受影响）。")) return;
+  sharedSaveMsg.value = "";
+  try {
+    const r = await api.webdavSharedClear();
+    sharedSaveMsg.value = r?.ok ? "已清除" : r?.message || "清除失败";
+    if (r?.ok) {
+      await loadShared();
+      await syncApp.reloadConfig().catch(() => {});
+      refreshPoolsync();
+      await refreshStatus();
+    }
+  } catch (e) {
+    sharedSaveMsg.value = String((e as Error).message || e);
+  }
+}
 async function loadShared() {
   try {
     shared.value = await api.webdavSharedGet();
@@ -193,6 +210,7 @@ onUnmounted(() => {
             <div class="form-field full">
               <button class="btn-outline" :disabled="sharedTesting" @click="testShared">{{ sharedTesting ? "测试中…" : "测试连接" }}</button>
               <button class="btn btn-cta" :disabled="sharedSaving" @click="saveShared">{{ sharedSaving ? "保存中" : "保存设置" }}</button>
+              <button v-if="shared.endpoint || shared.username" class="btn-outline danger" @click="clearShared">清除配置</button>
               <span v-if="sharedTestResult" class="hint" :style="{ marginLeft: '10px', color: sharedTestResult.ok ? 'var(--ok)' : 'var(--err)' }">{{ sharedTestResult.message }}</span>
               <span v-else-if="sharedSaveMsg" class="hint" style="margin-left: 10px">{{ sharedSaveMsg }}</span>
             </div>
