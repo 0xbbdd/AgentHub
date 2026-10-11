@@ -161,6 +161,12 @@ function offline() {
 }
 
 // ===== 假上游（随机端口）：记录请求 + 按 scenario 回放 =====
+/** 造一个真形态 JWT（uidFromToken/jwtDecode 按 base64url payload 解析） */
+const jwtOf = (uid, expSec) => {
+  const b64u = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  return `${b64u({ alg: "HS256", typ: "JWT" })}.${b64u({ user_id: uid, exp: expSec })}.sig`;
+};
+
 function fakeUpstream() {
   const seen = [];
   let taskCompleteCalls = 0;
@@ -218,6 +224,31 @@ function fakeUpstream() {
       }
       if (req.url.endsWith("/userapi/v1/agent-refresh")) {
         return reply(200, { code: 0, data: { access_token: "tok-new", refresh_token: "rt-new" } });
+      }
+      // —— 登录链路端点 ——
+      if (req.url.endsWith("/userapi/v1/agent-send-code")) {
+        assert(!!body.device_id && body.device_id.length === 64, "假上游: 发码必带 64hex device_id（不带实测 400001）");
+        assert(body.source_id === "autoclaw", "假上游: source_id=autoclaw");
+        return reply(200, { code: 0, data: { result: true } });
+      }
+      if (req.url.endsWith("/userapi/v1/agent-login/")) {
+        assert(typeof body.code === "number", "假上游: 验证码必须是 JSON number（字符串回 400001）");
+        assert(req.url.endsWith("agent-login/"), "假上游: 登录路径带结尾斜杠");
+        return reply(200, { code: 0, data: { access_token: jwtOf("u8", Math.floor(Date.now() / 1000) + 86400), refresh_token: "rt-sms" } });
+      }
+      if (req.url.endsWith("/userapi/overseasv1/oauth-captcha-config")) {
+        return reply(200, { code: 0, data: { enabled: true, region: "ga", prefix: "pfx1", scene_id: "scn1", captcha_supplier: "aliyun" } });
+      }
+      if (req.url.endsWith("/userapi/overseasv1/zai-oauth-url")) {
+        assert(!!body.ali_captcha_verify_param, "假上游: zai-oauth-url 必带 ali_captcha_verify_param（不带回 631002）");
+        assert(/^http:\/\/localhost:(18432|19654|19723|53699)\/auth\/callback-zai$/.test(body.navigate_uri), "假上游: navigate_uri 落白名单端口+回调路径");
+        return reply(200, { code: 0, data: { oauth_url: "https://z.ai/oauth/authorize?x=1" } });
+      }
+      if (req.url.endsWith("/userapi/overseasv1/zai-oauth-login")) {
+        return reply(200, { code: 0, data: { access_token: jwtOf("u9", Math.floor(Date.now() / 1000) + 86400), refresh_token: "rt-oauth", user_id: "u9", user_name: "Tester" } });
+      }
+      if (req.url.endsWith("/userapi/v1/user-profile")) {
+        return reply(200, { code: 0, data: { email: "tester@example.com" } });
       }
       if (req.url.includes("/agentpay/v1/assistant/subscribe-info")) {
         return reply(200, { code: 0, data: { subscribeInfo: { productName: "AutoClaw 会员", status: "active", expireAt: "2027-01-01" } } });
@@ -316,7 +347,41 @@ async function e2e() {
     const chat2 = fu.seen.find((s) => s.url.endsWith("/chat/completions"));
     assert(chat2.headers["x-authorization"] === "Bearer tok-new", "刷新后对话走进程缓存新 token");
     assert(chat2.headers["x-request-model"] === "zai_glm-5.3-flash", "刷新后路由 ID 来自拉取目录");
-    console.log("AutoClaw e2e 全绿（对话/目录/余额/签到/刷新不回写/凭证缓存）");
+
+    // —— 6. 登录链路（协议函数直调假上游）——
+    const login = require("../electron/backend/proxy/autoclaw/login.cjs");
+    const discovery = require("../electron/backend/proxy/discovery.cjs");
+    assert(login.normalizePhone(" +86 138-8000-8000 ") === "13880008000", "手机号归一（+86/空白/连字符）");
+    assert(login.normalizePhone("10000000000") === "", "非法号段拒绝（1[2-9] 开头，10x/11x 不合法）");
+    const smsSend = await login.sendSmsCode({ cfg: cfgAll.autoclaw, httpJson: adapters.httpJson, phone: "13880008000" });
+    assert(smsSend.ok === true && /^[0-9a-f]{64}$/.test(smsSend.deviceId), "发码成功且返回 64hex deviceId");
+    const smsLoginR = await login.smsLogin({ cfg: cfgAll.autoclaw, httpJson: adapters.httpJson, phone: "13880008000", code: "123456", deviceId: smsSend.deviceId });
+    assert(smsLoginR.ok === true && smsLoginR.token && smsLoginR.phoneTail === "138****8000", "短信登录成功（token/脱敏号尾）");
+    const savedSms = await discovery.saveAutoclawAccount("autoclaw", smsLoginR, smsSend.deviceId);
+    const smsAcc = storeMod.getAccount(savedSms.id);
+    assert(smsAcc && smsAcc.channel === "autoclaw" && storeMod.accountSecrets(smsAcc).token === smsLoginR.token, "SMS 登录落库（JWT uid 解析）");
+    assert((smsAcc.meta ? JSON.parse(smsAcc.meta) : {}).deviceId === smsSend.deviceId, "deviceId 随账号入 meta");
+
+    const capCfg = await login.oauthCaptchaConfig({ cfg: cfgAll.autoclaw_intl, httpJson: adapters.httpJson });
+    assert(capCfg.ok && capCfg.enabled === true && capCfg.sceneId === "scn1" && capCfg.prefix === "pfx1", "风控配置归一（scene_id→sceneId）");
+    // beginOAuth 分发：autoclaw 显式挡住（渠道串味防线），autoclaw_intl 需要 captchaVerifyParam
+    let autoThrew = "";
+    try { await discovery.beginOAuth("autoclaw", () => {}); } catch (e) { autoThrew = String((e && e.message) || e); }
+    assert(/手机验证码/.test(autoThrew), "beginOAuth(autoclaw) 显式 throw 指引 SMS");
+    const noCaptcha = await discovery.beginOAuth("autoclaw_intl", () => {}, {}, {});
+    assert(noCaptcha.ok === false && /风控验证参数/.test(noCaptcha.message || ""), "intl 缺 captchaVerifyParam 被前置拦截");
+    // 桌面导入：写明文形态 auth.json（明文 token 直通解密），两区各产出一条候选
+    const authDir = path.join(process.env.APPDATA, "AutoClaw");
+    fs.mkdirSync(authDir, { recursive: true });
+    fs.writeFileSync(path.join(authDir, "auth.json"), JSON.stringify({ deviceId: "d".repeat(64), token: jwtOf("u77", Math.floor(Date.now() / 1000) + 86400), refreshToken: "rt-desktop" }), "utf8");
+    const cands = discovery.scanAutoclaw();
+    assert(cands.length === 2 && cands.every((c) => c.uid === "u77"), "桌面登录态两区各产出候选（不猜地区）");
+    assert(cands[0].meta.deviceId === "d".repeat(64), "桌面导入带 deviceId 进 meta");
+    const imported = discovery.importCandidate(cands[0], "autoclaw");
+    assert(!!imported.id, "桌面候选可导入");
+    fs.rmSync(authDir, { recursive: true, force: true });
+
+    console.log("AutoClaw e2e 全绿（对话/目录/余额/签到/刷新不回写/凭证缓存/登录/桌面导入）");
   } finally {
     fu.server.close();
   }

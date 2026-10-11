@@ -9,6 +9,7 @@ import type { ProxyChannelView, ProxyAccount, ProxyChannelId, ProxyPoolStrategy,
 import { useAppStore } from "../../stores/app";
 import { fmtInt, fmtK, fmtDate, fmtAgo, fmtCredits, ACCOUNT_STATUS, SOURCE_NAMES, channelName, fmtBalance, balanceUnit, isQoderChannel, costTierName, checkinLabels, todayStr } from "./format";
 import { coalesceAsync } from "../../utils/timing";
+import { solveCaptcha, cancelCaptcha, CaptchaCancelledError } from "../../utils/aliyunCaptcha";
 
 const app = useAppStore();
 const pool = ref<ProxyChannelView[]>([]);
@@ -56,8 +57,8 @@ function putCheckin(channel: ProxyChannelId, rows: ProxyCheckinRow[]) {
   checkinByChannel.value = { ...checkinByChannel.value, [channel]: rows };
 }
 
-// 添加账号弹窗（四方式：oauth 官方登录 / local 从本机软件导入 / file 从 JSON-ZIP 文件 / paste 粘贴 JSON）
-type AddMethod = "oauth" | "local" | "file" | "paste";
+// 添加账号弹窗（五方式：oauth 官方登录 / sms 手机验证码（仅 AutoClaw 国内版）/ local 从本机软件导入 / file 从 JSON-ZIP 文件 / paste 粘贴 JSON）
+type AddMethod = "oauth" | "sms" | "local" | "file" | "paste";
 const addOpen = ref(false);
 const addChannel = ref<ProxyChannelId>("trae");
 const addMethod = ref<AddMethod>("oauth");
@@ -85,6 +86,15 @@ const scanImporting = ref("");
 // 账号重命名（点击名称进入编辑）：renamingId 当前编辑行，renameText 输入内容
 const renamingId = ref("");
 const renameText = ref("");
+// AutoClaw 国内版手机验证码：deviceId 由发码返回、登录必须沿用（服务端按它识别设备）
+const smsPhone = ref("");
+const smsCode = ref("");
+const smsDeviceId = ref("");
+const smsBusy = ref(false);
+const smsMsg = ref("");
+const smsErr = ref(false);
+const smsCountdown = ref(0);
+let smsTimer: ReturnType<typeof setTimeout> | undefined;
 
 // 添加方式可用性：四种方式全开放。
 // Qoder 现已支持「OAuth 登录」（PKCE 设备码轮询：弹官方登录页 → 轮询直接拿到 dt-/drt- 凭据对，
@@ -93,12 +103,18 @@ const renameText = ref("");
 // CatPaw（美团）：上游没有开放授权页流程，凭据是**桌面端会话 Cookie 值**——
 // 只能「从本机客户端导入登录态」或「粘贴 JSON」，故屏蔽 OAuth 页签。
 const NO_OAUTH_CHANNELS: ProxyChannelId[] = ["catpaw"];
+// 仅手机验证码登录的渠道：AutoClaw 国内版（官方主登录是短信；上游无网页 OAuth，
+// 后端 beginOAuth 已显式挡住，前端把 OAuth 页签换成「手机验证码」页签）
+const SMS_ONLY_CHANNELS: ProxyChannelId[] = ["autoclaw"];
 // 无签到 / 奖励活动的渠道：适配器如实回报「不适用」（checkinStatus → unavailable），
 // 前端不渲染签到与自动签到入口——点了一次「一键签到」只得到一条无意义结果，徒增困惑。
 // 与 NO_OAUTH_CHANNELS 同一分工：渠道能力的展示层开关，判定口径在各自适配器
 const NO_CHECKIN_CHANNELS: ProxyChannelId[] = ["catpaw"];
 function addTabAllowed(key: AddMethod, channel: ProxyChannelId = activeChannel.value): boolean {
   if (key === "oauth" && NO_OAUTH_CHANNELS.includes(channel)) return false;
+  // 手机验证码页签只给 AutoClaw 国内版；它自身也没有 OAuth 页签可放
+  if (key === "sms") return SMS_ONLY_CHANNELS.includes(channel);
+  if (key === "oauth" && SMS_ONLY_CHANNELS.includes(channel)) return false;
   // ModelScope（魔搭）凭据形态特殊：不是 JSON 快照，而是 ms- 访问令牌。
   // 故它的「粘贴」页签改为专用令牌输入（见 tokenPane），并隐藏不适用的两种 JSON 方式。
   if (channel === "modelscope" && (key === "file" || key === "local")) return false;
@@ -107,7 +123,7 @@ function addTabAllowed(key: AddMethod, channel: ProxyChannelId = activeChannel.v
 
 /** 渠道允许的添加方式（分段控件与「打开弹窗时的默认页签」共用这一份口径） */
 function allowedMethods(channel: ProxyChannelId): AddMethod[] {
-  return (["oauth", "local", "file", "paste"] as AddMethod[]).filter((key) => addTabAllowed(key, channel));
+  return (["oauth", "sms", "local", "file", "paste"] as AddMethod[]).filter((key) => addTabAllowed(key, channel));
 }
 
 // 渠道允许的添加方式（分段控件按渠道过滤）
@@ -115,6 +131,7 @@ const METHOD_TABS = computed(
   () =>
     [
       { key: "oauth" as const, label: "OAuth 登录", icon: "ph-key" },
+      { key: "sms" as const, label: "手机验证码", icon: "ph-device-mobile" },
       { key: "local" as const, label: "从本机软件导入", icon: "ph-desktop-tower" },
       { key: "file" as const, label: "从 JSON/ZIP 文件", icon: "ph-file-arrow-up" },
       { key: "paste" as const, label: "粘贴 JSON", icon: "ph-clipboard-text" },
@@ -161,6 +178,10 @@ const OAUTH_HELP: Record<string, { title: string; desc: string }> = {
   qoder_intl: {
     title: "用 Qoder 国际版官方登录页登录",
     desc: "跳转 Qoder 国际版登录页（qoder.com），登录完成后本机自动轮询取回设备凭据。<br />注意：国际版免费额度不含 DeepSeek / GLM Flash 系列，需充值才有可用模型。",
+  },
+  autoclaw_intl: {
+    title: "用 Z.ai / Google 账号登录 AutoClaw 国际版",
+    desc: "点「打开登录页」后<b>先弹出官方风控滑块</b>（阿里云验证，拖一次即可），验证通过自动打开官方登录页（默认 Z.ai），登录完成自动入池。<br />每账号独立执行一次，可反复添加多账号；3 分钟无响应即超时。<br />若浏览器停在回调页没自动跳回，可把地址栏内容整段粘到下方。",
   },
 };
 
@@ -776,8 +797,8 @@ async function doDelete() {
 
 function openAdd(ch: ProxyChannelView) {
   addChannel.value = ch.id;
-  // 默认落该渠道**第一个可用**方式：无 OAuth 的渠道（CatPaw）落「从本机软件导入」。
-  // 写死 "oauth" 会让弹窗停在一个已被隐藏的页签上——渲染 OAuth 面板却没有页签可切回
+  // 默认落该渠道**第一个可用**方式：无 OAuth 的渠道（CatPaw）落「从本机软件导入」，
+  // AutoClaw 国内版落「手机验证码」。写死 "oauth" 会让弹窗停在一个已被隐藏的页签上
   addMethod.value = allowedMethods(ch.id)[0] || "oauth";
   pasteJson.value = "";
   pasteMsg.value = "";
@@ -788,6 +809,11 @@ function openAdd(ch: ProxyChannelView) {
   oauthMode.value = "";
   callbackInput.value = "";
   callbackMsg.value = "";
+  smsPhone.value = "";
+  smsCode.value = "";
+  smsDeviceId.value = "";
+  smsMsg.value = "";
+  smsErr.value = false;
   scanMsg.value = "";
   scanErr.value = false;
   addOpen.value = true;
@@ -798,6 +824,9 @@ function openAdd(ch: ProxyChannelView) {
 function closeAdd() {
   addOpen.value = false;
   if (oauthWaiting.value) cancelOauth();
+  // AutoClaw 国际版滑块可能在等用户拖动（oauthWaiting 全程为 true 已被上面覆盖；
+  // 这里兜底取消滑块等待，不留面板悬挂）
+  cancelCaptcha();
 }
 
 function switchMethod(m: AddMethod) {
@@ -808,6 +837,8 @@ function switchMethod(m: AddMethod) {
 
 async function beginOauth() {
   if (oauthWaiting.value) return;
+  // AutoClaw 国际版链路是倒的：先在前端跑完阿里云风控滑块拿到验证串，再换授权地址
+  if (addChannel.value === "autoclaw_intl") return beginAutoclawOauth();
   oauthWaiting.value = true;
   oauthMsg.value =
     addChannel.value === "raccoon"
@@ -825,6 +856,103 @@ async function beginOauth() {
   } catch (e) {
     oauthMsg.value = String((e as Error).message || e);
     oauthWaiting.value = false;
+  }
+}
+
+/**
+ * AutoClaw 国际版 OAuth：滑块 → 换授权地址 → 开浏览器等回环回调。
+ * 120 秒的验证码超时只包「拖滑块 + 换地址」——等登录回调发生在 solveCaptcha
+ * 返回之后（长流程塞进 request 回调会被验证码超时误杀，三方状态错乱）。
+ */
+async function beginAutoclawOauth() {
+  oauthWaiting.value = true;
+  oauthMsg.value = "正在获取风控配置…";
+  callbackMsg.value = "";
+  try {
+    const cfg = await api.proxyAutoclawCaptchaConfig("autoclaw_intl");
+    if (!cfg.ok || !cfg.enabled) throw new Error("上游未启用网页登录（或风控配置不可用），请改用「从本机软件导入」");
+    if (!cfg.prefix || !cfg.sceneId) throw new Error("风控验证配置不完整，请稍后重试");
+    oauthMsg.value = "请在弹出的滑块中完成验证（官方要求的风控步骤）…";
+    const answer = (await solveCaptcha(
+      { region: cfg.region || "ga", prefix: cfg.prefix, sceneId: cfg.sceneId },
+      async (verifyParam) => {
+        const r = await api.proxyOauthBeginWithCaptcha("autoclaw_intl", verifyParam, "zai");
+        if (r.ok === false) throw new Error(r.message || "无法启动登录");
+        return { url: r.url, mode: r.mode };
+      },
+    )) as { url?: string; mode?: string };
+    oauthMode.value = answer.mode || "";
+    oauthMsg.value = "已在浏览器打开官方登录页，完成授权后自动加入号池（3 分钟超时）…";
+  } catch (e) {
+    if (e instanceof CaptchaCancelledError) {
+      oauthWaiting.value = false;
+      oauthMsg.value = "";
+      return;
+    }
+    oauthMsg.value = String((e as Error).message || e);
+    oauthWaiting.value = false;
+  }
+}
+
+// ===== AutoClaw 国内版：手机验证码两跳 =====
+
+function startSmsCountdown() {
+  smsCountdown.value = 60;
+  if (smsTimer) clearTimeout(smsTimer);
+  smsTimer = setTimeout(function tick() {
+    smsCountdown.value -= 1;
+    if (smsCountdown.value > 0) smsTimer = setTimeout(tick, 1000);
+  }, 1000);
+}
+
+async function sendSms() {
+  if (smsBusy.value || smsCountdown.value > 0) return;
+  const phone = smsPhone.value.trim();
+  if (!/^1[2-9]\d{9}$/.test(phone.replace(/[\s-]/g, ""))) {
+    smsMsg.value = "请输入 11 位国内手机号";
+    smsErr.value = true;
+    return;
+  }
+  smsBusy.value = true;
+  smsMsg.value = "";
+  smsErr.value = false;
+  try {
+    const r = await api.proxyAutoclawSmsSend("autoclaw", phone);
+    if (!r.ok) throw new Error(r.message || "验证码发送失败");
+    smsDeviceId.value = r.deviceId || "";
+    smsMsg.value = "验证码已发送，请查收短信（约 1 分钟内到达）";
+    startSmsCountdown();
+  } catch (e) {
+    smsMsg.value = String((e as Error).message || e);
+    smsErr.value = true;
+  } finally {
+    smsBusy.value = false;
+  }
+}
+
+async function submitSms() {
+  if (smsBusy.value) return;
+  const code = smsCode.value.trim();
+  if (!/^\d{4,8}$/.test(code)) {
+    smsMsg.value = "请输入短信验证码（数字）";
+    smsErr.value = true;
+    return;
+  }
+  smsBusy.value = true;
+  smsMsg.value = "";
+  smsErr.value = false;
+  try {
+    const r = await api.proxyAutoclawSmsLogin("autoclaw", smsPhone.value.trim(), code, smsDeviceId.value);
+    if (!r.ok) throw new Error(r.message || "登录失败");
+    smsMsg.value = "";
+    toast("AutoClaw 登录成功，账号已加入号池");
+    closeAdd();
+    await refresh();
+  } catch (e) {
+    smsMsg.value = String((e as Error).message || e);
+    smsErr.value = true;
+  } finally {
+    smsBusy.value = false;
   }
 }
 
@@ -847,8 +975,10 @@ function reauthAccount(acc: ProxyAccount) {
     loadScan();
     return;
   }
-  addMethod.value = "oauth";
-  beginOauth();
+  // 默认落该渠道第一个可用方式：AutoClaw 国内版落「手机验证码」（短信登录需用户填手机号，
+  // 不适合自动发起），其余渠道落 OAuth 并直接发起
+  addMethod.value = allowedMethods(acc.channel)[0] || "oauth";
+  if (addMethod.value === "oauth") beginOauth();
 }
 
 /** 兜底：把浏览器地址栏内容整段粘回来完成登录（仅回环模式用得上） */
@@ -1111,6 +1241,8 @@ onUnmounted(() => {
   if (offEvent) offEvent();
   scheduleRefresh.cancel();
   if (nowTimer) clearInterval(nowTimer);
+  if (smsTimer) clearTimeout(smsTimer);
+  cancelCaptcha(); // 弹窗外销毁时滑块等待也不该悬挂
 });
 </script>
 
@@ -1498,6 +1630,38 @@ onUnmounted(() => {
               <div v-if="oauthMsg" class="add-msg" :class="{ err: !oauthWaiting && oauthMsg.includes('失败') }">{{ oauthMsg }}</div>
             </div>
 
+            <!-- 手机验证码登录（AutoClaw 国内版专用）：发码 → 输码 → 两跳直调入池 -->
+            <div v-else-if="addMethod === 'sms'" class="add-pane sms-pane">
+              <div class="paste-label">手机号</div>
+              <div class="cb-row">
+                <input
+                  v-model="smsPhone"
+                  class="input"
+                  style="flex: 1"
+                  placeholder="11 位国内手机号"
+                  maxlength="13"
+                  :disabled="smsBusy"
+                />
+                <button class="btn btn-sm" :disabled="smsBusy || smsCountdown > 0 || !smsPhone.trim()" @click="sendSms">
+                  {{ smsBusy ? "发送中…" : smsCountdown > 0 ? `${smsCountdown}s 后重发` : "发送验证码" }}
+                </button>
+              </div>
+              <div class="paste-label" style="margin-top: 12px">短信验证码</div>
+              <input
+                v-model="smsCode"
+                class="input"
+                placeholder="6 位数字验证码"
+                maxlength="8"
+                :disabled="smsBusy || !smsDeviceId"
+                @keyup.enter="submitSms"
+              />
+              <div class="add-pane-desc" style="margin-top: 10px">
+                验证码登录使用官方短信通道（不改绑、不代收）；同一手机号可反复登录添加多个会话。<br />
+                发送验证码后若 60 秒未收到，请确认手机号后重发。
+              </div>
+              <div v-if="smsMsg" class="add-msg" :class="{ err: smsErr }">{{ smsMsg }}</div>
+            </div>
+
             <!-- 从本机软件导入：读本机已登录客户端的凭据，零请求入池 -->
             <div v-else-if="addMethod === 'local'" class="add-pane">
               <div class="scan-head">
@@ -1526,7 +1690,7 @@ onUnmounted(() => {
                   </el-tooltip>
                 </div>
                 <div v-if="!scanRows.length" class="scan-empty">
-                  未在本机发现可导入的登录态 —— 请先在本机登录对应客户端，或改用「{{ NO_OAUTH_CHANNELS.includes(activeChannel) ? "粘贴 JSON" : "OAuth 登录" }}」
+                  未在本机发现可导入的登录态 —— 请先在本机登录对应客户端，或改用「{{ SMS_ONLY_CHANNELS.includes(activeChannel) ? "手机验证码" : NO_OAUTH_CHANNELS.includes(activeChannel) ? "粘贴 JSON" : "OAuth 登录" }}」
                 </div>
               </div>
               <div v-if="scanMsg" class="add-msg" :class="{ err: scanErr }">{{ scanMsg }}</div>
@@ -1580,6 +1744,7 @@ onUnmounted(() => {
               <template v-if="addMethod === 'oauth' && oauthWaiting">
                 <i class="ph ph-circle-notch"></i>{{ addChannel === "raccoon" ? "已弹出应用内授权窗，完成后会自动入池（不经过本机小浣熊客户端）" : "已在浏览器打开登录页，完成后会自动入池" }}
               </template>
+              <template v-else-if="addMethod === 'sms'">验证通过后自动入池，余额与签到随后自动刷新</template>
               <template v-else-if="addMethod === 'local'">导入后仍可刷新余额、切到 IDE 或停用</template>
               <template v-else>入池后可在下方列表里刷新余额、切到 IDE 或停用</template>
             </span>
@@ -1591,6 +1756,12 @@ onUnmounted(() => {
               :disabled="oauthWaiting"
               @click="beginOauth"
             >{{ oauthWaiting ? "等待授权…" : "打开登录页" }}</button>
+            <button
+              v-else-if="addMethod === 'sms'"
+              class="btn btn-cta"
+              :disabled="smsBusy || !smsDeviceId || !smsCode.trim()"
+              @click="submitSms"
+            >{{ smsBusy ? "登录中…" : "验证并加入号池" }}</button>
             <button
               v-else-if="addMethod === 'file'"
               class="btn btn-cta"

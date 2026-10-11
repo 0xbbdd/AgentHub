@@ -855,7 +855,7 @@ function register(ipcMain) {
     credits.refreshAccount(r.id).catch(() => {});
     return ok({ id: r.id, updated: r.updated });
   }));
-  ipcMain.handle("proxy_oauth_begin", handle(async ({ channel }) => {
+  ipcMain.handle("proxy_oauth_begin", handle(async ({ channel, captchaVerifyParam, vendor }) => {
     const ch = adapters.get(channel) ? String(channel) : store.CHANNELS[0].id;
     const r = await discovery.beginOAuth(ch, (result) => {
       if (result.ok) {
@@ -865,13 +865,46 @@ function register(ipcMain) {
       }
       oplog.log(result.ok ? "info" : "error", "OAuth 登录", result.ok ? `${store.channelDisplay(ch)} 授权登录成功` : result.message || `${store.channelDisplay(ch)} 授权登录失败`, { channel: ch });
       events.emit({ type: "oauth-done", channel: ch, ...result });
-    }, { openAuthWindow });
+    }, { openAuthWindow }, { captchaVerifyParam, vendor });
     // 带授权地址的渠道在系统浏览器打开（小浣熊走内嵌授权窗，不回 url——深链回调绝不能进浏览器
     // 再被系统交给官方客户端：授权码是一次性的，官方客户端消费掉 AgentHub 就永远收不到回调）
     if (r.ok && r.url) await shell.openExternal(r.url);
     return r.ok ? ok({ url: r.url, mode: r.mode }) : fail(r.message);
   }));
   ipcMain.handle("proxy_oauth_cancel", handle(() => ok({ cancelled: discovery.cancelOAuth() })));
+  // ===== AutoClaw 登录辅助：国内版手机验证码两跳 + 国际版风控配置（验证码由前端跑 SDK）=====
+  ipcMain.handle("proxy_autoclaw_sms_send", handle(async ({ channel, phone }) => {
+    const ch = String(channel || "autoclaw");
+    if (!adapters.get(ch)) return fail(`未知渠道 ${ch}`);
+    const login = require("./autoclaw/login.cjs");
+    const r = await login.sendSmsCode({ cfg: (rules.get("headers.json") || {})[ch] || {}, httpJson: adapters.httpJson, phone });
+    if (r.ok) oplog.log("info", "AutoClaw 发码", `${store.channelDisplay(ch)} 验证码已发送（${r.phoneTail || r.phone}）`, { channel: ch });
+    return r.ok ? ok(r) : fail(r.message);
+  }));
+  ipcMain.handle("proxy_autoclaw_sms_login", handle(async ({ channel, phone, code, deviceId }) => {
+    const ch = String(channel || "autoclaw");
+    if (!adapters.get(ch)) return fail(`未知渠道 ${ch}`);
+    const login = require("./autoclaw/login.cjs");
+    const r = await login.smsLogin({ cfg: (rules.get("headers.json") || {})[ch] || {}, httpJson: adapters.httpJson, phone, code, deviceId });
+    if (!r.ok) return fail(r.message);
+    try {
+      const saved = await discovery.saveAutoclawAccount(ch, r, r.deviceId);
+      credits.refreshAccount(saved.id).catch(() => {});
+      checkinBatch({ accountId: saved.id, action: "checkin" }).catch(() => {});
+      oplog.log("info", "AutoClaw 登录", `${store.channelDisplay(ch)} 短信登录成功`, { channel: ch });
+      events.emit({ type: "oauth-done", channel: ch, ok: true, id: saved.id, uid: saved.uid });
+      return ok({ id: saved.id, uid: saved.uid, updated: saved.updated });
+    } catch (e) {
+      return fail(String((e && e.message) || e));
+    }
+  }));
+  ipcMain.handle("proxy_autoclaw_captcha_config", handle(async ({ channel }) => {
+    const ch = String(channel || "autoclaw_intl");
+    if (!adapters.get(ch)) return fail(`未知渠道 ${ch}`);
+    const login = require("./autoclaw/login.cjs");
+    const r = await login.oauthCaptchaConfig({ cfg: (rules.get("headers.json") || {})[ch] || {}, httpJson: adapters.httpJson });
+    return r.ok ? ok(r) : fail(r.message);
+  }));
   // 浏览器没跳回回环地址时的兜底：把地址栏内容整段粘回来完成登录
   ipcMain.handle("proxy_oauth_submit_callback", handle(async ({ channel, url }) => {
     const r = await discovery.submitCallbackUrl(url, channel);

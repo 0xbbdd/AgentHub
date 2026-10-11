@@ -283,6 +283,18 @@ export const proxyScanImport = (index: number, channel?: ProxyChannelId, file?: 
 /** 拉起对应渠道的官方登录（授权页由主进程 shell.openExternal 打开，结果经 app:event 回流） */
 export const proxyOauthBegin = (channel: ProxyChannelId) =>
   call<{ ok: boolean; url?: string; mode?: string; message?: string }>("proxy_oauth_begin", { channel });
+/** AutoClaw 国际版 OAuth：带上前端跑完阿里云滑块的验证串换授权地址（主进程占白名单端口回环等回调） */
+export const proxyOauthBeginWithCaptcha = (channel: ProxyChannelId, captchaVerifyParam: string, vendor: "zai" | "google" = "zai") =>
+  call<{ ok: boolean; url?: string; mode?: string; message?: string }>("proxy_oauth_begin", { channel, captchaVerifyParam, vendor }, 0);
+/** AutoClaw 国际版：风控配置（enabled/prefix/sceneId，前端初始化阿里云滑块用） */
+export const proxyAutoclawCaptchaConfig = (channel: ProxyChannelId) =>
+  call<{ ok: boolean; enabled?: boolean; region?: string; prefix?: string; sceneId?: string; supplier?: string; message?: string }>("proxy_autoclaw_captcha_config", { channel }, 0);
+/** AutoClaw 国内版：发送短信验证码（返回 deviceId，登录时必须沿用） */
+export const proxyAutoclawSmsSend = (channel: ProxyChannelId, phone: string) =>
+  call<{ ok: boolean; deviceId?: string; message?: string }>("proxy_autoclaw_sms_send", { channel, phone }, 0);
+/** AutoClaw 国内版：验证码登录（deviceId 沿用发码返回值；code 传 6 位数字字符串，主进程转 JSON number） */
+export const proxyAutoclawSmsLogin = (channel: ProxyChannelId, phone: string, code: string, deviceId: string) =>
+  call<{ ok: boolean; id?: string; uid?: string; updated?: boolean; message?: string }>("proxy_autoclaw_sms_login", { channel, phone, code, deviceId }, 0);
 export const proxyOauthCancel = () => call<{ ok: boolean; cancelled?: boolean }>("proxy_oauth_cancel");
 /** 兜底：浏览器没跳回回环地址时，把地址栏内容整段粘回来完成登录（串行换 token，可能多次上游请求） */
 export const proxyOauthSubmitCallback = (channel: ProxyChannelId, url: string) =>

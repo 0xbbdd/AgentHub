@@ -529,6 +529,9 @@ const DEFAULTS = {
       oauthCaptchaConfigPath: "/userapi/overseasv1/oauth-captcha-config",
       oauthUrlPath: "/userapi/overseasv1/zai-oauth-url",
       oauthLoginPath: "/userapi/overseasv1/zai-oauth-login",
+      // Google 变体（国际版第二登录方式；回调端口按 RFC 8252 loopback 宽松匹配，端口任意）
+      oauthGoogleUrlPath: "/userapi/overseasv1/google-oauth-url",
+      oauthGoogleLoginPath: "/userapi/overseasv1/google-oauth-login",
     },
     autoclaw_intl: {
       userapiBase: "https://autoglm-api.autoglm.ai",
@@ -552,6 +555,9 @@ const DEFAULTS = {
       oauthCaptchaConfigPath: "/userapi/overseasv1/oauth-captcha-config",
       oauthUrlPath: "/userapi/overseasv1/zai-oauth-url",
       oauthLoginPath: "/userapi/overseasv1/zai-oauth-login",
+      // Google 变体（国际版第二登录方式；回调端口按 RFC 8252 loopback 宽松匹配，端口任意）
+      oauthGoogleUrlPath: "/userapi/overseasv1/google-oauth-url",
+      oauthGoogleLoginPath: "/userapi/overseasv1/google-oauth-login",
     },
   },
 };
