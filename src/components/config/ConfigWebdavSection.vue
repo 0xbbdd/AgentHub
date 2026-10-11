@@ -253,6 +253,9 @@ onUnmounted(() => {
             <div class="s-title">反代网关 · 号池同步</div>
             <div class="s-desc">把号池账号（含登录凭据）打成加密压缩包上传到 WebDAV，其他电脑拉取后按账号自动去重合并；本机移除账号会同步移除他机</div>
             <div class="s-desc" style="color: var(--text-3); margin-top: 2px">
+              API Keys 与模型映射（含反向映射）随号池同步，改名/改配额/删除也会传播；上游启闭与签到规则按设备各自独立
+            </div>
+            <div class="s-desc" style="color: var(--text-3); margin-top: 2px">
               压缩包用上面的 WebDAV 密码加密（AES-256-GCM），各设备密码须一致 · 根目录 {{ shared.roots.proxy || "/agenthub-proxy" }}
             </div>
             <div class="s-desc" style="margin-top: 2px" v-if="poolsync">

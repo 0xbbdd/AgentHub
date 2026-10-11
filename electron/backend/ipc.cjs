@@ -173,10 +173,18 @@ function register(ctx) {
   // ===== 统一 WebDAV（设置 · 数据存储）：共享服务器 + 三模块根目录 =====
   ipcMain.handle("webdav_shared_get", handle(() => config.maskedSharedWebdav()));
   ipcMain.handle("webdav_shared_save", handle(({ config: form }) => {
+    const before = config.loadSharedWebdav().endpoint;
     const r = config.saveSharedWebdav(form || {});
     cfg = null; // 内存快照已过期：后续 remove_tool 等若拿旧快照整份写盘会把刚存的服务器配置冲回去（issue #95）
     // WebDAV 密码同时是号池压缩包的加密口令：改动后令历史包标记 keyChange，下次同步重打包
     try { require("./proxy/poolsync.cjs").onSharedPasswordMaybeChanged(); } catch { /* 模块未装载不影响保存 */ }
+    // 首次配置（之前没配服务器，这次配上）自动跑一次号池同步：API Keys 与模型映射随
+    // 共享配置包落到本机，「换台电脑」配好服务器即得，不用去发现「立即同步号池」（issue #92）。
+    // 已配置时改字段不触发；失败静默（号池面板看得到状态，定时同步下轮也会补）
+    const after = config.loadSharedWebdav().endpoint;
+    if (!before && after) {
+      try { require("./proxy/poolsync.cjs").run({}).catch(() => {}); } catch { /* 同步互斥等静默，状态面板可见 */ }
+    }
     return r;
   }));
   ipcMain.handle("webdav_shared_clear", handle(() => {
