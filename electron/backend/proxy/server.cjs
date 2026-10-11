@@ -78,7 +78,11 @@ function emitRequestThrottled() {
 function resolveChannel(key, model, settings) {
   const owners = adapters.modelOwners(model, settings);
   if (owners.length === 1) return { channel: owners[0] }; // 模型仅存在于单渠道目录 → 强制
-  if (key.route !== "auto" && adapters.channelOn(key.route, settings)) return { channel: key.route };
+  if (key.route !== "auto" && adapters.channelOn(key.route, settings)) {
+    // 虚拟统一名不能透传给未配置映射的渠道；非虚拟模型保留「指定渠道透传试错」的既有语义。
+    if (adapters.resolveModelTarget(model, key.route, settings)) return { channel: key.route };
+    if (!adapters.reverseAliasEntry(model, settings)) return { channel: key.route };
+  }
   if (owners.length > 1) {
     const ov = (settings.modelOverrides || {})[model];
     if (ov && owners.includes(ov)) return { channel: ov };
@@ -687,19 +691,17 @@ async function handleChat(req, res, settings) {
           continue;
         }
         usageRow.channel = chan;
-        // 反向映射：统一请求模型名 → 该渠道的实际模型名（映射按渠道，换渠道必须重算）
-        let targetModel = chainModel;
-        const revAliases = settings.modelReverseAliases || {};
-        let revEntry = revAliases[chainModel];
-        if (!revEntry) {
-          const lowerChain = chainModel.toLowerCase();
-          for (const [k, v] of Object.entries(revAliases)) {
-            if (k.toLowerCase() === lowerChain) { revEntry = v; break; }
-          }
+        // 反向映射：统一请求模型名 → 该渠道的实际模型名。没有可转发目标时跳过该渠道，
+        // 绝不能把虚拟统一名原样发给上游（CatPaw 曾因此收到 AgentHub-1.0）。
+        const revEntry = adapters.reverseAliasEntry(chainModel, settings);
+        const mappedTarget = adapters.resolveModelTarget(chainModel, chan, settings);
+        if (!mappedTarget && revEntry) {
+          lastErr = Object.assign(new Error(`渠道 ${chan} 未配置模型 "${chainModel}" 的反向映射`), { status: 400 });
+          triedChannels.push({ chan, accounts: [], note: "未配置反向映射" });
+          continue;
         }
-        if (revEntry && typeof revEntry === "object" && revEntry[chan]) {
-          targetModel = revEntry[chan];
-        }
+        // 非反向映射模型保留原有“指定渠道透传试错”语义（例如 fixed 路由下的未知模型）。
+        const targetModel = mappedTarget || chainModel;
         usedTargetModel = targetModel; // 承接给链外 record()，见上面的声明注释
         const strategy = (store.listAgents().find((a) => a.id === chan) || {}).poolStrategy || "expire_first";
         const tried = new Set();

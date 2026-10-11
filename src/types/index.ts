@@ -530,6 +530,8 @@ export interface ProxyModel {
   created: number;
   owned_by: string;
   sources: ProxyChannelId[];
+  /** 各渠道适配器声明的原始模型 id；反向映射目标必须从这里选，不能从融合后的 sources 反推 */
+  channelModelIds?: Partial<Record<ProxyChannelId, string[]>>;
   /** 目录元数据（catalog.json）：显示名 / 倍率（积分倍率，null=未知）/ 能力 / 上下文长度 */
   name?: string;
   rate?: number | null;
