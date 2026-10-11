@@ -436,6 +436,8 @@ async function run(opts) {
   if (String(w.password).length < 8) {
     oplog.log("warn", "号池同步", "WebDAV 密码不足 8 位：号池压缩包用它加密，短口令在远端可被离线爆破，建议改用更长密码");
   }
+  // 远端同步跨模块互斥（issue #92）：技能/用量/记忆同步进行中时跳过本轮
+  if (!webdav.tryBeginSync("proxy")) throw new Error("其他模块的远端同步正在进行，本轮已跳过");
 
   state = { ...state, running: true, stage: "connect", detail: "", lastError: "", percent: 0, channel };
   cancelSignal = new AbortController();
@@ -557,6 +559,7 @@ async function run(opts) {
     events.emit({ type: "poolsync", stage: "error", running: false, detail: state.lastError, percent: 100 });
     return { ok: false, message: state.lastError };
   } finally {
+    webdav.endSync();
     cancelSignal = null;
     webdav.setActiveSignal(null);
   }

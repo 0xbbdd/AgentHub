@@ -65,6 +65,29 @@ function setActiveSignal(signal) {
   activeSignal = signal || null;
 }
 
+// ===== 跨模块同步互斥（issue #92 前置） =====
+// activeSignal 只表达「取消当前在途请求」，不表达「有同步在跑」。技能/用量/号池/记忆
+// 四个模块各有手动与定时入口，号池定时上线后两模块并发会互相抢取消信号、重复上传。
+// 全应用同一时刻只放行一个远端同步任务：抢不到的入口直接跳过（定时任务下轮补跑，
+// 手动入口把原因提示给用户）。模块自身的防重入（isRunning / state.running）仍各自保留。
+let syncRunTag = null;
+
+/** 尝试占住全应用唯一的远端同步槽位；被占用返回 false（调用方跳过本轮） */
+function tryBeginSync(tag) {
+  if (syncRunTag) return false;
+  syncRunTag = String(tag || "sync");
+  return true;
+}
+
+function endSync() {
+  syncRunTag = null;
+}
+
+/** 当前占用者标签（null = 空闲），供入口提示与自测 */
+function syncBusyTag() {
+  return syncRunTag;
+}
+
 /** 网络层异常分类：超时 / 无法连接 / 取消 / 其他，供上层给出明确提示 */
 function networkKind(e) {
   if (!e) return "网络错误";
@@ -290,4 +313,4 @@ async function test(cfg) {
   return { ok: false, message: `连接失败：HTTP ${res.status}（${Date.now() - started}ms）`, latencyMs: Date.now() - started };
 }
 
-module.exports = { joinUrl, normalizeEndpoint, list, get, getText, put, remove, ensureDir, test, setActiveSignal, networkKind, describeFailure, isNetworkError };
+module.exports = { joinUrl, normalizeEndpoint, list, get, getText, put, remove, ensureDir, test, setActiveSignal, networkKind, describeFailure, isNetworkError, tryBeginSync, endSync, syncBusyTag };
