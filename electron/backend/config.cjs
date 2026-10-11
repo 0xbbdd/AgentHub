@@ -315,6 +315,12 @@ function loadSharedWebdav() {
       } catch { /* 用量模块目录不可达时跳过，下轮再迁移 */ }
       if (dirty) {
         try {
+          // 迁移卫生（issue #95）：凭据已并入 webdavShared，旧段一律清空——
+          // 否则 webdavShared 意外为空时再迁移会把旧服务器凭据「复活」，
+          // 用户看到配置自己回到旧服务器
+          cfg.webdav.endpoint = "";
+          cfg.webdav.username = "";
+          cfg.webdav.password = "";
           cfg.webdavShared = s;
           saveConfig(cfg); // saveConfig 内部会对 webdavShared.password 加密落盘
         } catch { /* 写不回去下轮再迁移 */ }
@@ -336,6 +342,16 @@ function saveSharedWebdav(incoming) {
   cfg.webdavShared = next;
   saveConfig(cfg); // 加密落盘在 saveConfig 内统一处理
   return { ok: true, message: "已保存" };
+}
+
+/** 显式清除统一 WebDAV 服务器配置（设置页「清除配置」按钮）：全字段清空。
+ *  这是唯一允许把密码清掉的入口——后台保存遇空密码会保留磁盘密文（解密失败保护），
+ *  没有这个显式通道，用户将没有任何办法撤销已保存的服务器配置 */
+function clearSharedWebdav() {
+  const cfg = loadConfig();
+  cfg.webdavShared = normalizeShared({});
+  saveConfig(cfg);
+  return { ok: true, message: "已清除统一服务器配置" };
 }
 
 /** 统一配置掩码版（给渲染层）：有密码则回掩码 */
@@ -438,8 +454,25 @@ function saveConfig(cfg) {
   const p = configPath();
   const disk = JSON.parse(JSON.stringify(cfg));
   disk.webdav.password = encryptSecret(disk.webdav.password);
-  if (disk.webdavShared) disk.webdavShared = normalizeShared(disk.webdavShared);
-  disk.webdavShared.password = encryptSecret(disk.webdavShared.password);
+  if (disk.webdavShared) {
+    disk.webdavShared = normalizeShared(disk.webdavShared);
+    // 解密失败保护（issue #95）：loadConfig 解不开 enc:v1: 密文（换机 / DPAPI 变化）时
+    // 内存密码是 ""，若直接落盘会把好端端的密文覆盖成空——网关启停等后台读改写保存都会触发。
+    // 服务器未变而密码为空 = 本机没有新密码可写 → 保留磁盘密文；
+    // 换服务器（endpoint/username 变了）正常写空，显式清除走 clearSharedWebdav
+    if (!disk.webdavShared.password) {
+      try {
+        const raw = JSON.parse(fs.readFileSync(p, "utf8"));
+        const dsh = raw && raw.webdavShared;
+        if (dsh && typeof dsh.password === "string" && dsh.password
+            && String(dsh.endpoint || "") === disk.webdavShared.endpoint
+            && String(dsh.username || "") === disk.webdavShared.username) {
+          disk.webdavShared.password = dsh.password;
+        }
+      } catch { /* 读不到就按原值落盘 */ }
+    }
+    disk.webdavShared.password = encryptSecret(disk.webdavShared.password);
+  }
   const tmp = p + ".tmp";
   fs.writeFileSync(tmp, JSON.stringify(disk, null, 2), "utf8");
   fs.renameSync(tmp, p);
@@ -474,6 +507,11 @@ function saveConfigFromUI(cfg) {
     for (const k of OUT_OF_BAND_PROXY_FIELDS) {
       if (Object.prototype.hasOwnProperty.call(diskProxy, k)) next.proxy[k] = diskProxy[k];
     }
+    // webdavShared 整段同样磁盘优先（issue #95）：它从不经设置页整份保存编辑
+    //（专用通道 webdav_shared_save），渲染层快照里的这一段是启动时带进来的旧行李字段，
+    // 首配会话内密码快照为空串，任何整份提交（切主题/拖模块排序/改反代设置）都会把
+    // 已保存的服务器配置整段冲掉——这里以磁盘值为准，让该快照字段失效
+    if (disk && disk.webdavShared) next.webdavShared = disk.webdavShared;
   } catch { /* 读盘失败时退回原行为（宁可保存成功，也不要让设置页整体保存失败） */ }
   return saveConfig(next);
 }
@@ -507,7 +545,7 @@ function applyAutoStart(cfg) {
 module.exports = {
   dataDir, configPath, hubDir, ensureHub, loadConfig, saveConfig, defaultConfig,
   getUpdateNotified, setUpdateNotified, isPortable, encryptSecret, decryptSecret, applyAutoStart,
-  loadSharedWebdav, saveSharedWebdav, maskedSharedWebdav, moduleWebdav, PASSWORD_MASK,
+  loadSharedWebdav, saveSharedWebdav, clearSharedWebdav, maskedSharedWebdav, moduleWebdav, PASSWORD_MASK,
   normalizeHm, normalizeJitter,
   saveConfigFromUI, OUT_OF_BAND_PROXY_FIELDS,
 };
