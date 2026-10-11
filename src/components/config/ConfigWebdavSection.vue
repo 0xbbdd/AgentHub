@@ -35,9 +35,12 @@ async function loadPage() {
 // ===== 统一 WebDAV 服务器（webdavShared）：技能仓库 / 用量统计 / 反代网关 / 记忆中枢共用 =====
 const SYNC_PASSWORD_MASK = "••••••••"; // 与后端掩码约定一致：精确掩码视为「未修改密码」
 const shared = ref<api.SharedWebdavConfig>({
+  type: "webdav",
   endpoint: "",
   username: "",
   password: "",
+  encryptionPassphrase: "",
+  s3: { bucket: "", region: "", pathStyle: false },
   roots: { skills: "/agent-skills", usage: "/dosage-sync", proxy: "/agenthub-proxy", memory: "/agenthub-memory" },
 });
 const sharedTestResult = ref<{ ok: boolean; message: string } | null>(null);
@@ -49,6 +52,10 @@ const sharedSaving = ref(false);
 function onSharedPasswordInput() {
   const v = shared.value.password;
   if (v !== SYNC_PASSWORD_MASK && v.includes("•")) shared.value.password = "";
+}
+function onSharedPassphraseInput() {
+  const v = shared.value.encryptionPassphrase;
+  if (v !== SYNC_PASSWORD_MASK && v.includes("•")) shared.value.encryptionPassphrase = "";
 }
 async function testShared() {
   sharedTestResult.value = null;
@@ -204,9 +211,35 @@ onUnmounted(() => {
             <span class="sg-hint">技能仓库 / 用量统计 / 反代网关三套同步共用 · 密码经系统密钥加密保存，界面只显示掩码</span>
           </div>
           <div class="form-grid">
-            <div class="form-field"><label>服务器地址（WebDAV）</label><input class="f-input" v-model="shared.endpoint" placeholder="https://dav.jianguoyun.com/dav" /></div>
-            <div class="form-field"><label>账号</label><input class="f-input" v-model="shared.username" autocomplete="off" /></div>
-            <div class="form-field full"><label>密码（同时作为反代号池压缩包的加密口令，多设备必须一致）</label><input class="f-input" type="password" v-model="shared.password" autocomplete="new-password" placeholder="已保存密码显示为掩码；输入任意字符即进入修改，请填写完整新密码" @input="onSharedPasswordInput" /></div>
+            <div class="form-field full">
+              <label>存储类型</label>
+              <div class="tabs">
+                <button class="tab" :class="{ active: shared.type !== 's3' }" @click="shared.type = 'webdav'">WebDAV 网盘</button>
+                <button class="tab" :class="{ active: shared.type === 's3' }" @click="shared.type = 's3'">S3 兼容对象存储</button>
+              </div>
+            </div>
+            <template v-if="shared.type !== 's3'">
+              <div class="form-field"><label>服务器地址（WebDAV）</label><input class="f-input" v-model="shared.endpoint" placeholder="https://dav.jianguoyun.com/dav" /></div>
+              <div class="form-field"><label>账号</label><input class="f-input" v-model="shared.username" autocomplete="off" /></div>
+              <div class="form-field full"><label>密码（同时作为反代号池压缩包的默认加密口令，多设备必须一致）</label><input class="f-input" type="password" v-model="shared.password" autocomplete="new-password" placeholder="已保存密码显示为掩码；输入任意字符即进入修改，请填写完整新密码" @input="onSharedPasswordInput" /></div>
+            </template>
+            <template v-else>
+              <div class="form-field"><label>服务器地址（S3 兼容 API，如 OSS/COS/R2/MinIO 的端点）</label><input class="f-input" v-model="shared.endpoint" placeholder="https://s3.us-east-1.amazonaws.com" /></div>
+              <div class="form-field"><label>AccessKeyId</label><input class="f-input" v-model="shared.username" autocomplete="off" /></div>
+              <div class="form-field full"><label>SecretKey（同时作为反代号池压缩包的默认加密口令，多设备必须一致）</label><input class="f-input" type="password" v-model="shared.password" autocomplete="new-password" placeholder="已保存密钥显示为掩码；输入任意字符即进入修改" @input="onSharedPasswordInput" /></div>
+              <div class="form-field"><label>桶名（Bucket）</label><input class="f-input mono" v-model="shared.s3.bucket" placeholder="my-bucket" /></div>
+              <div class="form-field"><label>区域（AWS 填区域码；R2/MinIO 填 auto）</label><input class="f-input mono" v-model="shared.s3.region" placeholder="us-east-1 或 auto" /></div>
+              <div class="form-field full">
+                <div class="switch-row" style="padding: 0">
+                  <div class="s-left">
+                    <div class="s-title" style="font-size: 12.5px">Path-Style 寻址</div>
+                    <div class="s-desc">MinIO / R2 / OSS 等勾选；AWS 官方 S3 留空（虚拟主机式）</div>
+                  </div>
+                  <div class="switch" :class="{ on: shared.s3.pathStyle }" role="switch" :aria-checked="shared.s3.pathStyle" @click="shared.s3.pathStyle = !shared.s3.pathStyle"></div>
+                </div>
+              </div>
+            </template>
+            <div class="form-field full"><label>号池加密口令（可选，留空沿用密码 / SecretKey；多设备必须一致）</label><input class="f-input" type="password" v-model="shared.encryptionPassphrase" autocomplete="new-password" placeholder="已保存口令显示为掩码；输入任意字符即进入修改" @input="onSharedPassphraseInput" /></div>
             <div class="form-field full">
               <button class="btn-outline" :disabled="sharedTesting" @click="testShared">{{ sharedTesting ? "测试中…" : "测试连接" }}</button>
               <button class="btn btn-cta" :disabled="sharedSaving" @click="saveShared">{{ sharedSaving ? "保存中" : "保存设置" }}</button>

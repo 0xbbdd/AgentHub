@@ -151,6 +151,13 @@ function register(ctx) {
       deviceId: c.webdav.deviceId,
       deviceName: c.webdav.deviceName,
     };
+    // S3 兼容存储（issue #89）：带 __s3 标记与桶参数，webdav.cjs 分派到 S3 传输
+    if (shared.type === "s3") {
+      c.webdav.__s3 = true;
+      c.webdav.bucket = shared.s3.bucket;
+      c.webdav.region = shared.s3.region;
+      c.webdav.pathStyle = shared.s3.pathStyle;
+    }
     if (remotesync.isRunning()) return fail("同步已在进行中");
     if (!remotesync.configured(c)) return fail("WebDAV 未配置完整（服务器地址 / 账号 / 密码）");
     remotesync.run(c).catch(() => {}); // 后台跑，进度走事件广播；异常已在 run 内收口
@@ -195,12 +202,21 @@ function register(ctx) {
   ipcMain.handle("webdav_shared_test", handle(({ config: form }) => {
     const cur = config.loadSharedWebdav();
     const f = form && typeof form === "object" ? form : {};
-    return webdav.test({
+    const fs3 = f.s3 && typeof f.s3 === "object" ? f.s3 : {};
+    const cfg = {
       endpoint: String(f.endpoint ?? cur.endpoint),
       username: String(f.username ?? cur.username),
       password: f.password === config.PASSWORD_MASK || f.password == null ? cur.password : String(f.password),
       root: String(f.root ?? cur.roots.skills),
-    });
+    };
+    // S3 模式（issue #89）：注入 __s3 标记与桶参数，webdav.test 分派到 S3 传输
+    if ((f.type ?? cur.type) === "s3") {
+      cfg.__s3 = true;
+      cfg.bucket = String(fs3.bucket ?? cur.s3.bucket);
+      cfg.region = String(fs3.region ?? cur.s3.region);
+      cfg.pathStyle = fs3.pathStyle ?? cur.s3.pathStyle;
+    }
+    return webdav.test(cfg);
   }));
   ipcMain.handle("webdav_logs", handle(() => remotesync.recentLogs()));
   ipcMain.handle("webdav_devices", handle(async () => {

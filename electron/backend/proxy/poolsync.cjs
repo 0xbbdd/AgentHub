@@ -457,13 +457,12 @@ async function run(opts) {
   if (channel && !store.CHANNELS.some((c) => c.id === channel)) throw new Error(`未知渠道 "${channel}"`);
   const w = wd();
   if (!configured()) throw new Error("WebDAV 未配置完整：请先在「设置 · 数据存储」配置统一服务器");
-  // 号池压缩包用 WebDAV 密码加密：未设密码时拒绝同步，避免凭据裸奔
-  if (!w.password) throw new Error("请先在「设置 · 数据存储」填写 WebDAV 密码（号池压缩包用它加密）");
-  // 弱口令告警（不阻断）：WebDAV 密码既是服务器凭据也是压缩包加密口令（scrypt 派生 AES-256），
-  // 太短的口令打的包在远端可被离线爆破。刻意只 warn 不拒绝——部分用户的 WebDAV 服务器本身
-  // 只支持短密码，阻断会破坏既有同步；密码强度由用户在「设置 · 数据存储」自行权衡
-  if (String(w.password).length < 8) {
-    oplog.log("warn", "号池同步", "WebDAV 密码不足 8 位：号池压缩包用它加密，短口令在远端可被离线爆破，建议改用更长密码");
+  // 号池压缩包用加密口令加密（issue #89：显式口令优先，缺省沿用 password / S3 SecretKey）
+  if (!w.password) throw new Error("请先在「设置 · 数据存储」配置服务器与密码（S3 模式为 SecretKey）");
+  // 弱口令告警（不阻断）：太短的口令打的包在远端可被离线爆破。刻意只 warn 不拒绝——
+  // 部分用户的 WebDAV 服务器本身只支持短密码，阻断会破坏既有同步；强度由用户自行权衡
+  if (String(w.passphrase).length < 8) {
+    oplog.log("warn", "号池同步", "号池压缩包加密口令不足 8 位：短口令在远端可被离线爆破，建议改用更长密码或设置独立加密口令");
   }
   // 远端同步跨模块互斥（issue #92）：技能/用量/记忆同步进行中时跳过本轮
   if (!webdav.tryBeginSync("proxy")) throw new Error("其他模块的远端同步正在进行，本轮已跳过");
@@ -503,7 +502,7 @@ async function run(opts) {
       const mergeKey = devId + (channel ? `|${channel}` : "");
       if (persisted.merged[mergeKey] === hash) continue; // 内容未变，上次已合并过
       try {
-        const snap = decodeArchive(buf, w.password);
+        const snap = decodeArchive(buf, w.passphrase);
         const m = mergeSnapshot(snap, channel);
         result.pulled++;
         result.added += m.added;
@@ -546,9 +545,9 @@ async function run(opts) {
     setStage("upload", channel ? `打包上传本机号池（仅 ${store.channelDisplay(channel)}）…` : "打包上传本机号池…");
     checkAborted();
     const snapshot = exportPool(channel);
-    const zipBuf = encodeArchive(snapshot, w.password);
+    const zipBuf = encodeArchive(snapshot, w.passphrase);
     const hash = sha1(zipBuf);
-    const fp = keyFingerprint(w.password);
+    const fp = keyFingerprint(w.passphrase);
     const remoteKey = `${w.endpoint}|${w.root}|${channel || "*"}|${fp}`;
     // 上传跳过条件：内容 hash 一致 + 同远端 + 同渠道范围 + 同密码 + 打包时间晚于密码改动时间
     if (persisted.uploadedHash === hash && persisted.uploadedFor === remoteKey && persisted.lastSyncAt >= persisted.keyChangeAt) {
@@ -855,7 +854,7 @@ async function runSharedSync(w, persisted, result) {
     if (got) {
       let snap = null;
       try {
-        snap = decodeEnvelope(got, w.password);
+        snap = decodeEnvelope(got, w.passphrase);
       } catch (e) {
         result.sharedDecodeError = String((e && e.message) || e);
       }
@@ -908,7 +907,7 @@ async function runSharedSync(w, persisted, result) {
     if (!remoteReadOk) {
       result.sharedUploadSkipped = true;
     } else if (persisted.sharedHash !== stable) {
-      await webdav.put(remoteUrl(w, POOL_DIR, SHARED_FILE), w, encodeEnvelope(shared, w.password));
+      await webdav.put(remoteUrl(w, POOL_DIR, SHARED_FILE), w, encodeEnvelope(shared, w.passphrase));
       persisted.sharedHash = stable;
       result.sharedUploaded = true;
     }

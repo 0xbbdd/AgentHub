@@ -124,10 +124,19 @@ function defaultConfig() {
     },
     // ===== 全项目统一的 WebDAV 服务器（技能仓库 / 用量统计 / 反代网关 / 记忆中枢共用一套凭据，
     // 各模块根目录隔离互不冲突；远端数据布局与格式保持不变） =====
+    // type="s3" 时 endpoint/username/password 复用为 S3 兼容 API 地址 / AccessKeyId / SecretKey
+    //（配 s3.bucket/region/pathStyle），四个同步引擎经 moduleWebdav 的 __s3 标记零改动走 S3 传输
     webdavShared: {
+      type: "webdav",     // webdav | s3
       endpoint: "",
       username: "",
-      password: "",       // 落盘为 enc:v1: 密文；同时作为反代号池压缩包的加密口令
+      password: "",       // 落盘为 enc:v1: 密文；S3 模式下是 SecretKey
+      encryptionPassphrase: "", // 号池压缩包加密口令（enc:v1: 密文）；空 = 沿用 password（S3 模式下即 SecretKey）
+      s3: {
+        bucket: "",
+        region: "",       // 非亚马逊服务一般填 auto（R2）或服务商标注的区域
+        pathStyle: false, // true = path-style（MinIO/R2/OSS 等）；false = 虚拟主机式（AWS）
+      },
       roots: {
         skills: "/agent-skills",   // 技能仓库中央仓库同步根目录（存量数据位置，勿改默认）
         usage: "/dosage-sync",     // 用量统计同步根目录（存量数据位置，勿改默认）
@@ -264,14 +273,22 @@ function normalizeShared(s) {
   const def = defaultConfig().webdavShared;
   const out = s && typeof s === "object" ? s : {};
   const roots = out.roots && typeof out.roots === "object" ? out.roots : {};
+  const s3 = out.s3 && typeof out.s3 === "object" ? out.s3 : {};
   const normRoot = (v, d) => {
     const r = typeof v === "string" ? v.trim().replace(/^\/+|\/+$/g, "") : "";
     return r ? "/" + r : d;
   };
   return {
+    type: out.type === "s3" ? "s3" : "webdav",
     endpoint: typeof out.endpoint === "string" ? out.endpoint.trim() : "",
     username: typeof out.username === "string" ? out.username.trim() : "",
     password: typeof out.password === "string" ? out.password : "",
+    encryptionPassphrase: typeof out.encryptionPassphrase === "string" ? out.encryptionPassphrase : "",
+    s3: {
+      bucket: typeof s3.bucket === "string" ? s3.bucket.trim() : "",
+      region: typeof s3.region === "string" ? s3.region.trim() : "",
+      pathStyle: s3.pathStyle === true,
+    },
     roots: {
       skills: normRoot(roots.skills, def.roots.skills),
       usage: normRoot(roots.usage, def.roots.usage),
@@ -354,6 +371,8 @@ function saveSharedWebdav(incoming) {
   const cur = loadSharedWebdav();
   const next = normalizeShared(incoming);
   if (next.password === PASSWORD_MASK) next.password = cur.password;
+  // 号池加密口令同样只回掩码：精确掩码 = 未修改（issue #89）
+  if (next.encryptionPassphrase === PASSWORD_MASK) next.encryptionPassphrase = cur.encryptionPassphrase;
   const cfg = loadConfig();
   cfg.webdavShared = next;
   saveConfig(cfg); // 加密落盘在 saveConfig 内统一处理
@@ -370,21 +389,48 @@ function clearSharedWebdav() {
   return { ok: true, message: "已清除统一服务器配置" };
 }
 
-/** 统一配置掩码版（给渲染层）：有密码则回掩码 */
+/** 统一配置掩码版（给渲染层）：有密码/加密口令则回掩码，绝不回明文 */
 function maskedSharedWebdav() {
   const s = loadSharedWebdav();
-  return { ...s, password: s.password ? PASSWORD_MASK : "" };
+  return {
+    ...s,
+    password: s.password ? PASSWORD_MASK : "",
+    encryptionPassphrase: s.encryptionPassphrase ? PASSWORD_MASK : "",
+  };
 }
 
-/** 给同步引擎用：共享服务器 + 指定模块根目录拼成的完整 webdav 配置 */
+/** 给同步引擎用：共享服务器 + 指定模块根目录拼成的完整 webdav 配置。
+ *  S3 模式（issue #89）：endpoint/username/password 复用为 S3 API 地址 / AccessKeyId /
+ *  SecretKey，并注入 __s3 标记与桶参数——webdav.cjs 据此分派到 S3 传输，
+ *  各引擎与「配置齐全才可同步」的判断（endpoint/账号/密码非空）对 S3 原样成立 */
 function moduleWebdav(moduleKey) {
   const s = loadSharedWebdav();
+  const root = (s.roots && s.roots[moduleKey]) || "";
+  if (s.type === "s3") {
+    return {
+      __s3: true,
+      endpoint: s.endpoint,
+      username: s.username,
+      password: s.password,
+      bucket: s.s3.bucket,
+      region: s.s3.region,
+      pathStyle: s.s3.pathStyle,
+      root,
+    };
+  }
   return {
     endpoint: s.endpoint,
     username: s.username,
     password: s.password,
-    root: (s.roots && s.roots[moduleKey]) || "",
+    root,
   };
+}
+
+/** 号池压缩包加密口令（issue #89）：显式设置过 encryptionPassphrase 用之，
+ *  否则沿用 password（WebDAV 模式=登录密码，S3 模式=SecretKey）——与历史行为兼容 */
+function sharedEncryptionPassphrase() {
+  const s = loadSharedWebdav();
+  return s.encryptionPassphrase || s.password;
 }
 
 /** 加载配置（不存在/损坏时返回默认；损坏时留档 .bak） */
@@ -434,6 +480,7 @@ function loadConfig() {
   merged.webdav.password = decryptSecret(merged.webdav.password);
   merged.webdavShared = normalizeShared(merged.webdavShared);
   merged.webdavShared.password = decryptSecret(merged.webdavShared.password);
+  merged.webdavShared.encryptionPassphrase = decryptSecret(merged.webdavShared.encryptionPassphrase);
   // deviceId / 本机名惰性补全并写回，保证多次调用稳定
   if (!merged.webdav.deviceId || !merged.webdav.deviceName) {
     if (!merged.webdav.deviceId) merged.webdav.deviceId = crypto.randomUUID();
@@ -484,19 +531,23 @@ function saveConfig(cfg) {
     // 解密失败保护（issue #95）：loadConfig 解不开 enc:v1: 密文（换机 / DPAPI 变化）时
     // 内存密码是 ""，若直接落盘会把好端端的密文覆盖成空——网关启停等后台读改写保存都会触发。
     // 服务器未变而密码为空 = 本机没有新密码可写 → 保留磁盘密文；
-    // 换服务器（endpoint/username 变了）正常写空，显式清除走 clearSharedWebdav
-    if (!disk.webdavShared.password) {
-      try {
-        const raw = JSON.parse(fs.readFileSync(p, "utf8"));
-        const dsh = raw && raw.webdavShared;
-        if (dsh && typeof dsh.password === "string" && dsh.password
-            && String(dsh.endpoint || "") === disk.webdavShared.endpoint
-            && String(dsh.username || "") === disk.webdavShared.username) {
-          disk.webdavShared.password = dsh.password;
-        }
-      } catch { /* 读不到就按原值落盘 */ }
-    }
+    // 换服务器（endpoint/username 变了）正常写空，显式清除走 clearSharedWebdav。
+    // encryptionPassphrase（号池加密口令，issue #89）无「换服务器」概念：为空一律保留磁盘密文
+    try {
+      const raw = JSON.parse(fs.readFileSync(p, "utf8"));
+      const dsh = raw && raw.webdavShared;
+      if (dsh && typeof dsh.password === "string" && dsh.password
+          && String(dsh.endpoint || "") === disk.webdavShared.endpoint
+          && String(dsh.username || "") === disk.webdavShared.username) {
+        disk.webdavShared.password = dsh.password;
+      }
+      if (dsh && typeof dsh.encryptionPassphrase === "string" && dsh.encryptionPassphrase
+          && !disk.webdavShared.encryptionPassphrase) {
+        disk.webdavShared.encryptionPassphrase = dsh.encryptionPassphrase;
+      }
+    } catch { /* 读不到就按原值落盘 */ }
     disk.webdavShared.password = encryptSecret(disk.webdavShared.password);
+    disk.webdavShared.encryptionPassphrase = encryptSecret(disk.webdavShared.encryptionPassphrase);
   }
   const tmp = p + ".tmp";
   fs.writeFileSync(tmp, JSON.stringify(disk, null, 2), "utf8");
@@ -574,7 +625,7 @@ function applyAutoStart(cfg) {
 module.exports = {
   dataDir, configPath, hubDir, ensureHub, loadConfig, saveConfig, defaultConfig,
   getUpdateNotified, setUpdateNotified, isPortable, encryptSecret, decryptSecret, applyAutoStart,
-  loadSharedWebdav, saveSharedWebdav, clearSharedWebdav, maskedSharedWebdav, moduleWebdav, PASSWORD_MASK,
+  loadSharedWebdav, saveSharedWebdav, clearSharedWebdav, maskedSharedWebdav, moduleWebdav, sharedEncryptionPassphrase, PASSWORD_MASK,
   normalizeHm, normalizeJitter,
   saveConfigFromUI, OUT_OF_BAND_PROXY_FIELDS,
 };

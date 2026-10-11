@@ -1282,9 +1282,12 @@ export const mock = {
         return { encrypted: true, driver: "node:sqlite", dataDir: "(浏览器预览)" };
       case "webdav_shared_get":
         return {
+          type: "webdav",
           endpoint: "https://dav.jianguoyun.com/dav",
           username: "demo@example.com",
           password: "••••••••",
+          encryptionPassphrase: "",
+          s3: { bucket: "", region: "", pathStyle: false },
           roots: { skills: "/agent-skills", usage: "/dosage-sync", proxy: "/agenthub-proxy" },
         };
       case "webdav_shared_save":

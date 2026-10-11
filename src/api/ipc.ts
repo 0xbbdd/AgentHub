@@ -126,10 +126,15 @@ export const webdavDevices = () => call<{ devices: RemoteDevice[]; error?: strin
 
 // ===== 统一 WebDAV（设置 · 数据存储）：一套服务器凭据 + 四模块根目录 =====
 export interface SharedWebdavConfig {
+  /** 存储类型：webdav（默认）| s3（S3 兼容对象存储：OSS/COS/R2/MinIO 等） */
+  type: "webdav" | "s3";
   endpoint: string;
   username: string;
-  /** 渲染层只拿掩码；保存时传精确掩码 = 未修改（同时是号池压缩包加密口令） */
+  /** 渲染层只拿掩码；保存时传精确掩码 = 未修改。S3 模式下即 SecretKey（同时是号池默认加密口令） */
   password: string;
+  /** 号池压缩包加密口令（掩码态；空 = 沿用 password） */
+  encryptionPassphrase: string;
+  s3: { bucket: string; region: string; pathStyle: boolean };
   roots: { skills: string; usage: string; proxy: string; memory: string };
 }
 export const webdavSharedGet = () => call<SharedWebdavConfig>("webdav_shared_get");
