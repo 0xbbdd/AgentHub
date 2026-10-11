@@ -140,7 +140,9 @@ function flatSettings() {
 
 function init() {
   const framework = configMod.loadConfig();
-  if (framework.memory && framework.memory.enabled === false) {
+  // 启用开关唯一事实源 modules.memory.enabled（issue #91）；旧版 memory.enabled=false
+  // 已由 loadConfig 迁移进 modules，这里不再读旧字段
+  if (framework.modules && framework.modules.memory && framework.modules.memory.enabled === false) {
     return { enabled: false };
   }
   if (memCfg && service) return { enabled: true, root: rootDir };
@@ -779,11 +781,15 @@ function register(ipcMain) {
   ipcMain.handle("memory_status", handle(() => status()));
   ipcMain.handle("memory_toggle", handle(async ({ enabled }) => {
     const framework = configMod.loadConfig();
-    framework.memory = { ...(framework.memory || {}), enabled: enabled !== false };
+    // modules.memory.enabled 是唯一事实源（issue #91）；memory.enabled 旧字段同步写，
+    // 兼容回滚到旧版本时不丢开关状态
+    const on = enabled !== false;
+    framework.memory = { ...(framework.memory || {}), enabled: on };
+    framework.modules = { ...(framework.modules || {}), memory: { ...((framework.modules || {}).memory || {}), enabled: on } };
     configMod.saveConfig(framework);
-    if (framework.memory.enabled) await boot();
+    if (on) await boot();
     else await shutdown();
-    return ok({ enabled: framework.memory.enabled });
+    return ok({ enabled: on });
   }));
 
   // ===== 模型与网关（供应商 / 模型池 / 路由 / 三级测试） =====

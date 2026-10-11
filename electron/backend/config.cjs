@@ -88,6 +88,15 @@ function defaultConfig() {
     fxCursor: true,
     // 左栏四大模块的显示顺序（用户在「设置 · 个性化」中调整）
     moduleOrder: ["skills", "sync", "proxy", "memory"],
+    // ===== 四大板块启用开关（issue #91 轻量模式）：关闭后左上角置灰不可点、后台完全不运行。
+    // 唯一写入口是 module_toggle IPC（主进程读改写），设置页表单不拥有它；
+    // 记忆中枢旧版 memory.enabled=false 由 loadConfig 迁移到这里，旧字段保留但不再被读取
+    modules: {
+      skills: { enabled: true },
+      usage: { enabled: true },
+      proxy: { enabled: true },
+      memory: { enabled: true },
+    },
     // ===== 技能仓库 =====
     // 各工具候选路径按顺序探测，取第一个存在的
     tools: {
@@ -413,6 +422,15 @@ function loadConfig() {
   merged.proxy.checkinAutoRules = normalizeCheckinRules(merged.proxy.checkinAutoRules);
   if (merged.theme !== "dark" && merged.theme !== "light") merged.theme = "dark";
   merged.moduleOrder = normalizeModuleOrder(merged.moduleOrder);
+  // 模块开关归一化（issue #91）：非法/缺失回 true；旧版「记忆中枢已关闭」（memory.enabled=false）
+  // 一次性迁移进 modules.memory.enabled，此后 modules.* 是唯一事实源
+  merged.modules = merged.modules && typeof merged.modules === "object" ? merged.modules : {};
+  for (const k of ["skills", "usage", "proxy", "memory"]) {
+    const m = merged.modules[k] && typeof merged.modules[k] === "object" ? merged.modules[k] : {};
+    m.enabled = m.enabled !== false;
+    merged.modules[k] = m;
+  }
+  if (merged.memory && merged.memory.enabled === false) merged.modules.memory.enabled = false;
   merged.webdav.password = decryptSecret(merged.webdav.password);
   merged.webdavShared = normalizeShared(merged.webdavShared);
   merged.webdavShared.password = decryptSecret(merged.webdavShared.password);
@@ -519,6 +537,10 @@ function saveConfigFromUI(cfg) {
     // 首配会话内密码快照为空串，任何整份提交（切主题/拖模块排序/改反代设置）都会把
     // 已保存的服务器配置整段冲掉——这里以磁盘值为准，让该快照字段失效
     if (disk && disk.webdavShared) next.webdavShared = disk.webdavShared;
+    // modules（板块启用开关）同样磁盘优先（issue #91）：唯一写入口是 module_toggle IPC
+    //（主进程读改写），设置页表单不拥有它——否则开关切换后任何整份保存都会把
+    // 渲染层旧快照里的开关状态写回去，重启后开关「自己弹回来」
+    if (disk && disk.modules) next.modules = disk.modules;
   } catch { /* 读盘失败时退回原行为（宁可保存成功，也不要让设置页整体保存失败） */ }
   return saveConfig(next);
 }

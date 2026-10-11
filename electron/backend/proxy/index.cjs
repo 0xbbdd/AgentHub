@@ -452,6 +452,32 @@ function shutdown() {
   server.stop();
 }
 
+/**
+ * 模块开关（issue #91）运行时启停。
+ * 开：从未装配过（启动时模块被关）→ 完整 boot；装配过 → 只重启各定时设施，
+ *     网关是否自启仍由「记住网关开关」决定——启用模块不等于打开网关。
+ * 关：停定时器/网关并关库（各 store 函数入口都惰性 open，随时可重开）。
+ * 不动 booted 装配闸与 rules 监听：重启应用后由启动短路决定是否装配，
+ * 会话内反复开关不做全量拆卸/重建，避免 chokidar 重复挂监听。
+ */
+function setRuntime(on) {
+  if (on) {
+    if (!booted) return boot();
+    credits.startScheduler(() => settings().creditsRefreshMin);
+    startCheckinAuto();
+    poolsched.start();
+    events.emit({ type: "status" });
+    return Promise.resolve();
+  }
+  credits.stopScheduler();
+  stopCheckinAuto();
+  poolsched.stop();
+  discovery.cancelOAuth();
+  server.stop();
+  try { store.close(); } catch { /* 关闭失败无碍，句柄随进程退出 */ }
+  return Promise.resolve();
+}
+
 // ===== IPC =====
 
 function ok(data) {
@@ -1163,4 +1189,4 @@ function register(ipcMain) {
 }
 
 // 计划判定与抖动的纯函数一并导出：供自测直接验证跨午夜 / 不补欠账 / 已完成等分支
-module.exports = { boot, shutdown, register, settings, checkinJitterOffset, checkinPlannedAt, checkinDueKey };
+module.exports = { boot, shutdown, setRuntime, register, settings, checkinJitterOffset, checkinPlannedAt, checkinDueKey };
