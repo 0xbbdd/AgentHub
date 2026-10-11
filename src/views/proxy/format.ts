@@ -147,6 +147,8 @@ export const CHANNEL_NAMES: Record<string, string> = {
   catpaw: "CatPaw（美团）",
   qoder: "Qoder CN",
   qoder_intl: "Qoder International",
+  autoclaw: "AutoClaw 国内版",
+  autoclaw_intl: "AutoClaw 国际版",
 };
 export const channelName = (id: string) => CHANNEL_NAMES[id] || id || "-";
 

@@ -193,7 +193,11 @@ async function attemptChat(channel, acc, model, body, emit, meta) {
     if (e && e.status === 401) {
       const r = await adapters.refreshTokenLocked(channel, acc, secrets).catch(() => ({ ok: false }));
       if (r.ok) {
-        store.updateAccount(acc.id, { token: r.token, refreshToken: r.refreshToken, status: "online", coolUntil: 0, coolReason: "" });
+        // noPersist 渠道（AutoClaw，方案 §7）：刷新结果只进适配器进程缓存，
+        // 不落库——服务端轮换 refresh_token，落库会与桌面端自己的刷新互相顶掉
+        store.updateAccount(acc.id, r.noPersist
+          ? { status: "online", coolUntil: 0, coolReason: "" }
+          : { token: r.token, refreshToken: r.refreshToken, status: "online", coolUntil: 0, coolReason: "" });
         return await send({ token: r.token, refreshToken: r.refreshToken });
       }
       // 触发计数与冷却交给 catch 侧的 applyCool 统一处理（classifyUpstream → relogin），
@@ -504,6 +508,9 @@ async function handleChat(req, res, settings) {
   const chatMeta = {
     conversationRequestId: crypto.randomBytes(16).toString("hex"),
     conversationId: util.stableConvId(body.messages) || "",
+    // 客户端原始请求头（只读引用）：部分渠道按头透传会话标识（AutoClaw 的 X-Session-Id 三头族），
+    // 适配器按白名单取用，未列出的头一律不透传
+    clientHeaders: req.headers,
   };
   runtime.active += 1;
   const rt = runtime; // 捕获引用：stop() 会把 runtime 置 null，finally 里直接碰会 TypeError

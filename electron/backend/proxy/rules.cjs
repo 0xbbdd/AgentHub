@@ -500,6 +500,59 @@ const DEFAULTS = {
       stopTimeoutMs: 3000,
       sseTimeoutMs: 900000,
     },
+    // ===== AutoClaw 双区（国内版 / 国际版）=====
+    // 两地同协议同签名指纹（appId/appKey 逐字相同），仅 userapiBase 与订阅端点不同。
+    // 两域版本号**不同**（实测）：llmVersion 进对话头 X-Version；apiVersion 进 userapi 域
+    // X-Version 且是版本门控——不带它时模型目录只下发部分条目。客户端升级后改这里即热生效。
+    // X-Auth-Sign 仅 userapi 域发：MD5(`${authAppId}&${秒级时间戳}&${authAppKey}`) 小写十六进制。
+    autoclaw: {
+      userapiBase: "https://autoglm-acceleration-api.zhipuai.cn",
+      llmProxyPath: "/autoclaw-proxy/proxy/autoclaw",
+      authAppId: "100003",
+      authAppKey: "38d2391985e2369a5fb8227d8e6cd5e5",
+      llmVersion: "1.17.8",
+      apiVersion: "1.18.5",
+      catalogPath: "/autoclaw-proxy/proxy/autoclaw-model-config",
+      taskCompletePath: "/autoclaw-proxy/proxy/autoclaw-task-complete",
+      taskListPath: "/autoclaw-proxy/proxy/autoclaw-task-list",
+      refreshPath: "/userapi/v1/refresh",
+      refreshFallbackPath: "/userapi/v1/agent-refresh",
+      sendCodePath: "/userapi/v1/agent-send-code",
+      // 结尾斜杠是上游要求的（带不带斜杠是两个路由）
+      loginPath: "/userapi/v1/agent-login/",
+      userProfilePath: "/userapi/v1/user-profile",
+      walletsPath: "/agent-assetmgr/api/v2/wallets?biz_app_id=autoclaw",
+      walletInstancesPath: "/agent-assetmgr/api/v1/wallet-instances?wallet_type=all&wallet_scope=all",
+      pointsExpiringPath: "/agent-assetmgr/api/v1/points/expiring?biz_app_id=autoclaw",
+      // 订阅端点两区不同（实测）：国内 subscribe-info / 国际 oversea-subscribe-info
+      subscribePath: "/agentpay/v1/assistant/subscribe-info",
+      oauthCaptchaConfigPath: "/userapi/overseasv1/oauth-captcha-config",
+      oauthUrlPath: "/userapi/overseasv1/zai-oauth-url",
+      oauthLoginPath: "/userapi/overseasv1/zai-oauth-login",
+    },
+    autoclaw_intl: {
+      userapiBase: "https://autoglm-api.autoglm.ai",
+      llmProxyPath: "/autoclaw-proxy/proxy/autoclaw",
+      authAppId: "100003",
+      authAppKey: "38d2391985e2369a5fb8227d8e6cd5e5",
+      llmVersion: "1.17.8",
+      apiVersion: "1.18.5",
+      catalogPath: "/autoclaw-proxy/proxy/autoclaw-model-config",
+      taskCompletePath: "/autoclaw-proxy/proxy/autoclaw-task-complete",
+      taskListPath: "/autoclaw-proxy/proxy/autoclaw-task-list",
+      refreshPath: "/userapi/v1/refresh",
+      refreshFallbackPath: "/userapi/v1/agent-refresh",
+      sendCodePath: "/userapi/v1/agent-send-code",
+      loginPath: "/userapi/v1/agent-login/",
+      userProfilePath: "/userapi/v1/user-profile",
+      walletsPath: "/agent-assetmgr/api/v2/wallets?biz_app_id=autoclaw",
+      walletInstancesPath: "/agent-assetmgr/api/v1/wallet-instances?wallet_type=all&wallet_scope=all",
+      pointsExpiringPath: "/agent-assetmgr/api/v1/points/expiring?biz_app_id=autoclaw",
+      subscribePath: "/agentpay/v1/assistant/oversea-subscribe-info",
+      oauthCaptchaConfigPath: "/userapi/overseasv1/oauth-captcha-config",
+      oauthUrlPath: "/userapi/overseasv1/zai-oauth-url",
+      oauthLoginPath: "/userapi/overseasv1/zai-oauth-login",
+    },
   },
 };
 

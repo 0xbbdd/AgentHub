@@ -286,6 +286,32 @@ async function main() {
     const clash = qModels.filter((m) => om.includes(m));
     assert(clash.length === 0, `qoder 模型与 ${other} 零重名（无路由歧义）`);
   }
+
+  // ===== AutoClaw 双区注册 =====
+  // glm-5.3 / glm-5.3-flash 与 workbuddy_ai、catpaw 等渠道同名是既有语义（modelOwners 多归属 =
+  // failover 候选），故本渠道不做「零重名」断言，只断言归属包含自身。
+  const acOn = !!store.AUTOCLAW_INTL_ENABLED;
+  for (const id of ["autoclaw"]) {
+    const ad = adapters.get(id);
+    assert(ad && ad.id === id, `${id} 适配器注册`);
+    assert(store.CHANNELS.some((c) => c.id === id), `store.CHANNELS 含 ${id}`);
+    assert(!!adapters.get("autoclaw_intl") === acOn && store.CHANNELS.some((c) => c.id === "autoclaw_intl") === acOn,
+      `autoclaw_intl 注册状态与开关(${acOn}) 一致（ADAPTERS 与 CHANNELS 双侧）`);
+    const need = ["cfg", "models", "fetchModels", "headers", "rewriteBody", "chat", "queryCredits", "refreshToken", "checkin", "checkinStatus"];
+    assert(need.every((k) => typeof ad[k] === "function"), `${id} 适配器十件套齐备`);
+    assert(ad.models().includes("glm-5.3") && ad.models().includes("glm-5.3-flash"), `${id} 静态兜底模型表`);
+    assert(adapters.modelOwners("glm-5.3").includes(id), `glm-5.3 归属含 ${id}`);
+    const acH = ad.headers();
+    assert(!("authorization" in acH) && !("x-authorization" in acH), `${id} headers() 不含认证头（X-Authorization 由 chat 按账号现场出）`);
+    const acR = ad.rewriteBody("glm-5.3", { messages: [{ role: "user", content: "hi" }], max_tokens: 1024 }, { id: "a1", uid: "u" }, {});
+    assert(acR.routeModelId === "zaicoding_glm-5.3" && acR.body.model === "glm-5.3", `${id} rewriteBody 解析路由 ID + 剥前缀 model`);
+    assert(acR.body.max_tokens === 10000, `${id} rewriteBody 归一小 max_tokens`);
+    assert(acR.body.messages[0].role === "system" && /OpenClaw/.test(acR.body.messages[0].content), `${id} rewriteBody 前置 OpenClaw 身份前缀`);
+    // 深拷贝纪律：改写绝不污染入参 body（渠道回退链多渠道复用同一 body 对象）
+    const sharedBody = { messages: [{ role: "user", content: "hi" }], max_tokens: 512 };
+    ad.rewriteBody("glm-5.3", sharedBody, { id: "a1" }, {});
+    assert(sharedBody.messages.length === 1 && !("model" in sharedBody) && sharedBody.max_tokens === 512, `${id} rewriteBody 不污染入参 body`);
+  }
   const qBody = qd.rewriteBody("dfmodel", { messages: [{ role: "user", content: "hi" }], temperature: 0.2 }, { uid: "u" }, {});
   assert(qBody.model_config && qBody.model_config.key === "dfmodel" && qBody.model_config.format === "openai", "qoder rewriteBody 产出 QoderInferRequest");
   assert(qBody.request_id === qBody.request_set_id && Array.isArray(qBody.messages) && Array.isArray(qBody.tools), "qoder rewriteBody 结构正确");

@@ -3876,6 +3876,18 @@ if (store.QODER_INTL_ENABLED) {
   ADAPTERS.qoder_intl = makeQoder("qoder_intl", qoderDeps);
 }
 
+// ===== AutoClaw 双区（国内版 / 国际版：同协议同签名，仅域名与登录方式不同）=====
+// 挂载必须与 store.AUTOCLAW_INTL_ENABLED 同步——ADAPTERS 参与 modelOwners/mergedModels，
+// 只在 CHANNELS 出现而无适配器会让双表一致性校验失败（与 qoder_intl 同口径）。
+// 刷新是「只读不回写」渠道（方案 §7）：refreshToken 返回 noPersist 标记，
+// server/credits 据此跳过 token 落库，新凭证只进适配器进程缓存。
+const { makeAutoClaw } = require("./autoclaw/adapter.cjs");
+const autoclawDeps = { fetchStream, pumpSse, httpJson, rules, util, store, deviceIds };
+ADAPTERS.autoclaw = makeAutoClaw("autoclaw", autoclawDeps);
+if (store.AUTOCLAW_INTL_ENABLED) {
+  ADAPTERS.autoclaw_intl = makeAutoClaw("autoclaw_intl", autoclawDeps);
+}
+
 // 启动期契约校验：全员必需方法缺失在 require 阶段即抛错（fail-fast），
 // 人为删掉某个适配器的 chat() 后应用启动即崩在明面上，而不是运行期才 404/TypeError
 for (const [channel, ad] of Object.entries(ADAPTERS)) assertAdapterContract(channel, ad);

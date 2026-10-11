@@ -139,6 +139,11 @@ CREATE INDEX IF NOT EXISTS idx_oplog_ts ON op_logs(ts);
  */
 const QODER_INTL_ENABLED = true;
 
+// AutoClaw 双区开关：两地同协议同签名（appId/appKey 逐字相同），仅域名与登录方式不同
+// （国内手机验证码 / 国际 OAuth）。地区是通道属性不是账号属性，故做成两个独立渠道 id，
+// 不在账号上挂 region 字段——做成账号字段会让界面与选路分不清哪条账号走哪个站点。
+const AUTOCLAW_INTL_ENABLED = true;
+
 const CHANNELS = [
   { id: "trae", display: "Trae SOLO CN", domain: "api.trae.cn" },
   { id: "workbuddy", display: "WorkBuddy CN", domain: "copilot.tencent.com" },
@@ -159,6 +164,11 @@ const CHANNELS = [
   // 注意：该渠道签名依赖本机安装的客户端（wasm 提取），凭据可导入但未装客户端时不可调用。
   { id: "qoder", display: "Qoder CN", domain: "gateway.qoder.com.cn" },
   ...(QODER_INTL_ENABLED ? [{ id: "qoder_intl", display: "Qoder International", domain: "api2.qoder.sh" }] : []),
+  // AutoClaw 双区（智谱 AutoGLM 加速站 / 国际站）：同套协议与签名指纹，仅域名与登录方式不同。
+  // 账号体系两区独立，桌面端登录态文件却是同一个（%APPDATA%/AutoClaw/auth.json）——
+  // 桌面导入时哪边登录了就是哪边的账号，靠用户选对目标渠道（与 Qoder 双区同口径）。
+  { id: "autoclaw", display: "AutoClaw 国内版", domain: "autoglm-acceleration-api.zhipuai.cn" },
+  ...(AUTOCLAW_INTL_ENABLED ? [{ id: "autoclaw_intl", display: "AutoClaw 国际版", domain: "autoglm-api.autoglm.ai" }] : []),
 ];
 
 /** 打开数据库（幂等）；建表 + WAL + 三渠道种子 + 90 天流水 GC */
@@ -872,6 +882,7 @@ module.exports = {
   driver: () => driver,
   CHANNELS,
   QODER_INTL_ENABLED,
+  AUTOCLAW_INTL_ENABLED,
   channelDisplay: (id) => (CHANNELS.find((c) => c.id === id) || {}).display || String(id),
   createKey, importKey, listKeys, findKeyBySecret, updateKey, deleteKey, keyTodayReq,
   listAgents, setPoolStrategy, setAgentCostTier,
