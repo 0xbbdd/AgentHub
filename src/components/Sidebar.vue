@@ -33,7 +33,9 @@ const scheduleMemoryRefresh = coalesceAsync(refreshMemoryStats, 800);
 const version = ref("v0.1.0");
 // 板块启用态（issue #91）：停用板块的统计 IPC 一律不打（后台已停，打了也没意义）
 function modOn(k: string) {
-  return !app.config.modules?.[k] || app.config.modules[k].enabled !== false;
+  const mods = app.config.modules as Partial<Record<string, { enabled: boolean }>> | undefined;
+  const m = mods?.[k];
+  return !m || m.enabled !== false;
 }
 function refreshStatsForEnabled(only?: string) {
   const want = (k: string) => (only ? only === k : true);

@@ -257,10 +257,10 @@ function buildTrayMenu() {
     : remotesync.configured(cfg)
       ? `上次同步 ${fmtTime(remotesync.loadRemoteState().lastSyncAt) || "—"}`
       : "未配置 WebDAV";
-  const usageToday = on("usage") ? usageTodaySummary() : null;
+  const usageToday = on("sync") ? usageTodaySummary() : null;
   const items = [];
   if (on("skills")) items.push({ label: `技能仓库：${statusText}`, enabled: false });
-  if (on("usage")) items.push({ label: usageToday != null ? `今日用量 ${formatNum(usageToday)} token` : "今日用量 —", enabled: false });
+  if (on("sync")) items.push({ label: usageToday != null ? `今日用量 ${formatNum(usageToday)} token` : "今日用量 —", enabled: false });
   if (items.length) items.push({ type: "separator" });
   const st = updater.getStatus();
   if (st.status === "available" || st.status === "downloaded") {
@@ -274,13 +274,13 @@ function buildTrayMenu() {
       enabled: remotesync.configured(cfg) && !running,
       click: triggerSync,
     }] : []),
-    ...(on("usage") ? [{ label: "立即同步用量", click: triggerUsageSync }] : []),
+    ...(on("sync") ? [{ label: "立即同步用量", click: triggerUsageSync }] : []),
     ...(on("skills") ? [{
       label: scheduler.isPaused() ? "恢复定时同步" : "暂停定时同步",
       enabled: remotesync.configured(cfg) && !!(cfg.schedule && (cfg.schedule.hourly || cfg.schedule.daily)),
       click: () => { scheduler.setPaused(!scheduler.isPaused()); refreshTrayMenu(); },
     }] : []),
-    ...(on("usage") ? [{
+    ...(on("sync") ? [{
       label: usageScheduler.isPaused() ? "恢复用量定时同步" : "暂停用量定时同步",
       click: () => { usageScheduler.setPaused(!usageScheduler.isPaused()); refreshTrayMenu(); },
     }] : []),
@@ -302,7 +302,7 @@ function registerModuleToggle() {
     try {
       const m = String((args && args.module) || "");
       const enabled = !!(args && args.enabled);
-      if (!["skills", "usage", "proxy", "memory"].includes(m)) return { ok: false, message: "未知板块" };
+      if (!["skills", "sync", "proxy", "memory"].includes(m)) return { ok: false, message: "未知板块" };
       const cfg = config.loadConfig();
       const next = { ...cfg.modules, [m]: { ...((cfg.modules || {})[m] || {}), enabled } };
       if (!enabled && Object.values(next).every((x) => !x || x.enabled === false)) {
@@ -314,7 +314,7 @@ function registerModuleToggle() {
       if (m === "skills") {
         if (enabled) { scheduler.start(); watch.start(); }
         else { scheduler.stop(); watch.stop(); }
-      } else if (m === "usage") {
+      } else if (m === "sync") {
         if (enabled) usageScheduler.start();
         else {
           usageScheduler.stop();
@@ -471,7 +471,7 @@ if (!gotLock) {
     };
 
     // 用量同步：初始化本地库（惰性打开），并确保本机设备登记在册（设备列表/本机口径立即可用）
-    if (on("usage")) {
+    if (on("sync")) {
       usagedb.get();
       const usageCfg0 = usageConfig.loadConfig();
       const usageLocalId = usagesync.ensureLocalDeviceId(usageCfg0);
@@ -496,7 +496,7 @@ if (!gotLock) {
       scheduler.start();
       watch.start();
     }
-    if (on("usage")) usageScheduler.start();
+    if (on("sync")) usageScheduler.start();
     updater.init({ onShowWindow: showWindow, onTrayRefresh: refreshTrayMenu });
 
     // 依据配置启用开机自启（便携版不支持：注册的会是临时解压副本路径，退出即失效）。

@@ -14,7 +14,7 @@ const defaultConfig: AppConfig = {
   fxPools: false,
   fxCursor: true,
   moduleOrder: MODULES.map((m) => m.key),
-  modules: { skills: { enabled: true }, usage: { enabled: true }, proxy: { enabled: true }, memory: { enabled: true } },
+  modules: { skills: { enabled: true }, sync: { enabled: true }, proxy: { enabled: true }, memory: { enabled: true } },
   tools: {},
   customDirs: [],
   mountMode: "junction",
@@ -130,9 +130,12 @@ export const useAppStore = defineStore("app", {
   actions: {
     /** 板块开关切换（issue #91）：走主进程唯一写入口，成功后同步内存态供 UI 即时置灰。
      *  必须是 action 不能是 getter——Pinia getter 会被立即求值，函数值会被提前调用炸掉 */
-    async toggleModule(key: ModuleKey, enabled: boolean) {
+    async toggleModule(key: string, enabled: boolean) {
       const r = await api.moduleToggle(key, enabled);
-      if (r && r.ok && this.config.modules?.[key]) this.config.modules[key].enabled = enabled;
+      if (r && r.ok) {
+        const mods = this.config.modules as Record<string, { enabled: boolean }> | undefined;
+        if (mods && mods[key]) mods[key].enabled = enabled;
+      }
       return r;
     },
     async load() {

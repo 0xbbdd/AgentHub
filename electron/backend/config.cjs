@@ -93,7 +93,7 @@ function defaultConfig() {
     // 记忆中枢旧版 memory.enabled=false 由 loadConfig 迁移到这里，旧字段保留但不再被读取
     modules: {
       skills: { enabled: true },
-      usage: { enabled: true },
+      sync: { enabled: true },  // 用量统计（键名与 moduleOrder/前端 ModuleKey 对齐）
       proxy: { enabled: true },
       memory: { enabled: true },
     },
@@ -482,7 +482,7 @@ function loadConfig() {
   // 模块开关归一化（issue #91）：非法/缺失回 true；旧版「记忆中枢已关闭」（memory.enabled=false）
   // 一次性迁移进 modules.memory.enabled，此后 modules.* 是唯一事实源
   merged.modules = merged.modules && typeof merged.modules === "object" ? merged.modules : {};
-  for (const k of ["skills", "usage", "proxy", "memory"]) {
+  for (const k of ["skills", "sync", "proxy", "memory"]) {
     const m = merged.modules[k] && typeof merged.modules[k] === "object" ? merged.modules[k] : {};
     m.enabled = m.enabled !== false;
     merged.modules[k] = m;

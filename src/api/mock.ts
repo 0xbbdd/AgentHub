@@ -17,6 +17,7 @@ const TODAY = (() => {
 function defaultConfig(): AppConfig {
   return {
     theme: "dark",
+    modules: { skills: { enabled: true }, sync: { enabled: true }, proxy: { enabled: true }, memory: { enabled: true } },
     fx: true,
     fxParticles: false,
     fxPools: false,
@@ -55,8 +56,9 @@ function defaultConfig(): AppConfig {
       routeOrder: "score",
       rateLimitPerMin: 120,
       concurrency: 8,
-      creditsRefreshMin: 30,
-      debugStatus: false,
+    creditsRefreshMin: 30,
+    poolsyncSchedule: { hourly: false, hourlyInterval: 6, daily: false, dailyTime: "04:00" },
+    debugStatus: false,
       modelOverrides: {},
       humanizeJitter: true,
       disabledModels: [],

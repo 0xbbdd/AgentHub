@@ -33,15 +33,15 @@ if (!inSandbox) { console.error("拒绝运行：配置路径不在沙箱内"); p
 console.log("");
 console.log("=== M1：归一化（默认全启用 / 脏值回 true）===");
 let cfg = config.loadConfig();
-ok("默认四板块全启用", ["skills", "usage", "proxy", "memory"].every((k) => cfg.modules[k].enabled === true), JSON.stringify(cfg.modules));
+ok("默认四板块全启用", ["skills", "sync", "proxy", "memory"].every((k) => cfg.modules[k].enabled === true), JSON.stringify(cfg.modules));
 // 直接往磁盘写脏值再读
 {
   const raw = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
-  raw.modules = { skills: "no", usage: null, proxy: { enabled: false }, memory: {} };
+  raw.modules = { skills: "no", sync: null, proxy: { enabled: false }, memory: {} };
   fs.writeFileSync(cfgPath, JSON.stringify(raw, null, 2), "utf8");
 }
 cfg = config.loadConfig();
-ok("脏值归一：非法回 true", cfg.modules.skills.enabled === true && cfg.modules.usage.enabled === true && cfg.modules.memory.enabled === true);
+ok("脏值归一：非法回 true", cfg.modules.skills.enabled === true && cfg.modules.sync.enabled === true && cfg.modules.memory.enabled === true);
 ok("脏值归一：合法 false 保留", cfg.modules.proxy.enabled === false, JSON.stringify(cfg.modules));
 
 console.log("");
@@ -58,20 +58,20 @@ ok("modules 被删后其余板块回默认启用", cfg.modules.skills.enabled ==
 
 console.log("");
 console.log("=== M3：整份保存不得冲掉开关状态 ====");
-// 模拟主进程 module_toggle：重新启用 proxy + 停用 usage（直写盘，同款路径）
+// 模拟主进程 module_toggle：重新启用 proxy + 停用用量（sync）（直写盘，同款路径）
 cfg = config.loadConfig();
 cfg.modules.proxy.enabled = true;
-cfg.modules.usage.enabled = false;
+cfg.modules.sync.enabled = false;
 config.saveConfig(cfg);
 // 渲染层旧快照（启动时拉的全量，开关还是旧值）做整份保存
 const stale = config.loadConfig();
-stale.modules.usage.enabled = true;  // 旧快照里的过期状态
+stale.modules.sync.enabled = true;  // 旧快照里的过期状态
 stale.modules.memory.enabled = true;
 stale.theme = "light";
 const r = config.saveConfigFromUI(JSON.parse(JSON.stringify(stale)));
 ok("保存成功", r && r.ok);
 cfg = config.loadConfig();
-ok("toggle 后的 usage=false 不被旧快照写回 true", cfg.modules.usage.enabled === false, JSON.stringify(cfg.modules));
+ok("toggle 后的用量（sync）=false 不被旧快照写回 true", cfg.modules.sync.enabled === false, JSON.stringify(cfg.modules));
 ok("toggle 后的 proxy=true 保持", cfg.modules.proxy.enabled === true, JSON.stringify(cfg.modules));
 ok("设置页自有字段按提交值落盘", cfg.theme === "light");
 
