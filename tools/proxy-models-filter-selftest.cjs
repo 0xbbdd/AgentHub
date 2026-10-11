@@ -157,13 +157,24 @@ async function main() {
     check("B5 响应头明示回退", (rr.headers.get("x-agenthub-fallback") || "").includes("ai-only-model"), String(rr.headers.get("x-agenthub-fallback")));
     cfg.fallbackModel = "";
 
-    // ===== B6 恢复启用 + 有号 → 模型回到目录（动态性）=====
-    store.updateAccount(w1, { status: "disabled" });
+    // ===== B6 号池动态性：删光账号（=没有号池）→ 不列；重新有号 → 列出 =====
+    store.removeAccount(w1);
     models = await getModels();
-    check("B6 账号停用（号池空）→ 不列", !models.includes("shared-model"), ids(models));
-    store.updateAccount(w1, { status: "online" });
+    check("B6 删光账号（没有号池）→ 不列", !models.includes("shared-model"), ids(models));
+    const w2 = store.addAccount({ channel: "workbuddy", uid: "mf2", name: "恢复号", token: "wb-token2", source: "paste", expiresAt: Date.now() + 7200000 });
     models = await getModels();
-    check("B6 账号恢复 → 重新列出", models.includes("shared-model"), ids(models));
+    check("B6 重新有号 → 列出", models.includes("shared-model"), ids(models));
+
+    // ===== B7 有号但暂时不可用（耗尽/冷却/停用）→ 仍列出，请求给明确错误 =====
+    // 「没有号池」才隐藏；全渠道临时不可用时客户端模型列表不能整体闪没
+    store.updateAccount(w2, { credits: 0, creditsAt: Date.now() });
+    models = await getModels();
+    check("B7 余额耗尽但号还在 → 仍列出", models.includes("shared-model"), ids(models));
+    rr = await call({ model: "shared-model", stream: false, messages: bodyMsg });
+    check("B7 耗尽请求得到明确错误（非 404/无模型）", rr.status === 502 || rr.status === 503 || rr.status === 402, String(rr.status));
+    store.updateAccount(w2, { status: "disabled" });
+    models = await getModels();
+    check("B7 账号停用但号池仍在 → 仍列出", models.includes("shared-model"), ids(models));
   } finally {
     await server.stopAsync().catch(() => {});
     fake.close();

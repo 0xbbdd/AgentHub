@@ -1050,17 +1050,19 @@ function buildApp(settings) {
   }));
 
   // 模型目录：三渠道合并视图，鉴权可选（方案 §6.1）；停用模型不对外列出（调不通就不给看，省下游翻找）。
-  // 号池为空的渠道同样不对外列（issue #90）：判定口径与路由一致（routeUsable = 启用 + 未熔断 +
-  // 号池有可出请求的账号），客户端拿到的每个模型此刻都真实可调。号池是动态的：客户端若缓存了
-  // 旧列表，请求时仍会拿到明确的 503/402 错误码与文案
+  // 「没有号池」的渠道（渠道被关 / 一个账号都没有）不对外列（issue #90）；
+  // 有账号的渠道一律列出——cooling/额度耗尽/账号停用都只是暂时或主动不可用，
+  // 模型保留展示、请求时拿到 503/402 明确文案，避免客户端模型列表整体闪没
   app.get("/v1/models", (_req, res) => {
     const st = settings();
-    const usableCache = new Map();
-    const usable = (c) => {
-      if (!usableCache.has(c)) usableCache.set(c, routeUsable(c, st));
-      return usableCache.get(c);
+    const aliveCache = new Map();
+    const poolAlive = (c) => {
+      if (!aliveCache.has(c)) {
+        aliveCache.set(c, adapters.channelOn(c, st) && pool.poolAccounts(c).length > 0);
+      }
+      return aliveCache.get(c);
     };
-    res.json({ object: "list", data: adapters.listableModels(st).filter((m) => (m.sources || []).some(usable)) });
+    res.json({ object: "list", data: adapters.listableModels(st).filter((m) => (m.sources || []).some(poolAlive)) });
   });
 
   // 探活：无健康渠道时 503（只看启用渠道：全关时探活如实报不可用）
