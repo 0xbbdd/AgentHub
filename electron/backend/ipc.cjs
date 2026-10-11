@@ -174,8 +174,14 @@ function register(ctx) {
   ipcMain.handle("webdav_shared_get", handle(() => config.maskedSharedWebdav()));
   ipcMain.handle("webdav_shared_save", handle(({ config: form }) => {
     const r = config.saveSharedWebdav(form || {});
+    cfg = null; // 内存快照已过期：后续 remove_tool 等若拿旧快照整份写盘会把刚存的服务器配置冲回去（issue #95）
     // WebDAV 密码同时是号池压缩包的加密口令：改动后令历史包标记 keyChange，下次同步重打包
     try { require("./proxy/poolsync.cjs").onSharedPasswordMaybeChanged(); } catch { /* 模块未装载不影响保存 */ }
+    return r;
+  }));
+  ipcMain.handle("webdav_shared_clear", handle(() => {
+    const r = config.clearSharedWebdav();
+    cfg = null;
     return r;
   }));
   ipcMain.handle("webdav_shared_test", handle(({ config: form }) => {
@@ -248,9 +254,11 @@ function register(ctx) {
   }));
   // 电脑扫描发现：只读探测第三方 agent，命中列表给设置页一键添加
   ipcMain.handle("probe_agents", handle(() => adapter.probeAgents(C())));
-  // 删除自定义工具适配器：不带 confirm 只干跑报影响，带 confirm 才摘挂载删配置
+  // 删除自定义工具适配器：不带 confirm 只干跑报影响，带 confirm 才摘挂载删配置。
+  // 传入的必须是磁盘新鲜读：removeCustomTool 会对传入对象整份 saveConfig，
+  // 若传内存快照 C()，快照里过期的 webdavShared 等字段会把磁盘新值冲掉（issue #95）
   ipcMain.handle("remove_tool", handle(({ id, confirm: doIt }) => {
-    const r = syncer.removeCustomTool(C(), String(id || ""), !!doIt);
+    const r = syncer.removeCustomTool(config.loadConfig(), String(id || ""), !!doIt);
     if (r.ok && doIt) cfg = null; // 配置已删条目，内存快照作废
     return r;
   }));
