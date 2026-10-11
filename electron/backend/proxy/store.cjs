@@ -192,6 +192,12 @@ function open() {
   try {
     db.exec("ALTER TABLE keys ADD COLUMN key_enc TEXT NOT NULL DEFAULT ''");
   } catch { /* 已存在 */ }
+  // 在线迁移：keys.updated_at（Key 最后更新时间戳，多机同步 LWW 仲裁——issue #92 修改/删除传播）
+  try {
+    db.exec("ALTER TABLE keys ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0");
+  } catch { /* 已存在 */ }
+  // 老版本只增不改不删，存量行更新时间按迁移时刻起算（此后任何修改都会盖出更新的时间戳）
+  db.prepare("UPDATE keys SET updated_at = ? WHERE updated_at = 0").run(Date.now());
   // 在线迁移：usage_requests 缓存 token（命中率统计；Anthropic 协议上游如 zcode 会回 cache_read/creation）
   try {
     db.exec("ALTER TABLE usage_requests ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0");
@@ -259,7 +265,7 @@ function createKey({ name, route, routeOrder, dailyQuota, rateLimit }) {
   const secret = "sk-" + crypto.randomBytes(24).toString("hex"); // 48 hex
   const id = crypto.randomUUID();
   db.prepare(
-    "INSERT INTO keys (id, name, key_hash, key_enc, key_prefix, key_suffix, route, route_order, daily_quota, rate_limit, enabled, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,1,?)"
+    "INSERT INTO keys (id, name, key_hash, key_enc, key_prefix, key_suffix, route, route_order, daily_quota, rate_limit, enabled, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,1,?,?)"
   ).run(
     id,
     String(name || "").slice(0, 64) || "未命名 Key",
@@ -271,6 +277,7 @@ function createKey({ name, route, routeOrder, dailyQuota, rateLimit }) {
     routeOrderOk(routeOrder) ? routeOrder : "",
     Math.max(0, Number(dailyQuota) || 0),
     Math.max(0, Number(rateLimit) || 0),
+    Date.now(),
     Date.now()
   );
   return { id, secret };
@@ -295,32 +302,53 @@ function listKeys() {
     rateLimit: r.rate_limit,
     enabled: !!r.enabled,
     createdAt: r.created_at,
+    updatedAt: r.updated_at || 0,
     todayReq: (umap.get(r.id) || {}).req || 0,
     todayTokens: (umap.get(r.id) || {}).tokens || 0,
   }));
 }
 
 /**
- * 从别的设备导入一把 API Key（号池 WebDAV 同步用）。
+ * 从别的设备导入/更新一把 API Key（号池 WebDAV 同步用）。
  *
  * 与 createKey 的区别：createKey 自己生成密钥，这里用**给定的明文密钥**入库——
  * 跨设备同步要求同一个 sk- 在各设备都能用，所以只能沿用原密钥。
  * 落库时按本机能力重新加密（Windows 走 DPAPI、无 safeStorage 的环境走明文降级），
  * 所以不直接搬运对端的 key_enc（跨平台解不开）。
  *
- * 幂等：同 id 或同 key_hash 已存在则跳过，返回 {ok:false, reason}。
+ * 幂等 + LWW（issue #92）：同 id 已存在时按 updatedAt 新者胜——远端改过（改名/改配额/
+ * 启停）就同步过来；老版本对端不带 updatedAt（按 0）永远本机为准，与旧版「只补缺」一致。
+ * 同 key_hash 但不同 id（同一把 Key 换了 id）视为已存在跳过，密文本就相同。
  */
-function importKey({ id, name, secret, route, routeOrder, dailyQuota, rateLimit, enabled, createdAt }) {
+function importKey({ id, name, secret, route, routeOrder, dailyQuota, rateLimit, enabled, createdAt, updatedAt }) {
   open();
   const s = String(secret || "").trim();
   if (!s) return { ok: false, reason: "empty-secret" };
   const hash = hashKey(s);
-  const dup = db.prepare("SELECT id FROM keys WHERE key_hash = ? OR id = ?").get(hash, String(id || ""));
-  if (dup) return { ok: false, reason: "exists" };
+  const rid = String(id || "");
+  const remoteAt = Math.max(0, Number(updatedAt) || 0);
+  const dup = db.prepare("SELECT * FROM keys WHERE key_hash = ? OR id = ?").get(hash, rid);
+  if (dup) {
+    if (dup.id === rid && remoteAt > (dup.updated_at || 0)) {
+      db.prepare("UPDATE keys SET name=?, route=?, route_order=?, daily_quota=?, rate_limit=?, enabled=?, updated_at=? WHERE id=?")
+        .run(
+          String(name || "").slice(0, 64) || dup.name,
+          routeOk(route) ? route : dup.route,
+          routeOrderOk(routeOrder) ? routeOrder : dup.route_order,
+          patchNum(dailyQuota, dup.daily_quota),
+          patchNum(rateLimit, dup.rate_limit),
+          enabled === false ? 0 : enabled === true ? 1 : dup.enabled,
+          remoteAt,
+          rid
+        );
+      return { ok: true, updated: true };
+    }
+    return { ok: false, reason: "exists" };
+  }
   db.prepare(
-    "INSERT INTO keys (id, name, key_hash, key_enc, key_prefix, key_suffix, route, route_order, daily_quota, rate_limit, enabled, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
+    "INSERT INTO keys (id, name, key_hash, key_enc, key_prefix, key_suffix, route, route_order, daily_quota, rate_limit, enabled, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"
   ).run(
-    String(id || crypto.randomUUID()),
+    rid || crypto.randomUUID(),
     String(name || "").slice(0, 64) || "未命名 Key",
     hash,
     config.encryptSecret(s),
@@ -331,9 +359,15 @@ function importKey({ id, name, secret, route, routeOrder, dailyQuota, rateLimit,
     Math.max(0, Number(dailyQuota) || 0),
     Math.max(0, Number(rateLimit) || 0),
     enabled === false ? 0 : 1,
-    Number(createdAt) || Date.now()
+    Number(createdAt) || Date.now(),
+    remoteAt || Date.now()
   );
   return { ok: true };
+}
+
+/** 数值补丁：远端没带（null/undefined）时保留本机现值；带了（含 0）取合法化后的值 */
+function patchNum(v, cur) {
+  return v == null ? cur : Math.max(0, Number(v) || 0);
 }
 
 function dayStartMs(day) {
@@ -363,8 +397,9 @@ function updateKey(id, patch) {
   const quota = patch.dailyQuota != null ? Math.max(0, Number(patch.dailyQuota) || 0) : cur.daily_quota;
   const rate = patch.rateLimit != null ? Math.max(0, Number(patch.rateLimit) || 0) : cur.rate_limit;
   const enabled = patch.enabled != null ? (patch.enabled ? 1 : 0) : cur.enabled;
-  db.prepare("UPDATE keys SET name=?, route=?, route_order=?, daily_quota=?, rate_limit=?, enabled=? WHERE id=?")
-    .run(name, route, routeOrder, quota, rate, enabled, cur.id);
+  // updated_at 推进：号池同步按它做 LWW，把改名/改配额/启停传播到其他设备（issue #92）
+  db.prepare("UPDATE keys SET name=?, route=?, route_order=?, daily_quota=?, rate_limit=?, enabled=?, updated_at=? WHERE id=?")
+    .run(name, route, routeOrder, quota, rate, enabled, Date.now(), cur.id);
   return true;
 }
 

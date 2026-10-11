@@ -420,6 +420,35 @@ function noteRemoved(accountKey) {
   writeLocalTombstones(t);
 }
 
+// ===== Key 删除墓碑（issue #92：API Key 的删除与修改一样要跨设备传播） =====
+
+function keyTombstoneFile() {
+  return path.join(store.proxyDir(), "pool-keys-tombstones.json");
+}
+
+function readKeyTombstones() {
+  try {
+    const s = JSON.parse(fs.readFileSync(keyTombstoneFile(), "utf8"));
+    return s && typeof s === "object" ? s : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeKeyTombstones(t) {
+  try {
+    fs.writeFileSync(keyTombstoneFile(), JSON.stringify(t, null, 2), "utf8");
+  } catch { /* 忽略 */ }
+}
+
+/** 供 index.cjs 在删除 API Key 时调用：记录墓碑（值为删除时间戳），同步时推给远端 */
+function noteKeyRemoved(keyId) {
+  if (!keyId) return;
+  const t = readKeyTombstones();
+  t[String(keyId)] = Date.now();
+  writeKeyTombstones(t);
+}
+
 // ===== 同步主流程 =====
 
 async function run(opts) {
@@ -635,7 +664,7 @@ async function restoreAnchorMidFromRemote() {
   return { action: "restored", deviceMid: mid };
 }
 
-module.exports = { run, cancel, progress, configured, noteRemoved, onSharedPasswordMaybeChanged, accountKeyOf, backupAnchorMid, restoreAnchorMidFromRemote,
+module.exports = { run, cancel, progress, configured, noteRemoved, noteKeyRemoved, onSharedPasswordMaybeChanged, accountKeyOf, backupAnchorMid, restoreAnchorMidFromRemote,
   // 共享配置同步（自测与诊断用；主流程在 run() 内部调用 runSharedSync）
   exportShared, applyShared, encodeEnvelope, decodeEnvelope, runSharedSync,
   // 号池归档封套（自测用：与共享配置共用同一 encode/decodeEnvelope，去重后靠这组断言守住行为）
@@ -668,6 +697,7 @@ function exportShared() {
       id: k.id, name: k.name, secret: k.secret, route: k.route, routeOrder: k.routeOrder || "",
       dailyQuota: k.dailyQuota, rateLimit: k.rateLimit,
       enabled: k.enabled, createdAt: k.createdAt,
+      updatedAt: k.updatedAt || 0, // LWW 仲裁：改名/改配额/启停靠它传播到其他设备（issue #92）
     }));
   // 模型清单及参数（rules/catalog.json）：整份随共享包走，新设备免重新拉官方目录。
   // get 返回的是缓存对象本身，必须深拷贝，避免后续合并改动污染缓存。
@@ -733,13 +763,14 @@ function mergeSharedCatalog(localCat, remoteCat) {
 /**
  * 把对端共享配置合并进本机。
  * 语义：映射类逐键并集、冲突取远端（远端 exportedAt 更晚）；
- *       API Key 按 id/hash 去重，只补本机没有的（本机已有的以本机为准，不覆盖启停状态）；
+ *       API Key 按 updatedAt 新者胜（issue #92）：改名/改配额/启停会传播；
+ *       本机墓碑时间晚于对端修改时间的 Key 不导入（对端还没感知删除）；
  *       模型清单按渠道 syncedAt 新者胜（见 mergeSharedCatalog）。
  */
 function applyShared(snap) {
-  const none = { applied: false, configChanged: 0, keyAdded: 0, catalogAdded: 0, catalogUpdated: 0 };
+  const none = { applied: false, configChanged: 0, keyAdded: 0, keyUpdated: 0, catalogAdded: 0, catalogUpdated: 0 };
   if (!snap || snap.format !== SHARED_FORMAT) return none;
-  const out = { applied: true, configChanged: 0, keyAdded: 0, catalogAdded: 0, catalogUpdated: 0 };
+  const out = { applied: true, configChanged: 0, keyAdded: 0, keyUpdated: 0, catalogAdded: 0, catalogUpdated: 0 };
   const cfg = config.loadConfig();
   cfg.proxy = cfg.proxy || {};
   for (const k of SHARED_CONFIG_KEYS) {
@@ -753,8 +784,15 @@ function applyShared(snap) {
     if (r.changed) { cfg.proxy[k] = r.out; out.configChanged += r.changed; }
   }
   if (out.configChanged) config.saveConfig(cfg);
+  const keyTomb = readKeyTombstones();
   for (const kk of Array.isArray(snap.keys) ? snap.keys : []) {
-    if (store.importKey(kk).ok) out.keyAdded++;
+    if (!kk || !kk.id) continue;
+    // 墓碑优先（issue #92）：远端包可能来自还没感知删除的老设备——
+    // 删除时间晚于对端最后修改 → 不导入；对端在删除之后又改过（updatedAt 更新）→ 视为重建
+    const tombAt = Number(keyTomb[kk.id]) || 0;
+    if (tombAt && tombAt >= (Number(kk.updatedAt) || 0)) continue;
+    const r = store.importKey(kk);
+    if (r.ok) { if (r.updated) out.keyUpdated++; else out.keyAdded++; }
   }
   // 模型清单：与「拉取官方目录」同一写回路径（落盘 + reload 热生效）
   if (snap.catalog && typeof snap.catalog === "object" && Object.keys(snap.catalog).length) {
@@ -827,11 +865,42 @@ async function runSharedSync(w, persisted, result) {
         result.sharedFrom = snap.deviceName || snap.deviceId || "";
         result.sharedConfigChanged = ap.configChanged;
         result.sharedKeyAdded = ap.keyAdded;
+        result.sharedKeyUpdated = ap.keyUpdated;
         result.sharedCatalogAdded = ap.catalogAdded;
         result.sharedCatalogUpdated = ap.catalogUpdated;
       }
     }
   } catch (e) { result.sharedPullError = String((e && e.message) || e); /* 网络/鉴权异常：不阻断号池同步，但留痕可诊断 */ }
+  // ---- Key 删除墓碑：远端生效到本机 + 双向合并推回（issue #92，同账号墓碑语义） ----
+  try {
+    const ktText = await webdav.getText(remoteUrl(w, POOL_DIR, "keys-tombstones.json"), w);
+    let remoteKT = {};
+    try { remoteKT = ktText ? JSON.parse(ktText) : {}; } catch { remoteKT = {}; }
+    if (!remoteKT || typeof remoteKT !== "object" || Array.isArray(remoteKT)) remoteKT = {};
+    const localKT = readKeyTombstones();
+    const merged = { ...remoteKT };
+    let dirty = false;
+    for (const [id, at] of Object.entries(localKT)) {
+      if (!merged[id] || Number(at) > Number(merged[id])) { merged[id] = at; dirty = true; }
+    }
+    // 远端墓碑生效到本机：删除时间晚于本机 Key 的最后修改 → 本机跟随删除
+    for (const [id, at] of Object.entries(merged)) {
+      const k = store.listKeys().find((x) => x.id === id);
+      if (k && Number(at) >= (k.updatedAt || 0)) {
+        store.deleteKey(id);
+        result.sharedKeyRemoved = (result.sharedKeyRemoved || 0) + 1;
+      }
+    }
+    // 30 天前的墓碑清理（Key 条目存活周期内足够传播）
+    const kcut = Date.now() - 30 * 86400000;
+    for (const [id, at] of Object.entries(merged)) {
+      if (Number(at) < kcut) { delete merged[id]; delete localKT[id]; dirty = true; }
+    }
+    writeKeyTombstones(localKT);
+    if (dirty || ktText == null) {
+      await webdav.put(remoteUrl(w, POOL_DIR, "keys-tombstones.json"), w, JSON.stringify(merged));
+    }
+  } catch (e) { result.sharedKeyTombError = String((e && e.message) || e); /* 墓碑同步失败不影响本轮其余部分，留痕可诊断 */ }
   try {
     const shared = exportShared();
     // hash 只覆盖内容（不含 exportedAt），否则每次同步都因时间戳不同而重传
@@ -848,6 +917,8 @@ async function runSharedSync(w, persisted, result) {
     result.sharedFrom ? "配置取自 " + result.sharedFrom : "",
     result.sharedConfigChanged ? "改 " + result.sharedConfigChanged + " 项" : "",
     result.sharedKeyAdded ? "补 Key " + result.sharedKeyAdded : "",
+    result.sharedKeyUpdated ? "更新 Key " + result.sharedKeyUpdated : "",
+    result.sharedKeyRemoved ? "删 Key " + result.sharedKeyRemoved : "",
     result.sharedCatalogAdded ? "增清单渠道 " + result.sharedCatalogAdded : "",
     result.sharedCatalogUpdated ? "更新清单渠道 " + result.sharedCatalogUpdated : "",
     result.sharedUploadSkipped ? "共享配置本轮未上传（远端读取失败，等下轮）" : "",

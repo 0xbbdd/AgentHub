@@ -704,6 +704,7 @@ function register(ipcMain) {
   }));
   ipcMain.handle("proxy_key_delete", handle(({ id }) => {
     if (!store.deleteKey(id)) return fail("Key 不存在");
+    try { poolsync.noteKeyRemoved(id); } catch { /* 墓碑记失败只是其他设备暂时删不掉，下轮可重 */ }
     oplog.log("info", "API Key", `删除 Key ${id}`, { target: id });
     return ok({});
   }));
