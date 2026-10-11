@@ -14,6 +14,7 @@ const defaultConfig: AppConfig = {
   fxPools: false,
   fxCursor: true,
   moduleOrder: MODULES.map((m) => m.key),
+  modules: { skills: { enabled: true }, usage: { enabled: true }, proxy: { enabled: true }, memory: { enabled: true } },
   tools: {},
   customDirs: [],
   mountMode: "junction",
@@ -99,10 +100,18 @@ export const useAppStore = defineStore("app", {
   getters: {
     isDark: (s) => s.config.theme === "dark",
     moduleOf: () => (key: ModuleKey): ModuleDef => MODULES.find((m) => m.key === key) || MODULES[0],
-    /** 左栏模块列表：用户自定义顺序优先，缺失模块按内置默认补尾 */
-    orderedModules(s): ModuleDef[] {
+    /** 左栏模块列表：用户自定义顺序优先，缺失模块按内置默认补尾；
+     *  附 enabled 标志（issue #91）：关闭的板块左上角置灰不可点 */
+    orderedModules(s): (ModuleDef & { enabled: boolean })[] {
       const byKey = new Map(MODULES.map((m) => [m.key, m]));
-      return s.config.moduleOrder.map((k) => byKey.get(k)).filter((m): m is ModuleDef => !!m);
+      return s.config.moduleOrder.map((k) => byKey.get(k)).filter((m): m is ModuleDef => !!m)
+        .map((m) => ({ ...m, enabled: !s.config.modules?.[m.key] || s.config.modules[m.key].enabled !== false }));
+    },
+    /** 板块开关切换（issue #91）：走主进程唯一写入口，成功后同步内存态供 UI 即时置灰 */
+    async toggleModule(key: ModuleKey, enabled: boolean) {
+      const r = await api.moduleToggle(key, enabled);
+      if (r && r.ok && this.config.modules?.[key]) this.config.modules[key].enabled = enabled;
+      return r;
     },
     /** 当前模块的子页面：memory 模块按 ui.tabs 白名单过滤（空=默认 5 个核心页；dashboard/browse 保底），其余模块全量返回 */
     pagesOf(s): PageDef[] {
@@ -131,8 +140,9 @@ export const useAppStore = defineStore("app", {
       } catch {
         this.config = JSON.parse(JSON.stringify(defaultConfig));
       }
-      // 启动默认板块：左栏模块自定义排序的第一个（而非固定技能仓库），页面取其第一个子页
-      const first = this.orderedModules[0];
+      // 启动默认板块：左栏模块自定义排序的第一个【已启用】板块（关闭的板块置灰不可选），
+      // 页面取其第一个子页；全部未启用时回落第一个（后端 module_toggle 有「至少留一个」守卫）
+      const first = this.orderedModules.find((m) => m.enabled) || this.orderedModules[0];
       if (first) {
         this.activeModule = first.key;
         this.activePage = first.pages[0].id;
@@ -249,6 +259,8 @@ export const useAppStore = defineStore("app", {
     selectModule(key: ModuleKey) {
       this.settingsOpen = false;
       this.pageBeforeConfig = "";
+      // 已停用的板块置灰不可点（issue #91）：入口拦在切换处，避免渲染层绕过
+      if (this.config.modules?.[key] && this.config.modules[key].enabled === false) return;
       if (this.activeModule === key) return;
       this.activeModule = key;
       this.activePage = this.moduleOf(key).pages[0].id;

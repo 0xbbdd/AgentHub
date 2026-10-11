@@ -139,6 +139,10 @@ export const webdavSharedTest = (cfg: Partial<SharedWebdavConfig>) =>
   call<{ ok: boolean; message: string; latencyMs?: number }>("webdav_shared_test", { config: JSON.parse(JSON.stringify(cfg)) });
 export const webdavSharedClear = () => call<{ ok: boolean; message: string }>("webdav_shared_clear");
 
+// ===== 四大板块启用开关（issue #91）：主进程唯一写入口（落盘 + 运行时启停 + 托盘/事件刷新） =====
+export const moduleToggle = (module: string, enabled: boolean) =>
+  call<{ ok: boolean; message: string }>("module_toggle", { module, enabled });
+
 // ===== 反代网关：号池 WebDAV 同步（统一服务器 + proxy 根目录；channel 可选 = 只同步某渠道） =====
 export interface ProxyPoolSyncStatus {
   running: boolean;

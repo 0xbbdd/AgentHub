@@ -1291,6 +1291,8 @@ export const mock = {
         return { ok: true, message: "已保存" };
       case "webdav_shared_clear":
         return { ok: true, message: "已清除统一服务器配置" };
+      case "module_toggle":
+        return { ok: true, message: args?.enabled ? "已启用" : "已停用" };
       case "webdav_shared_test":
         return { ok: true, message: "连接成功 · 218ms", latencyMs: 218 };
       case "proxy_poolsync_status":

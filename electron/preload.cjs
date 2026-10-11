@@ -177,6 +177,8 @@ const ALLOWED_COMMANDS = new Set([
   "webdav_shared_save",
   "webdav_shared_test",
   "webdav_shared_clear",
+  // ===== 四大板块启用开关（issue #91） =====
+  "module_toggle",
   // ===== 记忆中枢：配置 / 根目录 =====
   "memory_config_get",
   "memory_config_save",

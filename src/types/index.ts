@@ -224,6 +224,9 @@ export interface AppConfig {
       关闭后恢复系统指针，业务逻辑不受影响 */
   fxCursor: boolean;
   moduleOrder: ModuleKey[];
+  /** 四大板块启用开关（issue #91）：关闭后左上角置灰不可点、后台完全不运行；
+      唯一写入口是 module_toggle IPC，这里的值只作展示同步 */
+  modules: Record<ModuleKey, { enabled: boolean }>;
   tools: Record<string, { enabled: boolean; paths: string[]; name?: string; icon?: string }>;
   customDirs: string[];
   mountMode: "junction" | "copy";
