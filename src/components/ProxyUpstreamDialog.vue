@@ -15,6 +15,9 @@ import qoderIcon from "../assets/channels/qoder.png";
 import zcodeIcon from "../assets/channels/zcode.png";
 // CatPaw 无官方客户端图标可提取，为自绘（tools/gen-catpaw-icon.cjs 生成，可复现）
 import catpawIcon from "../assets/channels/catpaw.png";
+// AutoClaw 双区共用爪印图形，地区角标区分（tools/gen-autoclaw-icon.cjs 生成，可复现）
+import autoclawIcon from "../assets/channels/autoclaw.png";
+import autoclawIntlIcon from "../assets/channels/autoclaw_intl.png";
 
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<{ (e: "close"): void }>();
@@ -30,6 +33,8 @@ const CHANNEL_ICONS: Record<string, string> = {
   qoder_intl: qoderIcon,
   zcode: zcodeIcon,
   catpaw: catpawIcon,
+  autoclaw: autoclawIcon,
+  autoclaw_intl: autoclawIntlIcon,
 };
 const initial = (id: string) => (channelName(id) || id || "?").trim().slice(0, 1).toUpperCase() || "?";
 

@@ -335,6 +335,25 @@ const PROXY_POOL = [
     ],
   },
   {
+    // AutoClaw 双区（国内/国际）：积分口径，国内演示今日签到已领、国际演示昨日领取
+    id: "autoclaw", display: "AutoClaw 国内版", domain: "autoglm-acceleration-api.zhipuai.cn", costTier: "", poolStrategy: "expire_first",
+    health: null as { until: number; reason: string; streak: number } | null,
+    checkinAuto: { enabled: true, time: "09:00", jitterMin: 0 },
+    summary: { channel: "autoclaw", totalCredits: 3200, accountCount: 1, onlineCount: 1, earliestExpire: 0, expiringSoon: false, todayReq: 12, todayTokens: 31800, lastCreditsAt: ago(3) },
+    accounts: [
+      { id: "a11", channel: "autoclaw", uid: "ac_10086", name: "手机 138****8000", status: "online", credits: 3200, creditsAt: ago(3), expiresAt: 0, coolUntil: 0, coolReason: "", source: "oauth", lastUsed: ago(1), todayReq: 12, todayTokens: 31800, createdAt: NOW - 4 * 86400000, hasToken: true, checkin: { day: TODAY, at: NOW - 3600000, action: "checkin", ok: true, already: true, credit: 20, message: "签到成功，获得 20 积分" } },
+    ],
+  },
+  {
+    id: "autoclaw_intl", display: "AutoClaw 国际版", domain: "autoglm-api.autoglm.ai", costTier: "", poolStrategy: "expire_first",
+    health: null as { until: number; reason: string; streak: number } | null,
+    checkinAuto: { enabled: false, time: "09:00", jitterMin: 0 },
+    summary: { channel: "autoclaw_intl", totalCredits: 1450, accountCount: 1, onlineCount: 1, earliestExpire: 0, expiringSoon: false, todayReq: 3, todayTokens: 8600, lastCreditsAt: ago(26) },
+    accounts: [
+      { id: "a12", channel: "autoclaw_intl", uid: "ac_9001", name: "tester@example.com", status: "online", credits: 1450, creditsAt: ago(26), expiresAt: 0, coolUntil: 0, coolReason: "", source: "oauth", lastUsed: ago(5), todayReq: 3, todayTokens: 8600, createdAt: NOW - 6 * 86400000, hasToken: true },
+    ],
+  },
+  {
     // CatPaw（美团）：凭据取自桌面端登录态（meta.desktop），演示里给一条导入来源为 scan 的账号
     id: "catpaw", display: "CatPaw（美团）", domain: "ai.catpaw.meituan.com", costTier: "", poolStrategy: "expire_first",
     health: null as { until: number; reason: string; streak: number } | null,
