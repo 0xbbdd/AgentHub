@@ -89,8 +89,13 @@ function resolveChannel(key, model, settings) {
     if (settings.routeStrategy === "fixed" && owners.includes(settings.fixedChannel)) return { channel: settings.fixedChannel };
     return { channel: pickByOrder(routeOrderOf(key, settings), owners, tierGroups()) };
   }
-  // 模型不在任何目录：auto 且固定渠道策略时放行指定渠道（透传试错），否则 400 给可用模型提示
-  if (settings.routeStrategy === "fixed") return { channel: settings.fixedChannel };
+  // 模型不在任何目录：auto 且固定渠道策略时放行指定渠道（透传试错），否则 400 给可用模型提示。
+  // 指定渠道已被「上游启闭」关闭时不再透传试错（issue #90）：打向已关闭渠道只会拿到
+  // 上游透传错误，直接给明确的 channel_disabled 业务码
+  if (settings.routeStrategy === "fixed") {
+    if (adapters.channelOn(settings.fixedChannel, settings)) return { channel: settings.fixedChannel };
+    return { channel: null, disabledChannel: settings.fixedChannel };
+  }
   return { channel: null, unknownModel: true };
 }
 
@@ -128,9 +133,11 @@ function costFirstScore(channel) {
 
 /** 渠道此刻是否真的出得了请求：**与 pickAccount 的静态判据同口径**（不写库、每请求实时派生）。
  *  后两条必须一起算——「已知余额为 0」「余额已到期」的号在池视图里仍是 online
- *  （把号标 exhausted 的是 pickAccount 自己），只看 onlineCount 会把它们当可用渠道继续占预算。 */
-function routeUsable(channel) {
-  if (channelCooling(channel) || !adapters.channelOn(channel)) return false;
+ *  （把号标 exhausted 的是 pickAccount 自己），只看 onlineCount 会把它们当可用渠道继续占预算。
+ *  settings 可选：/v1/models 过滤等调用方持有当前请求的 settings 对象，传入避免 channelOn
+ *  回落到默认配置、漏判「上游启闭」刚做出的关闭（issue #90 自测抓到的口径偏差） */
+function routeUsable(channel, settings) {
+  if (channelCooling(channel) || !adapters.channelOn(channel, settings)) return false;
   const now = Date.now();
   return pool.poolAccounts(channel).some((a) =>
     a.status === "online" && a.hasToken &&
@@ -495,8 +502,23 @@ async function handleChat(req, res, settings) {
     modelChain.push(fallback);
   }
 
-  if (!resolveChannel(key, actualModel, settings).channel && !fallback) {
+  const resolvedMain = resolveChannel(key, actualModel, settings);
+  if (!resolvedMain.channel && !fallback) {
     const hint = adapters.listableModels(settings).map((m) => m.id).join(", ");
+    // 文案区分「渠道被上游启闭关闭」与「模型真不存在」（issue #90）：
+    // 前者在合并目录里查得到、只是所有归属渠道都被关/空池，给出可操作指引
+    const cat = adapters.mergedModels(settings).find((m) => String(m.id).toLowerCase() === actualModel.toLowerCase());
+    if (resolvedMain.disabledChannel || cat) {
+      const owners = (resolvedMain.disabledChannel ? [resolvedMain.disabledChannel] : (cat.sources || []))
+        .filter((c, i, arr) => arr.indexOf(c) === i);
+      record({ status: 400, error: "channel disabled" });
+      return sendError(
+        res, 400,
+        `模型 "${actualModel}" 由渠道 ${owners.map((c) => `「${store.channelDisplay(c)}」`).join("、")}提供，` +
+        `当前该渠道已被关闭或号池不可用，请在上游启闭中开启、补充号池，或改用其它模型。可用模型：${hint}`,
+        "invalid_request_error", "channel_disabled"
+      );
+    }
     record({ status: 400, error: "unknown model" });
     return sendError(res, 400, `模型 "${actualModel}" 不在任何渠道目录中。可用模型：${hint}`, "invalid_request_error", "model_not_found");
   }
@@ -670,6 +692,10 @@ async function handleChat(req, res, settings) {
         continue; // 未知模型 → 尝试回退模型
       }
       usedModel = chainModel;
+      if (chainModel !== actualModel) {
+        // 明示模型回退（issue #90）：客户端可从响应头感知换模型，不再完全静默
+        try { res.setHeader("x-agenthub-fallback", `${actualModel} -> ${chainModel}`); } catch { /* 头已发出时忽略 */ }
+      }
       // ===== 渠道候选队列（跨渠道故障转移）：主渠道尊重全部现有路由语义（单源强制 /
       // key.route / per-model 覆盖 / fixed / 生效档排序），备选 = 拥有该模型的其余渠道按
       // 生效档排序（score=综合分降序 / cost-first=成本档升序组内按分）。主渠道降级或耗尽时
@@ -1023,9 +1049,18 @@ function buildApp(settings) {
     if (!res.headersSent) sendError(res, 500, String((e && e.message) || e), "server_error");
   }));
 
-  // 模型目录：三渠道合并视图，鉴权可选（方案 §6.1）；停用模型不对外列出（调不通就不给看，省下游翻找）
+  // 模型目录：三渠道合并视图，鉴权可选（方案 §6.1）；停用模型不对外列出（调不通就不给看，省下游翻找）。
+  // 号池为空的渠道同样不对外列（issue #90）：判定口径与路由一致（routeUsable = 启用 + 未熔断 +
+  // 号池有可出请求的账号），客户端拿到的每个模型此刻都真实可调。号池是动态的：客户端若缓存了
+  // 旧列表，请求时仍会拿到明确的 503/402 错误码与文案
   app.get("/v1/models", (_req, res) => {
-    res.json({ object: "list", data: adapters.listableModels(settings()) });
+    const st = settings();
+    const usableCache = new Map();
+    const usable = (c) => {
+      if (!usableCache.has(c)) usableCache.set(c, routeUsable(c, st));
+      return usableCache.get(c);
+    };
+    res.json({ object: "list", data: adapters.listableModels(st).filter((m) => (m.sources || []).some(usable)) });
   });
 
   // 探活：无健康渠道时 503（只看启用渠道：全关时探活如实报不可用）
