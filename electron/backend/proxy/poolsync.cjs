@@ -435,10 +435,14 @@ function readKeyTombstones() {
   }
 }
 
+/** 写墓碑文件；返回是否成功。调用方若需要「写失败要留痕」语义（如删除 Key）应检查返回值 */
 function writeKeyTombstones(t) {
   try {
     fs.writeFileSync(keyTombstoneFile(), JSON.stringify(t, null, 2), "utf8");
-  } catch { /* 忽略 */ }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** 供 index.cjs 在删除 API Key 时调用：记录墓碑（值为删除时间戳），同步时推给远端。
@@ -448,10 +452,9 @@ function noteKeyRemoved(keyId) {
   if (!keyId) return;
   const t = readKeyTombstones();
   t[String(keyId)] = Date.now();
-  try {
-    fs.writeFileSync(keyTombstoneFile(), JSON.stringify(t, null, 2), "utf8");
-  } catch (e) {
-    oplog.log("error", "API Key", `删除墓碑写入失败（该 Key 的删除将无法同步到其他设备）：${String((e && e.message) || e)}`);
+  // 复用同一写入器：避免「两处各写一份写盘逻辑」日后漂移（改了一处忘了另一处）
+  if (!writeKeyTombstones(t)) {
+    oplog.log("error", "API Key", "删除墓碑写入失败（该 Key 的删除将无法同步到其他设备）");
   }
 }
 
@@ -797,7 +800,9 @@ function applyShared(snap) {
   for (const kk of Array.isArray(snap.keys) ? snap.keys : []) {
     if (!kk || !kk.id) continue;
     // 墓碑优先（issue #92）：远端包可能来自还没感知删除的老设备——
-    // 删除时间晚于对端最后修改 → 不导入；对端在删除之后又改过（updatedAt 更新）→ 视为重建
+    // 删除时间晚于对端最后修改 → 不导入；对端在删除之后又改过（updatedAt 更新）→ 视为重建。
+    // 用 >= 而非 >：同一毫秒内的「删除 vs 修改」判删除优先（否则该删除会丢），
+    // 与 runSharedSync 的本机删除判据（下方 Number(at) >= updatedAt）保持同口径，两处须同改。
     const tombAt = Number(keyTomb[kk.id]) || 0;
     if (tombAt && tombAt >= (Number(kk.updatedAt) || 0)) continue;
     const r = store.importKey(kk);
@@ -899,7 +904,8 @@ async function runSharedSync(w, persisted, result) {
     for (const [id, at] of Object.entries(localKT)) {
       if (!merged[id] || Number(at) > Number(merged[id])) { merged[id] = at; dirty = true; }
     }
-    // 远端墓碑生效到本机：删除时间晚于本机 Key 的最后修改 → 本机跟随删除
+    // 远端墓碑生效到本机：删除时间晚于本机 Key 的最后修改 → 本机跟随删除。
+    // >= 与 applyShared 的墓碑判据同口径（同毫秒判删除优先），两处须同改
     for (const [id, at] of Object.entries(merged)) {
       const k = store.listKeys().find((x) => x.id === id);
       if (k && Number(at) >= (k.updatedAt || 0)) {
