@@ -1247,7 +1247,10 @@ onMounted(() => {
       oauthWaiting.value = false;
       oauthMode.value = "";
       oauthUserCode.value = "";
-      oauthMsg.value = p.ok ? "登录成功，已加入号池（已自动签到）" : `登录失败：${p.message || ""}`;
+      // 无签到活动的渠道（Cline 双池 / CatPaw）登录成功后不该提示「已自动签到」：
+      // 优先用事件回传的 channel（异步回流期间用户可能已切换渠道），缺失时退回当前弹窗渠道
+      const noCheckin = NO_CHECKIN_CHANNELS.includes((p.channel || addChannel.value) as ProxyChannelId);
+      oauthMsg.value = p.ok ? `登录成功，已加入号池${noCheckin ? "" : "（已自动签到）"}` : `登录失败：${p.message || ""}`;
       if (p.ok) {
         addOpen.value = false;
         refresh();
