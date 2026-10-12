@@ -905,9 +905,11 @@ async function runSharedSync(w, persisted, result) {
       if (!merged[id] || Number(at) > Number(merged[id])) { merged[id] = at; dirty = true; }
     }
     // 远端墓碑生效到本机：删除时间晚于本机 Key 的最后修改 → 本机跟随删除。
-    // >= 与 applyShared 的墓碑判据同口径（同毫秒判删除优先），两处须同改
+    // >= 与 applyShared 的墓碑判据同口径（同毫秒判删除优先），两处须同改。
+    // 先取一次 Key 快照：listKeys() 含当日用量聚合，若放在墓碑循环里会随 Key 数放大成 O(n²)
+    const keyById = new Map(store.listKeys().map((x) => [x.id, x]));
     for (const [id, at] of Object.entries(merged)) {
-      const k = store.listKeys().find((x) => x.id === id);
+      const k = keyById.get(id);
       if (k && Number(at) >= (k.updatedAt || 0)) {
         store.deleteKey(id);
         result.sharedKeyRemoved = (result.sharedKeyRemoved || 0) + 1;
@@ -919,7 +921,9 @@ async function runSharedSync(w, persisted, result) {
       if (Number(at) < kcut) { delete merged[id]; delete localKT[id]; dirty = true; }
     }
     writeKeyTombstones(localKT);
-    if (dirty || ktText == null) {
+    // 只在确有墓碑内容时上传：否则「远端缺文件 + 本机无墓碑」会写入一个空对象 {}，
+    // 徒增一次写请求与远端噪音
+    if ((dirty || ktText == null) && Object.keys(merged).length) {
       await webdav.put(remoteUrl(w, POOL_DIR, "keys-tombstones.json"), w, JSON.stringify(merged));
     }
   } catch (e) { result.sharedKeyTombError = String((e && e.message) || e); /* 墓碑同步失败不影响本轮其余部分，留痕可诊断 */ }
