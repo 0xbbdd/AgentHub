@@ -244,6 +244,9 @@ export interface AppConfig {
   };
   schedule: {
     minimizeToTray: boolean;
+    /** 轻量模式：关窗时销毁窗口（释放整个渲染进程），托盘常驻期间后端照旧跑。
+     *  仅在 minimizeToTray 开启时有意义。默认关（与改造前行为一致）。 */
+    lightweightMode: boolean;
     autoStart: boolean;
     hourly: boolean;
     daily: boolean;

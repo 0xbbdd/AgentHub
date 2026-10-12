@@ -143,6 +143,35 @@ async function toggleAppBehavior() {
   await app.save();
 }
 
+/** 是否桌面端：轻量模式依赖窗口存在，Web/容器端（NAS）没有窗口，该开关必须隐藏 */
+const isDesktop = computed(() => api.isElectron());
+
+/** 未开托盘常驻时轻量模式无意义（关窗本来就释放界面）—— 置灰并说明理由，而不是点了没反应 */
+const lightweightDisabledReason = computed(() =>
+  app.config.schedule.minimizeToTray ? "" : "已关闭「关闭最小化到托盘」：关窗本身就会释放界面，无需轻量模式"
+);
+
+/** 轻量模式开关：开启前确认一次（重建窗口有秒级等待，且会重置界面内的临时状态） */
+async function toggleLightweightMode(v: string | number | boolean | undefined) {
+  if (v !== true) {
+    app.config.schedule.lightweightMode = false;
+    await toggleAppBehavior();
+    return;
+  }
+  try {
+    await ElMessageBox.confirm(
+      "开启后，点关闭按钮会直接释放整个界面进程（实测省约 300 MB 内存），托盘与后台服务照常运行。\n" +
+        "下次点托盘「显示主界面」需要重新加载界面，约 1~3 秒，界面内未保存的临时状态会重置。",
+      "开启轻量模式？",
+      { confirmButtonText: "开启", cancelButtonText: "取消", type: "warning" }
+    );
+  } catch {
+    return; // 用户取消：不开启
+  }
+  app.config.schedule.lightweightMode = true;
+  await toggleAppBehavior();
+}
+
 /** 外观切换（与左栏亮暗按钮同源） */
 function setTheme(v: string | number | boolean | undefined) {
   if (v === "dark" || v === "light") app.setTheme(v);
@@ -501,6 +530,27 @@ onUnmounted(() => {
           :aria-checked="!!app.config.schedule.minimizeToTray"
           @click="app.config.schedule.minimizeToTray = !app.config.schedule.minimizeToTray; toggleAppBehavior()"
         ></div>
+      </div>
+      <!-- 轻量模式：桌面专属（Web/容器端没有窗口，开关无意义，故整体不渲染） -->
+      <div v-if="isDesktop" class="set-row">
+        <div class="set-info">
+          <div class="set-name">轻量模式（关窗释放界面内存）</div>
+          <div class="set-desc">
+            {{
+              lightweightDisabledReason ||
+              "点关闭按钮时销毁界面进程，托盘与后台服务（反代网关 / 定时同步 / 记忆中枢）照常运行；实测省约 300 MB 内存，唤回时重新加载界面"
+            }}
+          </div>
+        </div>
+        <el-tooltip :content="lightweightDisabledReason" :disabled="!lightweightDisabledReason" placement="top">
+          <div
+            class="switch"
+            :class="{ on: app.config.schedule.lightweightMode, disabled: !!lightweightDisabledReason }"
+            role="switch"
+            :aria-checked="!!app.config.schedule.lightweightMode"
+            @click="!lightweightDisabledReason && toggleLightweightMode(!app.config.schedule.lightweightMode)"
+          ></div>
+        </el-tooltip>
       </div>
     </div>
 

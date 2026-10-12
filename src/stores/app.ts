@@ -37,7 +37,7 @@ const defaultConfig: AppConfig = {
   trashDays: 7,
   update: { channel: "stable", autoCheck: true, notifiedVersion: "" },
   webdav: { endpoint: "", username: "", password: "", root: "/agent-skills", deviceId: "", deviceName: "" },
-  schedule: { minimizeToTray: true, autoStart: false, hourly: false, daily: false, dailyTime: "09:00", notifyOnSuccess: false },
+  schedule: { minimizeToTray: true, lightweightMode: false, autoStart: false, hourly: false, daily: false, dailyTime: "09:00", notifyOnSuccess: false },
   watch: { enabled: true, intervalSeconds: 15 },
   // 反代网关设置兜底（权威默认值见 electron/backend/config.cjs）
   proxy: {
@@ -84,6 +84,35 @@ function mirrorFx(key: string, on: boolean) {
   } catch {
     /* 私隐模式等场景写不进：忽略 */
   }
+}
+
+// ===== 界面位置镜像（轻量模式必需）=====
+// 轻量模式关窗时会销毁整个渲染进程，Pinia 里的 activeModule/activePage 随之丢失。
+// 若不落盘，用户每次唤回界面都会回到默认页 —— 等于轻量化把"我刚才在看哪"清一次。
+// 用 localStorage 而非新增 IPC：与动效镜像同款做法，渲染层自己记住即可，
+// 不必让主进程参与，Web/容器端（NAS）也不受影响。
+const PAGE_MIRROR_KEY = "agenthub.lastPage";
+
+function mirrorPage(moduleKey: string, pageId: string) {
+  try {
+    localStorage.setItem(PAGE_MIRROR_KEY, JSON.stringify({ module: moduleKey, id: pageId }));
+  } catch {
+    /* 写不进只影响下次恢复位置：忽略 */
+  }
+}
+
+function readMirroredPage(): { module: string; id: string } | null {
+  try {
+    const raw = localStorage.getItem(PAGE_MIRROR_KEY);
+    if (!raw) return null;
+    const v = JSON.parse(raw);
+    if (v && typeof v === "object" && typeof v.module === "string" && typeof v.id === "string") {
+      return { module: v.module, id: v.id };
+    }
+  } catch {
+    /* 解析失败按没有处理 */
+  }
+  return null;
 }
 
 export const useAppStore = defineStore("app", {
@@ -167,6 +196,17 @@ export const useAppStore = defineStore("app", {
       if (first) {
         this.activeModule = first.key;
         this.activePage = first.pages[0].id;
+      }
+      // 恢复上次停留的页面（轻量模式销毁界面后唤回时，用户应回到原处而不是默认页）。
+      // 只在模块与页面都仍然合法时恢复 —— 记忆页签白名单会变、模块顺序也可能被改过，
+      // 失效就静默回落到上面的默认位置。
+      const mirrored = readMirroredPage();
+      if (mirrored) {
+        const mod = this.orderedModules.find((m) => m.key === mirrored.module);
+        if (mod && this.moduleOf(mod.key).pages.some((p) => p.id === mirrored.id)) {
+          this.activeModule = mod.key;
+          this.activePage = mirrored.id;
+        }
       }
       this.applyTheme(this.config.theme);
       // 界面动效默认开启：只有显式存的 false 才关（旧配置无此字段时跟随新默认）；
@@ -253,6 +293,11 @@ export const useAppStore = defineStore("app", {
       if (this.config.fxCursor === on) return;
       this.applyFxCursor(on);
       this.save();
+    },
+    /** 把当前停留位置写进 localStorage 镜像（轻量模式销毁界面后唤回时据此恢复）。
+     *  由 App.vue 的「loaded + 当前位置」watcher 调用，故只在配置加载完成、位置已定后记录。 */
+    mirrorActivePage() {
+      mirrorPage(this.activeModule, this.activePage);
     },
     /** 打开全局设置弹窗：tab 缺省保持当前模块；左下角齿轮给 general，跨模块入口给 webdav 等 */
     openSettings(tab?: SettingsTab) {

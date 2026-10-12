@@ -69,6 +69,9 @@ const usagesync = require("./backend/sync.cjs");
 const proxy = require("./backend/proxy/index.cjs");
 const memory = require("./backend/memory/index.cjs");
 const usageScheduler = require("./backend/usage-scheduler.cjs");
+// 轻量模式：关窗决策（纯逻辑，可自测）+ 窗口几何持久化（销毁窗口后重建要回到原位）
+const windowMode = require("./backend/window-mode.cjs");
+const windowState = require("./backend/window-state.cjs");
 
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || "http://localhost:1420";
 
@@ -105,6 +108,49 @@ const DESIGN_WIDTH = 1280;
 const ZOOM_MIN = 0.7;
 const ZOOM_MAX = 1.25;
 
+// ===== 轻量模式：窗口几何的读写 =====
+// 销毁窗口会丢掉窗口摆放，重建时若不还原，用户每次点托盘「显示主界面」都会
+// 得到一个居中大窗 —— 所以位置/尺寸/最大化必须落盘（见 backend/window-state.cjs）。
+// 越界收敛交给 clampBounds：显示器被拔掉后旧坐标会落在不存在的屏上（窗口"打开但看不见"）。
+
+/** 读取上次的窗口几何，并收敛到当前实际存在的屏幕上 */
+function restoreWindowBounds() {
+  const saved = windowState.load(config.dataDir());
+  const clamped = windowState.clampBounds(saved.bounds, safeDisplays(), { width: 1280, height: 820 });
+  return { clamped, maximized: saved.maximized === true };
+}
+
+/** screen.getAllDisplays() 的容错包装：拿不到就当没有屏幕信息（clampBounds 会退回默认尺寸） */
+function safeDisplays() {
+  try {
+    return require("electron").screen.getAllDisplays();
+  } catch {
+    return [];
+  }
+}
+
+/** 落盘当前窗口几何：仅在有窗口且未最小化时记录（最小化时 getBounds 会给出异常值） */
+function persistWindowBounds() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    const maximized = mainWindow.isMaximized();
+    const bounds = maximized ? mainWindow.getNormalBounds() : mainWindow.getBounds();
+    windowState.save(config.dataDir(), windowState.pickState({ bounds, maximized }));
+  } catch {
+    /* 记不住位置不该影响任何主流程 */
+  }
+}
+
+/** 几何变化的落盘节流：拖动窗口时 resize/move 会高频触发，别每次都写盘 */
+let boundsSaveTimer = null;
+function schedulePersistBounds() {
+  if (boundsSaveTimer) clearTimeout(boundsSaveTimer);
+  boundsSaveTimer = setTimeout(() => {
+    boundsSaveTimer = null;
+    persistWindowBounds();
+  }, 400);
+}
+
 function applyViewportZoom() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const [w] = mainWindow.getSize();
@@ -117,9 +163,13 @@ function applyViewportZoom() {
 }
 
 function createWindow() {
+  const { clamped, maximized } = restoreWindowBounds();
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 820,
+    width: clamped.width,
+    height: clamped.height,
+    // x/y 可能为 undefined（无历史状态/无可用屏幕）→ 交给 Electron 居中
+    x: clamped.x,
+    y: clamped.y,
     minWidth: 920,
     minHeight: 640,
     title: "AgentHub",
@@ -152,16 +202,49 @@ function createWindow() {
   mainWindow.once("ready-to-show", reveal);
   mainWindow.webContents.once("did-finish-load", reveal);
 
+  // 最大化状态要在窗口存在后设置；恢复越界过就记一笔，便于排查「窗口位置自己变了」
+  if (maximized) {
+    try { mainWindow.maximize(); } catch { /* 某些平台/时序下可能失败，不拦启动 */ }
+  }
+  if (clamped.adjusted && clamped.reason !== "no-position") {
+    __crashLog("window-bounds-adjusted", `${clamped.reason} → ${clamped.width}x${clamped.height}+${clamped.x},${clamped.y}`);
+  }
+
   // 窗口尺寸变化 / 页面（重）载入后按当前宽度重算缩放
   applyViewportZoom();
-  mainWindow.on("resize", applyViewportZoom);
+  mainWindow.on("resize", () => { applyViewportZoom(); schedulePersistBounds(); });
   mainWindow.webContents.on("did-finish-load", applyViewportZoom);
+  // 拖动/最大化切换都要记账（move 只在非最大化时有意义，maximize/unmaximize 各记一次）
+  mainWindow.on("move", schedulePersistBounds);
+  mainWindow.on("maximize", schedulePersistBounds);
+  mainWindow.on("unmaximize", schedulePersistBounds);
 
-  // 关闭 → 缩到托盘（设置可关；托盘菜单「退出」才是真正退出），后台才能持续跑定时同步
+  // 关闭 → 按三态决策：真退出 / 缩到托盘（保留渲染进程）/ 轻量模式（销毁窗口释放渲染进程）
   mainWindow.on("close", (e) => {
     const cfg = config.loadConfig();
-    if (!quitting && cfg.schedule && cfg.schedule.minimizeToTray) {
-      e.preventDefault();
+    const action = windowMode.decideCloseAction({
+      quitting,
+      minimizeToTray: !!(cfg.schedule && cfg.schedule.minimizeToTray),
+      lightweightMode: !!(cfg.schedule && cfg.schedule.lightweightMode),
+    });
+    if (action === "quit") return; // 放行：走正常退出流程
+    e.preventDefault();
+    // 无论藏还是销毁，都先把窗口位置记下来（销毁后再也读不到）
+    persistWindowBounds();
+    if (windowMode.releasesRenderer(action)) {
+      // 轻量模式：销毁窗口 → 渲染进程整只消失（实测省 ~298 MB）。
+      // 主进程/托盘/反代网关/定时同步/记忆中枢都不受影响（它们本就不依赖窗口）。
+      // 用 setImmediate 延到本次 close 事件派发结束之后再 destroy：
+      // 在 close 回调里同步销毁自己属于重入，交给下一轮事件循环更稳。
+      // （destroy() 不会再触发 close，故不会二次进入本分支）
+      __crashLog("lightweight-enter", `渲染进程释放（mode=${cfg.schedule.lightweightMode ? "lightweight" : "no-tray"}）`);
+      const w = mainWindow;
+      mainWindow = null;
+      setImmediate(() => {
+        try { w.destroy(); } catch { /* 已销毁 */ }
+      });
+      refreshTrayMenu();
+    } else {
       mainWindow.hide();
     }
   });
@@ -175,7 +258,8 @@ function showWindow() {
   if (!mainWindow) {
     createWindow();
   } else {
-    mainWindow.show();
+    // 从托盘唤回时窗口可能是隐藏态（hide 模式），先显示再聚焦
+    if (!mainWindow.isVisible()) mainWindow.show();
     mainWindow.focus();
   }
 }
@@ -267,8 +351,28 @@ function buildTrayMenu() {
     items.push({ label: `发现新版本 v${st.latestVersion} →`, click: () => { showWindow(); focusSettingsUpdate(); } });
     items.push({ type: "separator" });
   }
+  // 轻量模式：关窗缩到托盘的用户，托盘是唯一入口，所以开关必须放这里
+  // （设置 · 通用里也有同一个开关，两处写的是同一份配置）
+  const lightOn = !!(cfg.schedule && cfg.schedule.lightweightMode);
+  const trayOn = !!(cfg.schedule && cfg.schedule.minimizeToTray);
+  const hasWindow = !!mainWindow && !mainWindow.isDestroyed();
   items.push(
     { label: "显示主界面", click: showWindow },
+    {
+      // 未开托盘常驻时该开关无意义（关窗本来就释放界面）→ 置灰并说明，而不是点了没反应
+      label: lightOn ? "轻量模式：已开启（关窗释放界面）" : "轻量模式：关窗释放界面",
+      type: "checkbox",
+      checked: lightOn,
+      enabled: trayOn,
+      click: () => { toggleLightweightMode(!lightOn); },
+    },
+    {
+      // 手动立即释放：不必真的去关窗（窗口当前可见时也能用）
+      label: hasWindow ? "立即释放界面内存" : "界面已释放（点上方可唤回）",
+      enabled: hasWindow,
+      click: () => { releaseWindowNow("tray-manual"); },
+    },
+    { type: "separator" },
     ...(on("skills") ? [{
       label: "立即同步技能",
       enabled: remotesync.configured(cfg) && !running,
@@ -367,6 +471,42 @@ function focusSettingsUpdate() {
 
 function refreshTrayMenu() {
   if (tray) tray.setContextMenu(buildTrayMenu());
+  if (tray) {
+    try {
+      const hasWindow = !!mainWindow && !mainWindow.isDestroyed();
+      tray.setToolTip(hasWindow ? "AgentHub · Agent中控台" : "AgentHub · 界面已释放（点此唤回）");
+    } catch { /* 托盘不可用时忽略 */ }
+  }
+}
+
+/** 立即销毁窗口释放渲染进程（托盘「立即释放界面内存」与自动触发共用）。
+ *  与关窗路径的区别：不经过 close 事件，供「窗口还开着也想省内存」的场景使用。 */
+function releaseWindowNow(reason) {
+  if (quitting || !mainWindow || mainWindow.isDestroyed()) return false;
+  persistWindowBounds();
+  __crashLog("lightweight-enter", `渲染进程释放（reason=${reason}）`);
+  const w = mainWindow;
+  mainWindow = null;
+  setImmediate(() => {
+    try { w.destroy(); } catch { /* 已销毁 */ }
+  });
+  refreshTrayMenu();
+  return true;
+}
+
+/** 托盘里切换轻量模式：写同一份配置（与设置 · 通用页共用），即时生效 */
+function toggleLightweightMode(next) {
+  try {
+    const cfg = config.loadConfig();
+    cfg.schedule = cfg.schedule || {};
+    cfg.schedule.lightweightMode = !!next;
+    config.saveConfig(cfg);
+    __crashLog("lightweight-toggle", `lightweightMode=${cfg.schedule.lightweightMode}（来自托盘）`);
+  } catch (e) {
+    __crashLog("lightweight-toggle-failed", String((e && e.message) || e));
+    notify("AgentHub", "轻量模式开关写入失败，请到「设置 · 通用」重试");
+  }
+  refreshTrayMenu();
 }
 
 function createTray() {
