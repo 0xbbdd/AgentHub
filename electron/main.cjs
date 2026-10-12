@@ -324,11 +324,12 @@ function registerModuleToggle() {
           try { usagedb.close(); } catch { /* 关闭失败无碍，重新启用时惰性重开 */ }
         }
       } else if (m === "proxy") {
+        // 只做运行时启停，不触碰「记住网关开关」（proxy.restoreOnLaunch）——那是用户的设置，
+        // 静默改写会与设置页提示「网关是否自启仍看『记住网关开关』」自相矛盾，且用户无法察觉
+        // 设置已被改动。模块停用后重启不拉起网关，由启动短路保证：
+        // whenReady 里 `if (on("proxy")) proxy.boot()`——不 boot 就走不到 boot() 内的
+        // restoreOnLaunch 分支，无需改写用户设置。
         await proxy.setRuntime(enabled);
-        if (!enabled) {
-          // 与「记住网关开关」解耦：模块停用后重启也不该拉起网关（入口已置灰）
-          try { const c2 = config.loadConfig(); c2.proxy.restoreOnLaunch = false; config.saveConfig(c2); } catch { /* 写不回重启后也无入口可开 */ }
-        }
       } else if (m === "memory") {
         // 与 memory_toggle 同口径双写旧字段 memory.enabled：loadConfig 每次都会执行
         // 「旧字段 false → modules.memory.enabled=false」的迁移，只写新字段的话
