@@ -167,6 +167,33 @@ const DEFAULTS = {
         { id: "GLM-4.5-Air", name: "GLM-4.5-Air", rate: null, capabilities: { images: false, reasoning: true, tools: true }, contextLength: 131072, maxOutputTokens: 98304 },
       ],
     },
+    // ===== Cline 双池：静态兜底（远程目录拉取后整段覆盖对应渠道）=====
+    // 取自参考实现实测的 recommended-models 响应（2026-09）的稳定主力模型，**不抄全**：
+    // 上游清单会变（模型上下架频繁），抄全只会得到一份很快过时的表，其余靠拉取补齐。
+    // ⚠ 模型 id 必须带池前缀（cline-free/ / cline-pass/ 是计费通道选择器，剥掉转发 404
+    // model not found）；免费池那两条裸 id（z-ai/、poolside/）**同样是免费池成员**
+    // （实测免费账号打返回 200，走聚合通道转售）——归池看响应分组，不按前缀猜。
+    // 上下文窗口取 Cline 官方目录实测值；上游未声明输出上限者记 0（不编造）。
+    cline_free: {
+      syncedAt: 0,
+      models: [
+        { id: "cline-free/deepseek-v4.1-flash", name: "DeepSeek V4.1 Flash（免费）", rate: null, capabilities: { images: true, reasoning: true, tools: true }, contextLength: 1000000, maxOutputTokens: 0 },
+        { id: "cline-free/muse-spark-1.3-contributor", name: "Muse Spark 1.3（免费）", rate: null, capabilities: { images: true, reasoning: true, tools: true }, contextLength: 200000, maxOutputTokens: 0 },
+        { id: "cline-free/solar-pro4", name: "Solar Pro 4（免费）", rate: null, capabilities: { images: true, reasoning: false, tools: true }, contextLength: 128000, maxOutputTokens: 0 },
+        { id: "z-ai/glm-5.3-flash", name: "GLM-5.3-Flash（免费）", rate: null, capabilities: { images: true, reasoning: true, tools: true }, contextLength: 1310720, maxOutputTokens: 0 },
+        { id: "poolside/laguna-s-2.1:free", name: "Laguna S 2.1（免费）", rate: null, capabilities: { images: true, reasoning: true, tools: true }, contextLength: 262144, maxOutputTokens: 0 },
+      ],
+    },
+    cline_pass: {
+      syncedAt: 0,
+      models: [
+        { id: "cline-pass/deepseek-v4.1-flash", name: "DeepSeek V4.1 Flash（ClinePass）", rate: null, capabilities: { images: true, reasoning: true, tools: true }, contextLength: 1000000, maxOutputTokens: 0 },
+        { id: "cline-pass/deepseek-v4-pro", name: "DeepSeek V4 Pro（ClinePass）", rate: null, capabilities: { images: true, reasoning: true, tools: true }, contextLength: 128000, maxOutputTokens: 0 },
+        { id: "cline-pass/glm-5.3", name: "GLM-5.3（ClinePass）", rate: null, capabilities: { images: true, reasoning: true, tools: true }, contextLength: 200000, maxOutputTokens: 0 },
+        { id: "cline-pass/kimi-k3", name: "Kimi K3（ClinePass）", rate: null, capabilities: { images: true, reasoning: true, tools: true }, contextLength: 256000, maxOutputTokens: 0 },
+        { id: "cline-pass/qwen3.8-max", name: "Qwen3.8 Max（ClinePass）", rate: null, capabilities: { images: true, reasoning: true, tools: true }, contextLength: 256000, maxOutputTokens: 0 },
+      ],
+    },
   },
   // Trae function 字段按模型分发（TraeWorkAssistant models_sync.rs 实证：
   // 部分模型仅在 solo_agent 下可用，其余走 solo_work_lite；未命中默认 solo_work_lite）
