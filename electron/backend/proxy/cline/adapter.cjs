@@ -39,6 +39,22 @@ const headersMod = require("./headers.cjs");
 /** 默认思考档位（参考实现 cline-proxy 同值；官方 CLI 未显式给档时的默认形态） */
 const DEFAULT_REASONING_EFFORT = "high";
 
+/** 家族启发式（参考实现 context_window_for / reasoning_for 的回退口径）：
+ *  目录里查不到的全新模型按 id 家族给窗口与思考开关，不写死一个数 */
+function contextWindowHeuristic(id) {
+  const name = String(id || "").toLowerCase();
+  if (name.includes("deepseek-v4.1") || name.includes("1m") || name.includes("minimax") || name.includes("mimo")) return 1000000;
+  if (name.includes("kimi") || name.includes("qwen3.8") || name.includes("glm-5")) return 256000;
+  if (name.includes("claude") || name.includes("gpt-6") || name.includes("grok")) return 200000;
+  return 128000;
+}
+
+/** 少数小模型没有 reasoning 输出（参考实现 reasoning_for 同口径） */
+function reasoningHeuristic(id) {
+  const name = String(id || "").toLowerCase();
+  return !(name.includes("solar-pro4") || name.includes("flash-lite"));
+}
+
 /** 429 文案里的人话时长解析（参考实现 parseHumanDuration 移植）：
  *  "Try again in 17h 59m" / "1d 2h 30m" / "30s" 任意组合 → 毫秒；解析不出返回 0。
  *  免费额度撞限的真实冷却可达小时级，只按通用层的短退避会反复打无效请求。 */
@@ -143,14 +159,17 @@ function makeCline(channel, deps) {
       if (!r.ok || !r.data) return { ok: false, message: `模型目录 HTTP ${r.status}${r.message ? `：${r.message}` : ""}` };
       const parsed = modelsMod.filterByPool(modelsMod.parseRecommended(r.data), pool);
       if (!parsed.length) return { ok: false, message: "模型目录为空（响应里没有本池可用模型）" };
-      const models = parsed.map((m) => ({
-        id: m.id,
-        name: m.name,
-        rate: null,
-        capabilities: { images: true, reasoning: true, tools: true },
-        contextLength: 0,
-        maxOutputTokens: 0,
-      }));
+      const models = parsed.map((m) => {
+        // 元数据继承（先查表再启发式，与参考实现同款两段式）：上游目录不回传元数据，
+        // 硬编码 capabilities/0 会让「远程与静态两条路径给出不同的数」——同步后
+        // solar-pro4 的思考开关从 false 跳 true、全部上下文长度归 0（刷新前后跳变）
+        const hit = catalogEntries().find((e) => String(e.id || "").toLowerCase() === m.id.toLowerCase());
+        const caps = hit && hit.capabilities && typeof hit.capabilities === "object"
+          ? { images: hit.capabilities.images !== false, reasoning: hit.capabilities.reasoning !== false, tools: hit.capabilities.tools !== false }
+          : { images: true, reasoning: reasoningHeuristic(m.id), tools: true };
+        const ctx = hit && Number(hit.contextLength) > 0 ? Number(hit.contextLength) : contextWindowHeuristic(m.id);
+        return { id: m.id, name: m.name, rate: null, capabilities: caps, contextLength: ctx, maxOutputTokens: 0 };
+      });
       return { ok: true, models };
     },
 
