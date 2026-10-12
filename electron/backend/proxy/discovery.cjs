@@ -2931,12 +2931,15 @@ async function beginAutoClawOauth(channel, onDone, opts) {
     return { ok: false, message: started.message };
   }
 
-  const handleCallback = async (req, res) => {
+  const handleCallback = async (req, res, opts) => {
     const writeRes = (fn) => { if (res) { try { fn(); } catch { /* 连接已断 */ } } };
     const u = new URL(req.url || "/", "http://localhost");
-    if (u.pathname !== started.callbackPath) {
+    // submit 兜底路径只有查询串（无 pathname 可校验），显式跳过路径校验；真实 HTTP 回调仍严格校验，
+    // 否则「粘贴回调地址」必然被判 404（`new URL("?code=..").pathname === "/"`）而静默失败
+    const viaSubmit = !!(opts && opts.viaSubmit);
+    if (!viaSubmit && u.pathname !== started.callbackPath) {
       writeRes(() => { res.statusCode = 404; res.end("not found"); });
-      return;
+      return { ok: false, message: "回调路径不匹配" };
     }
     const q = u.searchParams;
     const errParam = q.get("error") || q.get("error_description");
@@ -2944,10 +2947,10 @@ async function beginAutoClawOauth(channel, onDone, opts) {
       const msg = `授权失败：${errParam}`;
       writeRes(() => { res.statusCode = 400; res.end(ERR_PAGE(msg)); });
       finishOAuth({ ok: false, message: msg });
-      return;
+      return { ok: false, message: msg };
     }
     const code = q.get("code");
-    if (!code) { writeRes(() => res.end(PENDING_PAGE)); return; } // 官方页登录前可能空参探测回调可达性
+    if (!code) { writeRes(() => res.end(PENDING_PAGE)); return { ok: false, message: "回调地址缺少 code 参数（授权码）" }; } // 官方页登录前可能空参探测回调可达性
     const state = q.get("state") || "";
     try {
       const ex = await autoclawLogin.oauthExchange({ cfg: c, httpJson: adapters.httpJson, vendor, deviceId, code, state, navigateUri });
@@ -2955,10 +2958,12 @@ async function beginAutoClawOauth(channel, onDone, opts) {
       const saved = await saveAutoclawAccount(channel, ex, deviceId);
       writeRes(() => res.end(OK_PAGE("登录成功，已加入 AutoClaw 号池，可关闭本页")));
       finishOAuth({ ok: true, id: saved.id, uid: saved.uid });
+      return { ok: true, id: saved.id, uid: saved.uid };
     } catch (e) {
       const msg = String((e && e.message) || e);
       writeRes(() => res.end(ERR_PAGE(`登录失败：${msg}`)));
       finishOAuth({ ok: false, message: msg });
+      return { ok: false, message: msg };
     }
   };
 
@@ -2968,14 +2973,15 @@ async function beginAutoClawOauth(channel, onDone, opts) {
     server,
     onDone,
     timer: setTimeout(() => finishOAuth({ ok: false, message: "登录超时（3 分钟），请重新发起" }), OAUTH_TIMEOUT_MS),
-    // 浏览器没跳回回环地址时的兜底：整段粘贴回调地址（与 lobster 同款 submit 语义）
+    // 浏览器没跳回回环地址时的兜底：整段粘贴回调地址（与 lobster 同款 submit 语义）。
+    // 必须如实返回 handleCallback 的结果——原先无条件 ok:true 会在路径校验失败时「假成功」，
+    // 用户以为已登录而会话其实悬挂到超时。
     submit: async (rawInput) => {
       const q = parseCallbackInput(rawInput);
       if (!q) return { ok: false, message: "无法解析回调地址：请整段复制浏览器地址栏内容（需包含 code）" };
       const code = q.get("code");
       if (!code) return { ok: false, message: "回调地址缺少 code 参数（授权码）" };
-      await handleCallback({ url: `?${q.toString()}` }, null).catch(() => {});
-      return { ok: true };
+      return await handleCallback({ url: `?${q.toString()}` }, null, { viaSubmit: true });
     },
   };
   return { ok: true, url: started.oauthUrl, mode: "loopback", port };
