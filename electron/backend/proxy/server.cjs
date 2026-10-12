@@ -507,7 +507,10 @@ async function handleChat(req, res, settings) {
   // 客户端响应的 model 字段保持请求值（契约不变），记账备注标 alias→actual
   const aliased = (settings.modelAliases || {})[requestedModel];
   const actualModel = aliased && aliased !== requestedModel ? String(aliased) : requestedModel;
-  if ((settings.disabledModels || []).includes(actualModel)) {
+  // 禁用判定与 /v1/models 出口同口径（大小写不敏感）：出口过滤用 toLowerCase，
+  // 入口若用大小写敏感的 includes，目录页登记小写名、客户端用变体大小写请求时会绕过入口直通上游
+  const disabledSet = new Set((settings.disabledModels || []).map((s) => String(s).toLowerCase()));
+  if (disabledSet.has(actualModel.toLowerCase())) {
     record({ status: 400, error: "model disabled" });
     return sendError(res, 400, `模型 "${actualModel}" 已被禁用（模型目录页可恢复）`, "invalid_request_error", "model_disabled");
   }
@@ -519,8 +522,8 @@ async function handleChat(req, res, settings) {
   const perModel = (settings.modelFallback || {})[actualModel];
   const globalFb = settings.autoFallbackEnabled === false ? "" : String(settings.fallbackModel || "");
   const fallback = perModel || globalFb;
-  // 回退模型自身被禁用时不入链（切过去也是 400，白费一跳）
-  if (fallback && fallback !== actualModel && fallback !== requestedModel && !(settings.disabledModels || []).includes(fallback)) {
+  // 回退模型自身被禁用时不入链（切过去也是 400，白费一跳），口径同上（大小写不敏感）
+  if (fallback && fallback !== actualModel && fallback !== requestedModel && !disabledSet.has(fallback.toLowerCase())) {
     modelChain.push(fallback);
   }
 
