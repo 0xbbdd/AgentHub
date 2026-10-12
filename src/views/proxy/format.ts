@@ -73,18 +73,21 @@ export function fmtCredits(n: number): string {
 /** Qoder 双区共用一套展示口径（Credits 浮点 + 领 Credits 动作），判断收敛到一处 */
 export const isQoderChannel = (id?: string): boolean => id === "qoder" || id === "qoder_intl";
 
-/** 渠道余额格式化（智谱是 Token 不是积分，同走中文数量级换算；Qoder 保持浮点 Credits） */
+/** Cline 双池共用同一套展示口径（credit 是浮点计量、无签到活动） */
+export const isClineChannel = (id?: string): boolean => id === "cline_free" || id === "cline_pass";
+
+/** 渠道余额格式化（智谱是 Token 不是积分，同走中文数量级换算；Qoder / Cline 保持浮点 Credits） */
 export function fmtBalance(val: number, channel?: string): string {
   if (val === -1) return "不限";
-  // Qoder 的 credits 是浮点（实测 0.0066 级精度），整数化会丢计量
-  if (isQoderChannel(channel)) return fmtCredits(val);
+  // Qoder / Cline 的 credits 是浮点（实测 0.0066 / -0.0177 级精度），整数化会丢计量
+  if (isQoderChannel(channel) || isClineChannel(channel)) return fmtCredits(val);
   return fmtCnAmount(val);
 }
 
 /** 渠道余额单位标签 */
 export function balanceUnit(channel?: string): string {
   if (channel === "zcode") return "Tokens";
-  if (isQoderChannel(channel)) return "Credits";
+  if (isQoderChannel(channel) || isClineChannel(channel)) return "Credits";
   return "积分";
 }
 
@@ -149,6 +152,8 @@ export const CHANNEL_NAMES: Record<string, string> = {
   qoder_intl: "Qoder International",
   autoclaw: "AutoClaw 国内版",
   autoclaw_intl: "AutoClaw 国际版",
+  cline_free: "Cline Free",
+  cline_pass: "Cline Pass",
 };
 export const channelName = (id: string) => CHANNEL_NAMES[id] || id || "-";
 
