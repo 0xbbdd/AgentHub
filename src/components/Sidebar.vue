@@ -834,7 +834,7 @@ const TOOLS = computed<{ name: string; meta: string; label: string; ok: boolean 
   font-size: 9px;
   color: var(--text-3);
 }
-/* 上游启闭小按钮（仅反代网关卡）：弱化 ghost 态，悬停点亮，与免责问号同色系 */
+/* 上游启闭小按钮（仅反代网关卡）：绿色描边常态，悬停点亮加深，与免责问号同色系 */
 .mc-up-btn {
   margin-left: auto;
   display: inline-flex;
@@ -842,7 +842,7 @@ const TOOLS = computed<{ name: string; meta: string; label: string; ok: boolean 
   gap: 3px;
   padding: 2px 7px;
   border-radius: var(--r-pill);
-  border: 1px solid var(--line);
+  border: 1px solid var(--accent-line);
   background: transparent;
   color: var(--text-3);
   font-size: 9px;
@@ -856,7 +856,7 @@ const TOOLS = computed<{ name: string; meta: string; label: string; ok: boolean 
 }
 .mc-up-btn:hover {
   color: var(--accent-strong);
-  border-color: var(--accent-line);
+  border-color: var(--accent-strong);
   background: var(--accent-dim);
 }
 .mc-state {
