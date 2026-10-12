@@ -148,7 +148,11 @@ async function request(method, requestUrl, cfg, body, query, extraHeaders = {}) 
   }
 }
 
-/** 解析 ListObjectsV2 XML：本应用只用 Key / CommonPrefixes/Prefix / IsTruncated / NextContinuationToken */
+/** 解析 ListObjectsV2 XML：本应用只用 Key / CommonPrefixes/Prefix / IsTruncated / NextContinuationToken。
+ *  注意 keys/dirs 保持**服务器返回的 XML 转义原形**（不在此处反转义）：
+ *  - list() 消费时自行 xmlUnescape（拿到人类可读的文件名）；
+ *  - remove() 直接把原形回填进 <Delete> 请求体——XML 转义形式在 XML 中正好合法。
+ *  两处口径不同是有意为之，改动时须同时看这两个消费方。 */
 function parseListXml(xml) {
   const keys = [];
   const keyRe = /<Key>([\s\S]*?)<\/Key>/g;
@@ -202,13 +206,15 @@ async function list(url, cfg) {
       const name = stripPrefix(xmlUnescape(k), prefix);
       if (!name || seen.has(name)) continue;
       seen.add(name);
-      out.push({ href: url.replace(/\/+$/, "") + "/" + name, name, isDir: false, size: 0, modified: null });
+      // href 与 WebDAV 侧保持同一契约（「可直接使用的完整 URL」）：name 已 XML 反转义，
+      // 拼回 URL 前必须百分号编码，否则含空格/中文/& 的文件名会得到非法 URL
+      out.push({ href: url.replace(/\/+$/, "") + "/" + encodeURIComponent(name), name, isDir: false, size: 0, modified: null });
     }
     for (const d of parsed.dirs) {
       const name = stripPrefix(xmlUnescape(d), prefix).replace(/\/+$/, "");
       if (!name || seen.has(name)) continue;
       seen.add(name);
-      out.push({ href: url.replace(/\/+$/, "") + "/" + name, name, isDir: true, size: 0, modified: null });
+      out.push({ href: url.replace(/\/+$/, "") + "/" + encodeURIComponent(name), name, isDir: true, size: 0, modified: null });
     }
     if (!parsed.truncated || !parsed.token) break;
     token = parsed.token;
