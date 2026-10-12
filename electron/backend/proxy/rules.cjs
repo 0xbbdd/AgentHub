@@ -264,6 +264,46 @@ const DEFAULTS = {
       refreshSource: "plugin",
       deviceToken: "",
     },
+    // ===== Cline 双池（cline_free / cline_pass 共用同一段）=====
+    // 同域同协议同伪装头（api.cline.bot），两池只差「收哪个池的模型」，配置无需拆两份。
+    // 协议事实（2026-09 参考实现 agent2api 实测 + 本方案核实）：
+    // ① LLM 端点是 POST {apiBase}/chat/completions（完整路径 /api/v1/chat/completions，
+    //    路径只有一个 v1，发成 /api/v1/v1/... 是 404 Not Found）；
+    // ② X-CLIENT-TYPE: cline-sdk 是免费池硬门槛（缺它免费池一律 403
+    //    only available via Cline product surfaces；cline-cli 会走另一条兼容路径回 500）；
+    // ③ 鉴权 Authorization: Bearer workos:<JWT>，workos: 前缀必须原样带（去掉 401）；
+    // ④ 伪装头取自官方 CLI 通信实测（User-Agent 非必需，带上更贴近官方客户端，无代价）。
+    cline: {
+      apiBase: "https://api.cline.bot/api/v1",
+      // 模型目录（GET，无需鉴权实测）：一次返回 recommended/free/clinePass/clineCloud 四组
+      modelsPath: "/ai/cline/recommended-models",
+      // 登录第四步：WorkOS 令牌 → Cline 会话令牌（不能省，WorkOS 给的是身份令牌）
+      registerPath: "/auth/register",
+      refreshPath: "/auth/refresh",
+      // WorkOS 设备授权端点（RFC 8628）
+      workosBase: "https://api.workos.com",
+      workosClientId: "client_01K3A541FN8TA3EPPHTD2325AR",
+      workosDevicePath: "/user_management/authorize/device",
+      workosTokenPath: "/user_management/authenticate",
+      // 设备授权页兜底（正常情况用上游返回的 verification_uri）
+      deviceVerifyFallback: "https://authkit.cline.bot/device",
+      // access token 有效期实测 1 小时（exp-iat=3600）：临期窗口取 10 分钟（1/6），
+      // 在「不过度消耗 refresh 轮换」与「不把临期 token 发上去挨 401」之间取平衡
+      refreshWindowSec: 600,
+      // 伪装头（默认值；逐键可覆盖，空串=该头不发）
+      upstreamHeaders: {
+        "User-Agent": "Cline/3.0.62",
+        "HTTP-Referer": "https://cline.bot",
+        "X-Title": "Cline",
+        "X-IS-MULTIROOT": "false",
+        "X-CLIENT-TYPE": "cline-sdk",
+        "X-CLIENT-VERSION": "3.0.62",
+        "X-PLATFORM": "terminal",
+        "X-PLATFORM-VERSION": "3.0.62",
+        "X-CORE-VERSION": "0.0.70",
+      },
+      requestTimeoutMs: 0,
+    },
     // ===== 商汤小浣熊（Raccoon AI 桌面端）=====
     // 协议事实见 docs/raccoon-反代/会话1~5（静态逆向）。防伪强度低：无签名/无 HMAC/无 pinning。
     // 鉴权 = JWT Bearer + x-client-* 六头 + 受信设备绑定（纯对话/积分调用不触发绑定，仅移动端连接器链路用）。
