@@ -95,9 +95,23 @@ function iconPath(name) {
   }
 }
 
-/** 应用主题同步到原生窗口框架（标题栏/边框）：否则外框颜色只跟系统主题走，不跟应用主题走 */
+/** 应用主题同步到原生窗口框架（标题栏/边框）：否则外框颜色只跟系统主题走，不跟应用主题走。
+ *
+ *  同时同步**窗口画布底色**：BrowserWindow 的 backgroundColor 是窗口在页面首帧渲染出来
+ *  之前铺的底色。此前写死为深色 #0a0c0f ✗ —— 浅色主题下每次窗口重建都会先铺黑底、
+ *  再被首帧覆盖 → **闪黑** ✗。而本 PR 的轻量模式恰恰会**销毁窗口**，
+ *  用户下次唤回必然走 createWindow() 重建 → 该闪烁会被明显放大 ✓ 故一并修掉。
+ *  与 src/styles/global.css 的 --bg 取值一致：dark #0a0c0f / light #f4f6f9。
+ *  setBackgroundColor 对已存在窗口即时生效；窗口不存在（已释放）时由 createWindow
+ *  在下次创建时按当前主题取色，故这里静默跳过即可。 */
+const WINDOW_BG = { dark: "#0a0c0f", light: "#f4f6f9" };
+
 function applyNativeTheme(theme) {
   if (theme === "dark" || theme === "light") nativeTheme.themeSource = theme;
+  const bg = WINDOW_BG[theme === "light" ? "light" : "dark"];
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setBackgroundColor(bg);
+  } catch { /* 窗口正在销毁等竞态：下次 createWindow 会用当前主题取色 */ }
 }
 
 // ===== 全局大小自适应 =====
@@ -175,8 +189,10 @@ function createWindow() {
     title: "AgentHub",
     icon: iconPath("icon.png"),
     autoHideMenuBar: true,
-    // 深色底色的窗口画布：消除深色主题启动瞬间的白闪（否则原生窗口先白后黑闪一下）
-    backgroundColor: "#0a0c0f",
+    // 窗口画布底色随当前主题：写死深色时，浅色主题下窗口重建会先铺黑底再被首帧覆盖 → 闪黑 ✗
+    // （轻量模式会销毁窗口，唤回即重建，故这里必须按主题取色）
+    // 取值与 src/styles/global.css 的 --bg 对齐：dark #0a0c0f / light #f4f6f9。
+    backgroundColor: WINDOW_BG[config.loadConfig().theme === "light" ? "light" : "dark"],
     // 先隐藏，等页面渲染出首帧再显示：窗口出现时内容已就绪，避免空壳闪烁
     show: false,
     webPreferences: {

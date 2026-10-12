@@ -209,5 +209,26 @@ T("S21 畸形输入（NaN/字符串/缺省）一律不抛错，且结果始终�
 
 fs.rmSync(TMP, { recursive: true, force: true });
 
+// ─────────────── 三、main.cjs 接线守卫（源码级）───────────────
+// 为什么需要：轻量模式会**销毁窗口**，用户下次唤回必然走 createWindow() 重建。
+// 若窗口画布底色写死深色，浅色主题下重建就会先铺黑底再被首帧覆盖 → **闪黑** ✗。
+// 决策逻辑再对，接线被改回去也白修，故把这一点钉死。
+console.log("\n  [3] main.cjs 接线守卫");
+const mainSrc = fs.readFileSync(path.join(ROOT, "electron", "main.cjs"), "utf8");
+
+T("S22 窗口画布底色随主题（不得写死深色，否则浅色主题重建时闪黑）", () => {
+  if (!/const WINDOW_BG = \{\s*dark:/.test(mainSrc)) throw new Error("缺少 WINDOW_BG 主题底色表 ✗");
+  if (/backgroundColor:\s*"#0a0c0f"/.test(mainSrc)) throw new Error("createWindow 仍把 backgroundColor 写死为深色 ✗（浅色主题重建会闪黑）");
+  if (!/setBackgroundColor\(/.test(mainSrc)) throw new Error("applyNativeTheme 未同步窗口底色 ✗（切换主题后重建仍会用旧底色）");
+});
+
+T("S23 WINDOW_BG 取值与前端 global.css 的 --bg 一致（防两处色值漂移）", () => {
+  const css = fs.readFileSync(path.join(ROOT, "src", "styles", "global.css"), "utf8");
+  for (const [theme, hex] of [["dark", "#0a0c0f"], ["light", "#f4f6f9"]]) {
+    if (!new RegExp(theme + ":\\s*\"" + hex + "\"").test(mainSrc)) throw new Error(`WINDOW_BG.${theme} 期望 ${hex}，main.cjs 里没找到`);
+    if (!css.includes("--bg: " + hex)) throw new Error(`global.css 里 --bg 不含 ${hex}（${theme}）→ 两处色值漂移了`);
+  }
+});
+
 console.log("\n  轻量模式自测: 通过 " + pass + "  失败 " + fail);
 process.exit(fail ? 1 : 0);
