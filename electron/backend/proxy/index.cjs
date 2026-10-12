@@ -1046,9 +1046,12 @@ function register(ipcMain) {
     const ch = String(channel || "");
     const adapter = adapters.get(ch);
     if (!adapter || typeof adapter.fetchModels !== "function") return fail(`未知渠道 "${ch}"`);
-    const acc = pool.poolAccounts(ch).find((a) => a.status === "online" && a.hasToken);
-    if (!acc) return fail(`${store.channelDisplay(ch)}号池无可用账号，无法拉取模型目录`);
-    const secrets = store.accountSecrets(store.getAccount(acc.id));
+    // 目录接口是否需要登录态：未显式声明 modelsNeedAuth 的渠道一律按「需要」处理（行为与既有一致）；
+    // Cline 的 recommended-models 实测无需鉴权（modelsNeedAuth:false），可在无账号时先同步目录
+    const needAuth = adapter.modelsNeedAuth !== false;
+    const acc = needAuth ? pool.poolAccounts(ch).find((a) => a.status === "online" && a.hasToken) : null;
+    if (needAuth && !acc) return fail(`${store.channelDisplay(ch)}号池无可用账号，无法拉取模型目录`);
+    const secrets = acc ? store.accountSecrets(store.getAccount(acc.id)) : null;
     const r = await adapter.fetchModels(acc, secrets);
     if (!r || !r.ok || !Array.isArray(r.models) || !r.models.length) {
       oplog.log("error", "模型目录", `${store.channelDisplay(ch)} 模型目录拉取失败：${(r && r.message) || "返回为空"}`, { channel: ch });

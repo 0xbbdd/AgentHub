@@ -114,6 +114,11 @@ function makeCline(channel, deps) {
     id: channel,
     cfg,
 
+    /** 目录接口**无需登录态**（recommended-models 实测无 Authorization 也 200）：
+     *  据此放宽 proxy_models_sync 的「号池必须有可用账号」前置条件——
+     *  用户可在导入任何账号前先同步模型目录（其余渠道不声明，仍按「需要」处理） */
+    modelsNeedAuth: false,
+
     /** 凭据临期窗口（秒）：access 实测 1 小时（exp-iat=3600），窗口 10 分钟（1/6）。
      *  与其它渠道同口径写死（qoder 86400 / raccoon 300），配置层不再放一份防双源漂移 */
     refreshWindowSec: 600,
