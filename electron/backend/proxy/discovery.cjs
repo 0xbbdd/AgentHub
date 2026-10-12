@@ -351,7 +351,13 @@ function scanTrae() {
   const channels = { trae: TRAE_APP_DIRS.trae, trae_solo_cn: TRAE_APP_DIRS.trae_solo_cn };
   const seenPaths = new Set();
   for (const [channel, dirs] of Object.entries(channels)) {
-    const paths = traeStoragePaths(dirs).sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+    // throwIfNoEntry: false：existsSync 与 statSync 之间文件被删（官方客户端正在写登录态时
+    // 常见）即 ENOENT 抛错，scanAll 无兜底会让本机导入列表整页失败——缺失按 0 排后
+    const mtime = (p) => {
+      const st = fs.statSync(p, { throwIfNoEntry: false });
+      return (st && st.mtimeMs) || 0;
+    };
+    const paths = traeStoragePaths(dirs).sort((a, b) => mtime(b) - mtime(a));
     for (const p of paths) {
       if (seenPaths.has(p)) continue;
       seenPaths.add(p);
@@ -1173,6 +1179,9 @@ async function saveTraeAccount(accessToken, refreshToken, channel, extra) {
     ? { uid: cbUid, name: cbName }
     : await adapter.userInfo(accessToken).catch(() => ({ uid: util.jwtDecode(accessToken).uid, name: "" }));
   const uid = String(info.uid || util.jwtDecode(accessToken).uid || cbUid || "");
+  // uid 缺失一律拒绝落库（与 Lobster/ModelScope 同款防线）：空 uid 让去重查找恒不命中，
+  // 同账号重复登录反复新增行，credit_first 排序也会把它当独立号
+  if (!uid) throw new Error("未能解析账号身份（uid），已拒绝入池");
   const existing = uid ? store.listAccounts(channel).find((a) => a.uid === uid) : null;
   if (existing) {
     store.updateAccount(existing.id, { token: accessToken, refreshToken, status: "online", coolUntil: 0, coolReason: "" });
@@ -2599,9 +2608,11 @@ async function beginLobsterOAuth(channel, onDone) {
       // 兑换成功即作废该 state（配合授权码一次性语义，双重防重放）
       if (gotState) lobsterIssuedStates.delete(String(gotState));
       if (res) res.end(OK_PAGE("登录成功，已加入 LobsterAI 号池，可关闭本页"));
-      // 晚到的回调（会话已关）不再有 onDone 消费者，直接落库即可
+      // 晚到的回调（会话已关）不再有 onDone 消费者，直接落库即可。
+      // onDone 必须走 state 对应的会话（resolved.sess）：入口捕获的全局 oauthSession 可能是
+      // **另一渠道正在进行中**的新登录，把龙虾的成功结果经别的会话回给前端会串结果
       if (resolved.live) finishOAuth({ ok: true, id: r.id, uid: r.uid });
-      else if (session && session.onDone) session.onDone({ ok: true, id: r.id, uid: r.uid });
+      else if (resolved.sess && resolved.sess.onDone) resolved.sess.onDone({ ok: true, id: r.id, uid: r.uid });
     } catch (e) {
       const msg = String((e && e.message) || e);
       if (res) res.end(ERR_PAGE(`登录失败：${msg}`));
@@ -2787,7 +2798,11 @@ function saveModelScopeAccount(ex, sess, source) {
   if (!token) return { ok: false, message: "凭据为空，已拒绝入池" };
   const cookie = String((ex && ex.cookie) || "").trim();
   const meta = {
-    ...(sess && sess.clientId ? { oauthClientId: sess.clientId, oauthClientSecret: sess.clientSecret } : {}),
+    // clientSecret 走 DPAPI 加密（msCookie 同款）：updateAccount 的 stripSensitiveMeta
+    // 会剥明文 secret 键，重复登录走更新路径时续期链会静默断裂
+    ...(sess && sess.clientId
+      ? { oauthClientId: sess.clientId, oauthClientSecret: sess.clientSecret ? config.encryptSecret(sess.clientSecret) : "" }
+      : {}),
     tokenKind: token.startsWith("ms_oauth") ? "oauth" : "token",
     scope: String((ex && ex.scope) || ""),
     savedAt: Date.now(),
@@ -3156,6 +3171,13 @@ async function beginAutoClawOauth(channel, onDone, opts) {
     const code = q.get("code");
     if (!code) { writeRes(() => res.end(PENDING_PAGE)); return { ok: false, message: "回调地址缺少 code 参数（授权码）" }; } // 官方页登录前可能空参探测回调可达性
     const state = q.get("state") || "";
+    // state 校验（对齐 ModelScope 同款 CSRF 防线）：回调带了 state 且与发起时不符 → 外来
+    // 请求拒绝。state 缺失不拦（部分上游形态不回传，强校验会把正常登录误杀）
+    if (state && String(state) !== String(started.state || "")) {
+      const msg = "state 校验不通过（非本应用发起的授权回调）";
+      writeRes(() => { res.statusCode = 400; res.end(ERR_PAGE(msg)); });
+      return { ok: false, message: msg };
+    }
     try {
       const ex = await autoclawLogin.oauthExchange({ cfg: c, httpJson: adapters.httpJson, vendor, deviceId, code, state, navigateUri });
       if (!ex.ok) throw new Error(ex.message);

@@ -588,12 +588,17 @@ function addAccount({ channel, uid, name, token, refreshToken, source, expiresAt
 /** meta 白名单（凭据不走 meta 明文）：token/refreshToken 等凭据一律走独立加密列
  *  （token_enc/refresh_enc），msCookie 在写入前已过 encryptSecret 加密。
  *  这里剥离敏感形态的键（历史版本或外部同步可能带进明文凭据），正常业务键
- *  （lastError/checkin/onboardingGrants/domain/enterpriseId/provider/email 等）不受影响 */
+ *  （lastError/checkin/onboardingGrants/domain/enterpriseId/provider/email 等）不受影响；
+ *  值已是 DPAPI 密文（enc:v1: 信封）的键保留——落库方已加密，剥掉会把
+ *  oauthClientSecret/msCookie 这类加密会话凭据一并清空，续期链随之断裂 */
 const META_SENSITIVE_RE = /token|secret|password|apikey|api[-_]key|jwt|credential/i;
 function stripSensitiveMeta(meta) {
   const out = {};
   for (const [k, v] of Object.entries(meta)) {
-    if (META_SENSITIVE_RE.test(k)) continue;
+    if (META_SENSITIVE_RE.test(k)) {
+      if (typeof v === "string" && v.startsWith(config.ENC_PREFIX)) out[k] = v;
+      continue;
+    }
     out[k] = v;
   }
   return out;

@@ -2774,7 +2774,8 @@ const modelscope = {
     }
     const meta = (account && account.meta) || {};
     const clientId = String(meta.oauthClientId || "");
-    const clientSecret = String(meta.oauthClientSecret || "");
+    // clientSecret 落库时经 DPAPI 加密（msCookie 同款），此处解回明文（兼容存量明文）
+    const clientSecret = config.decryptSecret(String(meta.oauthClientSecret || ""));
     if (!clientId || !clientSecret) {
       return { ok: false, terminal: true, message: "缺少 OAuth 客户端信息（meta.oauthClientId/Secret），无法续期，请重新执行 OAuth 登录" };
     }

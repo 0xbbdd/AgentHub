@@ -637,7 +637,7 @@ function applyAutoStart(cfg) {
 }
 
 module.exports = {
-  dataDir, configPath, hubDir, ensureHub, loadConfig, saveConfig, defaultConfig,
+  dataDir, configPath, hubDir, ensureHub, loadConfig, saveConfig, defaultConfig, ENC_PREFIX,
   getUpdateNotified, setUpdateNotified, isPortable, encryptSecret, decryptSecret, applyAutoStart,
   loadSharedWebdav, saveSharedWebdav, clearSharedWebdav, maskedSharedWebdav, moduleWebdav, sharedEncryptionPassphrase, PASSWORD_MASK,
   normalizeHm, normalizeJitter,
