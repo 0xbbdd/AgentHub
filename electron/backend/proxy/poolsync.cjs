@@ -337,15 +337,25 @@ function mergeSnapshot(snap, channel) {
       patch.token = ra.token;
       patch.refreshToken = ra.refreshToken || "";
       patch.expiresAt = ra.expiresAt || 0;
-      patch.meta = restoreMetaForLocal(ra.meta, ra.channel);
+      // 合并式（对齐 discovery.importCandidate 的 { ...curMeta, ...meta }）：远端快照 meta
+      // 为空对象时整包替换会把本机设备绑定元数据（machineId/deviceId/deviceMid/sw）
+      // 一并抹掉 → 跨机同步后 Qoder 签名失败/小浣熊 200003 串号/ZCode 切号失效
+      const localMeta = local.meta || {};
+      patch.meta = restoreMetaForLocal(
+        { ...localMeta, ...(ra.meta || {}) },
+        ra.channel
+      );
       patch.updatedAt = raUpdatedAt || now;
-      // 只要采纳了远端较新且有效的凭据，重置冷却与解除上游错误，自愈恢复调度
-      patch.coolUntil = 0;
-      patch.coolReason = "";
-      if (local.status === "relogin" || local.status === "cooling") {
-        patch.status = "online";
+      // 自愈（重置冷却与解除上游错误）以远端凭据有效为前提：两端均失效时采纳
+      // 过期远端凭据不能把死号「自愈」成 online 进调度（必然 401 的请求）
+      if (remoteValid) {
+        patch.coolUntil = 0;
+        patch.coolReason = "";
+        if (local.status === "relogin" || local.status === "cooling") {
+          patch.status = "online";
+        }
+        store.clearError(local.id);
       }
-      store.clearError(local.id);
     } else {
       // 不换凭据时，若本机切号快照缺失（如纯 token 导入）而远端带有快照，补充切号快照
       if (ra.channel === "zcode" && ra.meta && ra.meta.sw) {
@@ -384,8 +394,10 @@ function applyTombstones(remote, channel) {
     if (channel && !key.startsWith(`${channel}:`)) continue; // 只同步指定渠道：其他渠道墓碑不动
     const local = accounts.find((a) => accountKeyOf(a) === key);
     if (!local) continue;
-    // 本机账号比墓碑新（删完后又重新添加了同身份账号）：不删，并视为复活（下面合并墓碑时本机包会盖过它）
-    if (Number(local.creditsAt || local.createdAt || 0) > Number(at)) continue;
+    // 本机账号比墓碑新（删完后又重新添加了同身份账号）：不删，并视为复活（下面合并墓碑时本机包会盖过它）。
+    // updatedAt 并入判据（与 mergeSnapshot 的 localUpdatedAt 同口径）：账号在墓碑时间之后
+    // 刷新过 token（updatedAt 更新但 creditsAt/createdAt 都更早）时墓碑仍胜出会吃掉本机新凭据
+    if (Number(local.updatedAt || local.creditsAt || local.createdAt || 0) > Number(at)) continue;
     if (store.removeAccount(local.id)) removed++;
   }
   return removed;
