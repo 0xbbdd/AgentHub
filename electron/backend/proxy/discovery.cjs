@@ -2935,10 +2935,39 @@ async function beginAutoClawOauth(channel, onDone, opts) {
 
   const deviceId = autoclawLogin.newDeviceId();
   const navigateUri = `http://localhost:${port}${autoclawLogin.oauthPaths(c, vendor).callback}`;
+
+  // 会话必须在任何 await 之前挂上（审查加固）：server 此刻已 listen，若等 oauthStart 返回才赋值，
+  // 窗口期内 cancelOAuth() 看不到这个 server（不关连接、无超时收尾），beginOAuth 顶部的
+  // 「已有进行中的登录」守卫也失效 → 回环 server 泄漏 / 双 server 并存。
+  oauthSession = {
+    mode: "loopback",
+    channel,
+    server,
+    onDone,
+    timer: setTimeout(() => finishOAuth({ ok: false, message: "登录超时（3 分钟），请重新发起" }), OAUTH_TIMEOUT_MS),
+    // 浏览器没跳回回环地址时的兜底：整段粘贴回调地址（与 lobster 同款 submit 语义）。
+    // 必须如实返回 handleCallback 的结果——原先无条件 ok:true 会在路径校验失败时「假成功」，
+    // 用户以为已登录而会话其实悬挂到超时。
+    submit: async (rawInput) => {
+      if (!started) return { ok: false, message: "授权页尚未就绪，请稍候再试" };
+      const q = parseCallbackInput(rawInput);
+      if (!q) return { ok: false, message: "无法解析回调地址：请整段复制浏览器地址栏内容（需包含 code）" };
+      const code = q.get("code");
+      if (!code) return { ok: false, message: "回调地址缺少 code 参数（授权码）" };
+      return await handleCallback({ url: `?${q.toString()}` }, null, { viaSubmit: true });
+    },
+  };
+
   started = await autoclawLogin.oauthStart({ cfg: c, httpJson: adapters.httpJson, vendor, captchaVerifyParam, navigateUri, deviceId });
   if (!started.ok) {
-    try { server.close(); } catch { /* 未监听成功 */ }
+    // 统一收尾：关 server + 清 timer + 清会话（原先只 close server，靠会话尚未赋值「恰好」没泄漏 timer）
+    finishOAuth({ ok: false, message: started.message });
     return { ok: false, message: started.message };
+  }
+  // 会话可能在 await 期间被取消/超时收尾（finishOAuth 已关 server）：本次发起已作废，
+  // 不能再返回 url，否则前端会打开一个注定失败的授权页
+  if (!oauthSession || oauthSession.server !== server) {
+    return { ok: false, message: "登录已取消或超时，请重新发起" };
   }
 
   async function handleCallback(req, res, opts) {
@@ -2977,23 +3006,6 @@ async function beginAutoClawOauth(channel, onDone, opts) {
     }
   }
 
-  oauthSession = {
-    mode: "loopback",
-    channel,
-    server,
-    onDone,
-    timer: setTimeout(() => finishOAuth({ ok: false, message: "登录超时（3 分钟），请重新发起" }), OAUTH_TIMEOUT_MS),
-    // 浏览器没跳回回环地址时的兜底：整段粘贴回调地址（与 lobster 同款 submit 语义）。
-    // 必须如实返回 handleCallback 的结果——原先无条件 ok:true 会在路径校验失败时「假成功」，
-    // 用户以为已登录而会话其实悬挂到超时。
-    submit: async (rawInput) => {
-      const q = parseCallbackInput(rawInput);
-      if (!q) return { ok: false, message: "无法解析回调地址：请整段复制浏览器地址栏内容（需包含 code）" };
-      const code = q.get("code");
-      if (!code) return { ok: false, message: "回调地址缺少 code 参数（授权码）" };
-      return await handleCallback({ url: `?${q.toString()}` }, null, { viaSubmit: true });
-    },
-  };
   return { ok: true, url: started.oauthUrl, mode: "loopback", port };
 }
 
