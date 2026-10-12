@@ -141,7 +141,9 @@ function routeUsable(channel, settings) {
   const now = Date.now();
   return pool.poolAccounts(channel).some((a) =>
     a.status === "online" && a.hasToken &&
-    !(a.creditsAt > 0 && a.credits === 0) &&
+    // 与 pickAccount 同口径（issue #86 教训）：余额 0 的排除对声明 zeroBalanceUsable 的
+    // 渠道（Cline）同样豁免——余额 0 不是它的硬门禁，两处判据必须一起改
+    !((a.creditsAt > 0 && a.credits === 0) && !pool.zeroBalanceUsable(channel)) &&
     !(a.expiresAt > 0 && a.expiresAt <= now));
 }
 

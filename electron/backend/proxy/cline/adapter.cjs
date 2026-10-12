@@ -141,6 +141,12 @@ function makeCline(channel, deps) {
      *  与其它渠道同口径写死（qoder 86400 / raccoon 300），配置层不再放一份防双源漂移 */
     refreshWindowSec: 600,
 
+    /** 余额 0 不是硬门禁：上游允许余额记负（实测欠费 -0.02 仍可用），真实门禁是
+     *  每日额度的 429（带重置时间）与订阅 403，都已由错误分类按账号处置。号池调度
+     *  的「余额 0 → exhausted」与 routeUsable 同口径据此跳过本渠道——否则余额恒 0 的
+     *  账号（store 入库层把舍入后的 0 与 < -1 负值都归 0）会被锁死在调度外且永不复活 */
+    zeroBalanceUsable: true,
+
     /** 模型 id 清单（带池前缀的完整上游 id；目录未就绪时为空数组——rules 默认值已含静态兜底） */
     models() {
       return catalogEntries().map((m) => String(m.id));
