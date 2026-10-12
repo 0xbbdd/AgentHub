@@ -305,10 +305,14 @@ function makeCline(channel, deps) {
 
     /**
      * 渠道私有错误分类（server.js 的 classifyUpstream 入口，返回非空即走本分类）：
-     *   - 403：**不是限额** —— ENTITLEMENT_ERROR（没订阅该模型）与
-     *     only available via Cline product surfaces（免费池产品面校验）都是「账号×模型」
-     *     维度的确定性拒绝。归 model_denied：不罚号、不记错、终止链（换号大概率同样失败，
-     *     冷却账号只会把确定失败变成静默跳过）。**403 一律不重试**；
+     *   - 403：**不是限额** —— 两种语义都归 model_denied（不罚号、不记错、终止链），
+     *     但**文案必须区分**，否则用户只拿到一句上游原文、无从定位：
+     *       ① ENTITLEMENT_ERROR（该账号未订阅该模型）：换账号同样失败，换模型即可；
+     *       ② only available via Cline product surfaces / not a supported client：
+     *          **渠道级**产品面校验失败——最常见成因是 headers.json 的 X-CLIENT-TYPE
+     *          伪装头被删/改空（它是免费池的**硬门槛**，方案 §3），此时整池都会 403。
+     *     ⚠ 两类都保持 switchable:false（方案 §8：403 一律不重试）——渠道级也**不降级不冷却**：
+     *       降级/冷却救不了配置错误，只会把「改一行配置就能修」变成「静默跳过」。
      *   - 404 model not found：模型名不对，同样 model_denied（换账号无用）；
      *   - 429：真限流 → rate；错误文案带人话时长（"Try again in 17h 59m"）→ 解析成
      *     恢复墙钟填 resetMs（免费额度撞限的真实冷却可达小时级）；
@@ -317,7 +321,18 @@ function makeCline(channel, deps) {
     classifyError(e) {
       const status = Number(e && e.status) || 0;
       if (status === 403) {
-        return { kind: "model_denied", switchable: false, status: 403, message: upstreamMessage(e.body || e.message) };
+        const msg = upstreamMessage(e.body || e.message);
+        // 渠道级产品面校验（整池命中）与账号×模型无权限（换模型即可）要给不同的可操作提示：
+        // 前者最常见成因是伪装头 X-CLIENT-TYPE 被删/改空，不提示则「整池静默失效」而用户无感
+        const channelLevel = /product surfaces|not a supported client|unapproved (channel|client)/i.test(msg);
+        return {
+          kind: "model_denied",
+          switchable: false,
+          status: 403,
+          message: channelLevel
+            ? `${msg}（疑似渠道级产品面校验失败：请检查 headers.json 的 X-CLIENT-TYPE 伪装头是否被删或改空——它是 Cline 免费池的硬门槛）`
+            : msg,
+        };
       }
       if (status === 404) {
         return { kind: "model_denied", switchable: false, status: 404, message: upstreamMessage(e.body || e.message) };
