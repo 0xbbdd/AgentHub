@@ -292,10 +292,10 @@ export const proxyScanImport = (index: number, channel?: ProxyChannelId, file?: 
   call<{ ok: boolean; id?: string; updated?: boolean; message?: string }>("proxy_scan_import", { index, channel, file, uid });
 /** 拉起对应渠道的官方登录（授权页由主进程 shell.openExternal 打开，结果经 app:event 回流） */
 export const proxyOauthBegin = (channel: ProxyChannelId) =>
-  call<{ ok: boolean; url?: string; mode?: string; message?: string }>("proxy_oauth_begin", { channel });
+  call<{ ok: boolean; url?: string; mode?: string; port?: number; message?: string }>("proxy_oauth_begin", { channel });
 /** AutoClaw 国际版 OAuth：带上前端跑完阿里云滑块的验证串换授权地址（主进程占白名单端口回环等回调） */
 export const proxyOauthBeginWithCaptcha = (channel: ProxyChannelId, captchaVerifyParam: string, vendor: "zai" | "google" = "zai") =>
-  call<{ ok: boolean; url?: string; mode?: string; message?: string }>("proxy_oauth_begin", { channel, captchaVerifyParam, vendor }, 0);
+  call<{ ok: boolean; url?: string; mode?: string; port?: number; message?: string }>("proxy_oauth_begin", { channel, captchaVerifyParam, vendor }, 0);
 /** AutoClaw 国际版：风控配置（enabled/prefix/sceneId，前端初始化阿里云滑块用） */
 export const proxyAutoclawCaptchaConfig = (channel: ProxyChannelId) =>
   call<{ ok: boolean; enabled?: boolean; region?: string; prefix?: string; sceneId?: string; supplier?: string; message?: string }>("proxy_autoclaw_captcha_config", { channel }, 0);
