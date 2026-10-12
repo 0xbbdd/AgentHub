@@ -3888,6 +3888,14 @@ if (store.AUTOCLAW_INTL_ENABLED) {
   ADAPTERS.autoclaw_intl = makeAutoClaw("autoclaw_intl", autoclawDeps);
 }
 
+// ===== Cline 双池（cline_free 免费额度池 / cline_pass 订阅池）=====
+// 同套实现按池参数化（与 qoder/autoclaw 双区同款手法）：两池同域同协议同凭证，
+// 差别只有「收哪个池的模型」；配置共用 headers.json 的 cline 段，无地区开关（常开）。
+const { makeCline } = require("./cline/adapter.cjs");
+const clineDeps = { fetchStream, pumpSse, httpJson, rules, util };
+ADAPTERS.cline_free = makeCline("cline_free", clineDeps);
+ADAPTERS.cline_pass = makeCline("cline_pass", clineDeps);
+
 // 启动期契约校验：全员必需方法缺失在 require 阶段即抛错（fail-fast），
 // 人为删掉某个适配器的 chat() 后应用启动即崩在明面上，而不是运行期才 404/TypeError
 for (const [channel, ad] of Object.entries(ADAPTERS)) assertAdapterContract(channel, ad);
