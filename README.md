@@ -12,7 +12,7 @@ AgentHub 是一个**本地运行**的中控台（Electron + Vue 3 + TypeScript�
 | --- | --- | --- |
 | **技能仓库** | 把散落在各工具的 Skill 收进中央库，一处维护、一键分发 | 同时用 Codex / Claude Code / ZCode / Cursor 等多个工具的人 |
 | **用量统计** | 汇总 20 个数据源的 token 用量与费用，按天/项目/模型看趋势 | 想知道「这个月到底烧了多少」的人 |
-| **反代网关** | 把已登录的订阅额度包成 OpenAI 兼容 API，给任何客户端用 | 有订阅额度、想让其他软件也能调用的人 |
+| **反代网关** | 把已登录的订阅额度包成 OpenAI 兼容 API，给任何客户端用 | 有 Trae / WorkBuddy / 商汤小浣熊 / ModelScope（魔搭）/ LobsterAI / ZCode / CatPaw / Qoder / AutoClaw 任一渠道的订阅额度、想让其他软件也能调用的人 |
 | **记忆中枢** | 本地 Markdown 记忆库 + MCP 服务，让 Agent 记住项目与偏好 | 不想每次开新会话都重新交代背景的人 |
 
 ---
@@ -135,10 +135,14 @@ ZCode、商汤小浣熊、Xiaomi MiMo、Codex、DeepSeek Harness、WorkBuddy、W
 | **WorkBuddy CN** | WorkBuddy 国内版 | 官方登录页 + 本机轮询 | 每日签到 |
 | **WorkBuddy AI** | WorkBuddy 国际版 | 官方登录页 + 本机轮询 | 一次性加油包 |
 | **商汤小浣熊** | 商汤小浣熊 | 应用内授权窗截获（不经过系统浏览器） | 每日签到 |
+| **ModelScope（魔搭）** | 魔搭免费推理额度（魔粒） | OAuth 授权页（应用自动注册）+ 粘贴 ms- 令牌兜底（**无需安装客户端**） | 每日任务（登录 / 绑云 / 点赞领魔粒） |
 | **LobsterAI（有道）** | 网易有道龙虾 | 官方登录页 + 本机回环回调（**无需安装客户端**） | 每日签到 100 积分 |
 | **ZCode（智谱）** | Z.ai GLM 编码套餐 | Z.ai 授权页 + 本机轮询 | 领取奖励 |
+| **CatPaw（美团）** | CatPaw 桌面端会话额度 | 从本机 CatPaw 客户端登录态导入（实时读取，无需重新登录） | 无签到活动 |
 | **Qoder CN** | Qoder 国内版 | 官方登录页设备码轮询（无需本机客户端）/ 从本机软件导入 | 每日领 Credits |
 | **Qoder International** | Qoder 国际版 | 同上 | 每日领 Credits |
+| **AutoClaw 国内版** | 智谱 AutoGLM 加速站 | 手机验证码登录 / 从本机 AutoClaw 客户端导入 | 每日签到领积分 |
+| **AutoClaw 国际版** | AutoGLM 国际站 | OAuth 授权登录（含风控验证）/ 从本机导入 | 每日签到领积分 |
 
 各渠道的号池、签到、策略完全独立，互不影响：在号池页顶部切换渠道，下方整块区域只显示当前渠道的账号。
 
