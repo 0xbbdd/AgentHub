@@ -209,13 +209,35 @@ function setupShortcut() {
   return st;
 }
 
+/** 收起主界面：按「轻量模式」开关决定是隐藏还是释放渲染进程。
+ *
+ *  为什么需要它：本 PR 只加了快捷键（收起=hide）。而轻量模式 PR（#101）引入的是
+ *  「关窗销毁窗口释放渲染进程」—— 两者合到一起时，快捷键若恒为 hide，用户开了轻量模式
+ *  却没省到内存；反之若恒为 destroy，用户没开轻量模式却每次唤回都重建整页 → 闪黑 ✗。
+ *  故此处**按开关分派**，行为随开关走。
+ *
+ *  为什么用 typeof 探测 releaseWindowNow：本 PR 独立存在时没有该函数（它来自 #101），
+ *  直接引用会 ReferenceError ✗。`typeof` 对未声明标识符安全 ✓ —— 于是：
+ *    · 只合本 PR      → lightOn 恒为 false（配置里也没这个开关），行为与改动前一致 ✓
+ *    · 与 #101 一起合 → 用户开了轻量模式即走 destroy 释放内存 ✓，否则 hide ✓
+ *  合并顺序无关，两边单独看都自洽。 */
+function collapseMainWindow(reason) {
+  const cfg = config.loadConfig();
+  const lightOn = !!(cfg.schedule && cfg.schedule.lightweightMode);
+  if (lightOn && typeof releaseWindowNow === "function") {
+    releaseWindowNow(reason);
+    return;
+  }
+  try { mainWindow.hide(); } catch { /* 已销毁：下次唤回会重建 */ }
+  refreshTrayMenu();
+}
+
 /** 快捷键按下：可见则收起界面，不可见则唤回 */
 function onShortcutToggle() {
   try {
     const visible = !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible();
     if (visible) {
-      mainWindow.hide();
-      refreshTrayMenu();
+      collapseMainWindow("shortcut");
     } else {
       showWindow();
     }

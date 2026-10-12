@@ -258,5 +258,40 @@ T("S22 stop() 注销一切（退出应用时调用）", () => {
   eq(h.reg.status().accelerator, "");
 });
 
+// ─────────────── 三、main.cjs 接线守卫（源码级）───────────────
+// 快捷键「收起」必须按「轻量模式」开关分派：
+//   · 恒为 hide    → 用户开了轻量模式却省不到内存；
+//   · 恒为 destroy → 用户没开轻量模式却每次唤回都重建整页 → 闪黑 ✗。
+// 这里只做源码级接线断言（纯逻辑层无法覆盖 main.cjs 的分派）。
+console.log("\n  [3] main.cjs 接线守卫");
+const fs = require("node:fs");
+const mainSrc = fs.readFileSync(path.join(ROOT, "electron", "main.cjs"), "utf8");
+
+T("S23 快捷键收起按「轻量模式」开关分派（不得恒 hide / 恒 destroy）", () => {
+  if (!/function collapseMainWindow\(/.test(mainSrc)) throw new Error("缺少 collapseMainWindow（收起动作的统一入口）✗");
+  const body = mainSrc.slice(mainSrc.indexOf("function collapseMainWindow("));
+  const fn = body.slice(0, body.indexOf("\n}") > 0 ? body.indexOf("\n}") : 900);
+  if (!/lightweightMode/.test(fn)) throw new Error("收起动作没有读 lightweightMode 开关 ✗");
+  if (!/releaseWindowNow\(/.test(fn)) throw new Error("缺少「轻量模式开启 → 释放渲染进程」分支 ✗");
+  if (!/mainWindow\.hide\(\)/.test(fn)) throw new Error("缺少「轻量模式关闭 → 仅隐藏」分支 ✗");
+});
+
+T("S24 onShortcutToggle 走 collapseMainWindow（不得直接 hide，否则与轻量模式脱钩）", () => {
+  const i = mainSrc.indexOf("function onShortcutToggle(");
+  if (i < 0) throw new Error("找不到 onShortcutToggle");
+  const fn = mainSrc.slice(i, i + 700);
+  if (!/collapseMainWindow\(/.test(fn)) throw new Error("快捷键收起没有走 collapseMainWindow ✗");
+});
+
+T("S25 未声明标识符安全探测：本分支没有 releaseWindowNow 时也不得 ReferenceError", () => {
+  // #101（轻量模式）引入 releaseWindowNow；本 PR 独立存在时它不存在 ✗。
+  // 故必须用 typeof 探测（对未声明标识符安全 ✓），不能直接 if (releaseWindowNow)。
+  const body = mainSrc.slice(mainSrc.indexOf("function collapseMainWindow("));
+  const fn = body.slice(0, body.indexOf("\n}") > 0 ? body.indexOf("\n}") : 900);
+  if (!/typeof releaseWindowNow === "function"/.test(fn)) {
+    throw new Error('必须写成 typeof releaseWindowNow === "function"（否则单独合并时会 ReferenceError）✗');
+  }
+});
+
 console.log("\n  快捷键自测: 通过 " + pass + "  失败 " + fail);
 process.exit(fail ? 1 : 0);
