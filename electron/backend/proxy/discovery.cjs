@@ -2908,8 +2908,18 @@ async function beginAutoClawOauth(channel, onDone, opts) {
     return { ok: false, message: "缺少风控验证参数，请先完成滑块验证再发起登录" };
   }
 
+  // 窗口期守卫（审查加固）：server.listen 在本函数首个 await 之前就已生效，而 started /
+  // handleCallback 要等 oauthStart 返回后才就绪。若此刻有请求到达（上一轮残留页预取、
+  // 手动刷新旧回调页），直接进 handleCallback 会踩 const 的 TDZ（ReferenceError），
+  // 该异常在 HTTP 回调栈内抛出、逃逸出 .catch → 未捕获异常 → 主进程退出。
+  // 故在回调入口挡掉「尚未就绪」的请求，并把 handleCallback 提升为函数声明消除 TDZ。
+  let started = null;
   const server = http.createServer((req, res) => {
-    handleCallback(req, res).catch(() => { /* 回调处理异常已在内部落页 */ });
+    if (!started) {
+      try { res.statusCode = 503; res.end("initializing"); } catch { /* 连接已断 */ }
+      return;
+    }
+    Promise.resolve().then(() => handleCallback(req, res)).catch(() => { /* 回调处理异常已在内部落页 */ });
   });
   let port = 0;
   for (const p of AUTOCLAW_CALLBACK_PORTS) {
@@ -2925,13 +2935,13 @@ async function beginAutoClawOauth(channel, onDone, opts) {
 
   const deviceId = autoclawLogin.newDeviceId();
   const navigateUri = `http://localhost:${port}${autoclawLogin.oauthPaths(c, vendor).callback}`;
-  const started = await autoclawLogin.oauthStart({ cfg: c, httpJson: adapters.httpJson, vendor, captchaVerifyParam, navigateUri, deviceId });
+  started = await autoclawLogin.oauthStart({ cfg: c, httpJson: adapters.httpJson, vendor, captchaVerifyParam, navigateUri, deviceId });
   if (!started.ok) {
     try { server.close(); } catch { /* 未监听成功 */ }
     return { ok: false, message: started.message };
   }
 
-  const handleCallback = async (req, res, opts) => {
+  async function handleCallback(req, res, opts) {
     const writeRes = (fn) => { if (res) { try { fn(); } catch { /* 连接已断 */ } } };
     const u = new URL(req.url || "/", "http://localhost");
     // submit 兜底路径只有查询串（无 pathname 可校验），显式跳过路径校验；真实 HTTP 回调仍严格校验，
@@ -2965,7 +2975,7 @@ async function beginAutoClawOauth(channel, onDone, opts) {
       finishOAuth({ ok: false, message: msg });
       return { ok: false, message: msg };
     }
-  };
+  }
 
   oauthSession = {
     mode: "loopback",
