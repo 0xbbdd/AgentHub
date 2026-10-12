@@ -365,6 +365,26 @@ const PROXY_POOL = [
       { id: "a10", channel: "catpaw", uid: "cp_57130", name: "猫爪主号", status: "online", credits: 8600, creditsAt: ago(8), expiresAt: 0, coolUntil: 0, coolReason: "", source: "scan", lastUsed: ago(2), todayReq: 24, todayTokens: 62400, createdAt: NOW - 3 * 86400000, hasToken: true },
     ],
   },
+  {
+    // Cline 双池：credit 是浮点计量（微 credit ÷1e6），演示免费池正常余量 / 订阅池订阅到期中；
+    // 无签到活动（checkinAuto 恒关，前端也不渲染入口）
+    id: "cline_free", display: "Cline Free", domain: "api.cline.bot", costTier: "free", poolStrategy: "expire_first",
+    health: null as { until: number; reason: string; streak: number } | null,
+    checkinAuto: { enabled: false, time: "09:00", jitterMin: 0 },
+    summary: { channel: "cline_free", totalCredits: 12.5, accountCount: 1, onlineCount: 1, earliestExpire: 0, expiringSoon: false, todayReq: 9, todayTokens: 21400, lastCreditsAt: ago(4) },
+    accounts: [
+      { id: "a13", channel: "cline_free", uid: "usr-01M2VWEDWF", name: "demo@example.com", status: "online", credits: 12.5, creditsAt: ago(4), expiresAt: NOW + 3600000, coolUntil: 0, coolReason: "", source: "oauth", lastUsed: ago(1), todayReq: 9, todayTokens: 21400, createdAt: NOW - 2 * 86400000, hasToken: true },
+    ],
+  },
+  {
+    id: "cline_pass", display: "Cline Pass", domain: "api.cline.bot", costTier: "", poolStrategy: "expire_first",
+    health: null as { until: number; reason: string; streak: number } | null,
+    checkinAuto: { enabled: false, time: "09:00", jitterMin: 0 },
+    summary: { channel: "cline_pass", totalCredits: 128.75, accountCount: 1, onlineCount: 1, earliestExpire: NOW + 30 * 86400000, expiringSoon: false, todayReq: 15, todayTokens: 46200, lastCreditsAt: ago(6) },
+    accounts: [
+      { id: "a14", channel: "cline_pass", uid: "usr-01M2VWEDWF", name: "demo@example.com", status: "online", credits: 128.75, creditsAt: ago(6), expiresAt: NOW + 30 * 86400000, coolUntil: 0, coolReason: "", source: "oauth", lastUsed: ago(3), todayReq: 15, todayTokens: 46200, createdAt: NOW - 5 * 86400000, hasToken: true },
+    ],
+  },
 ];
 
 const PROXY_USAGE = [
@@ -390,6 +410,11 @@ const PROXY_MODELS = [
   { id: "raccoon-chat-ml-5-5", object: "model", created: 0, owned_by: "raccoon", sources: ["raccoon"], name: "Raccoon Chat ML 5.5", rate: null, capabilities: { reasoning: true, tools: true }, contextLength: 180000, maxOutputTokens: 80000, enabled: true, override: "", fallback: "" },
   { id: "glm-5.3-flash", object: "model", created: 0, owned_by: "catpaw", sources: ["catpaw"], name: "GLM-5.3-Flash", rate: null, capabilities: { images: true, reasoning: true, tools: true }, contextLength: 1024000, maxOutputTokens: 0, enabled: true, override: "", fallback: "" },
   { id: "kimi-k3", object: "model", created: 0, owned_by: "catpaw", sources: ["catpaw"], name: "Kimi-K3", rate: null, capabilities: { images: true, reasoning: true, tools: true }, contextLength: 0, maxOutputTokens: 0, enabled: true, override: "", fallback: "" },
+  // Cline 双池：模型 id 带池前缀（上游的计费通道选择器，原样转发）
+  { id: "cline-free/deepseek-v4.1-flash", object: "model", created: 0, owned_by: "cline_free", sources: ["cline_free"], name: "DeepSeek V4.1 Flash（免费）", rate: null, capabilities: { images: true, reasoning: true, tools: true }, contextLength: 1000000, maxOutputTokens: 0, enabled: true, override: "", fallback: "" },
+  { id: "z-ai/glm-5.3-flash", object: "model", created: 0, owned_by: "cline_free", sources: ["cline_free"], name: "GLM-5.3-Flash（免费）", rate: null, capabilities: { images: true, reasoning: true, tools: true }, contextLength: 1310720, maxOutputTokens: 0, enabled: true, override: "", fallback: "" },
+  { id: "cline-pass/deepseek-v4.1-flash", object: "model", created: 0, owned_by: "cline_pass", sources: ["cline_pass"], name: "DeepSeek V4.1 Flash（ClinePass）", rate: null, capabilities: { images: true, reasoning: true, tools: true }, contextLength: 1000000, maxOutputTokens: 0, enabled: true, override: "", fallback: "" },
+  { id: "cline-pass/glm-5.3", object: "model", created: 0, owned_by: "cline_pass", sources: ["cline_pass"], name: "GLM-5.3（ClinePass）", rate: null, capabilities: { images: true, reasoning: true, tools: true }, contextLength: 200000, maxOutputTokens: 0, enabled: true, override: "", fallback: "" },
 ];
 
 const PROXY_RULES = [
@@ -1182,6 +1207,10 @@ export const mock = {
       case "proxy_scan_import":
         return { ok: true, id: "a-imp", updated: false };
       case "proxy_oauth_begin":
+        // Cline 设备授权：演示用户码形态（前端会显示「用户码：XXXX」一行）
+        if (args?.channel === "cline_free" || args?.channel === "cline_pass") {
+          return { ok: true, url: "https://authkit.cline.bot/device?user_code=PXQF-MWRC（预览）", mode: "device", userCode: "PXQF-MWRC" };
+        }
         return { ok: true, url: "https://www.trae.cn/authorization?...（预览）", mode: args?.channel === "trae" ? "loopback" : "poll" };
       case "proxy_account_import_json":
         return { ok: true, added: 2, dup: 1, invalid: 0, message: "成功导入 2 个账号，1 个同 UID 已存在跳过" };
