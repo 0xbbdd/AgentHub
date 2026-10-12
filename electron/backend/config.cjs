@@ -152,6 +152,11 @@ function defaultConfig() {
     // 后台与调度
     schedule: {
       minimizeToTray: true, // 关窗缩到托盘
+      // 全局快捷键：唤起/释放主窗口。默认 Alt+`（两键），必须是「功能键+字符键」组合
+      // （见 backend/shortcut.cjs）。**不要写 Alt+~** —— ~ 在标准键盘要 Shift，
+      // Electron 会当成三键组合，用户按两键没反应、极易误判为快捷键失效。
+      // 空串 = 不注册快捷键。注册失败（被别的程序占用）时界面会明确提示，不静默换键。
+      shortcutToggle: "Alt+`",
       autoStart: false,     // 开机自启（便携版无效）
       hourly: false,        // 每小时自动同步
       daily: false,         // 每天定时同步

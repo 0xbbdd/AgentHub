@@ -2,7 +2,7 @@
 // 技能仓库后台能力：定时 WebDAV 同步调度、自动感知收纳、软件自更新
 "use strict";
 const path = require("node:path");
-const { app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain, nativeTheme, Notification } = require("electron");
+const { app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain, nativeTheme, Notification, globalShortcut } = require("electron");
 
 // ===== 闪退取证（本地补丁 __agenthubCrashTrace）=====
 // 1.42.0 出现静默退出：Windows 无 Application Error 事件、无 minidump、应用自身零日志，
@@ -69,6 +69,8 @@ const usagesync = require("./backend/sync.cjs");
 const proxy = require("./backend/proxy/index.cjs");
 const memory = require("./backend/memory/index.cjs");
 const usageScheduler = require("./backend/usage-scheduler.cjs");
+// 全局快捷键：唤起/释放界面。冲突时弹气泡并持续重试（见 backend/shortcut.cjs）
+const shortcut = require("./backend/shortcut.cjs");
 
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || "http://localhost:1420";
 
@@ -177,6 +179,48 @@ function showWindow() {
   } else {
     mainWindow.show();
     mainWindow.focus();
+  }
+}
+
+// ===== 全局快捷键：唤起 / 释放界面 =====
+// 全局生效（应用在后台/托盘时也能唤起）。按下时是「开关」语义：
+//   窗口可见   → 隐藏（hide）
+//   窗口不可见 → 显示并聚焦（没有窗口时重建）
+//
+// 与本仓其它特性的关系：本实现只做 hide/show，不假设窗口是否可销毁 ——
+// 若上游另有会销毁窗口的特性（如"关窗释放界面"），按下时的"释放"路径可在那时一并调整。
+let shortcutRegistrar = null;
+
+/** 按当前配置注册快捷键；配置变更后由 ipc 的 onConfigSaved 钩子再次调用 */
+function setupShortcut() {
+  const cfg = config.loadConfig();
+  const acc = (cfg.schedule && cfg.schedule.shortcutToggle) || "";
+
+  if (!shortcutRegistrar) {
+    shortcutRegistrar = shortcut.createRegistrar({
+      globalShortcut,
+      onTrigger: onShortcutToggle,
+      notify: (title, body) => notify(title, body),
+      log: (kind, detail) => __crashLog(kind, detail),
+    });
+  }
+  const st = shortcutRegistrar.set(acc);
+  if (st.error) __crashLog("shortcut-invalid", String(st.error));
+  return st;
+}
+
+/** 快捷键按下：可见则收起界面，不可见则唤回 */
+function onShortcutToggle() {
+  try {
+    const visible = !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible();
+    if (visible) {
+      mainWindow.hide();
+      refreshTrayMenu();
+    } else {
+      showWindow();
+    }
+  } catch (e) {
+    __crashLog("shortcut-toggle-failed", String((e && e.message) || e));
   }
 }
 
@@ -502,6 +546,12 @@ if (!gotLock) {
     }
     if (on("sync")) usageScheduler.start();
     updater.init({ onShowWindow: showWindow, onTrayRefresh: refreshTrayMenu });
+    // 全局快捷键（默认 Alt+`，两键）：冲突则弹气泡并持续重试，解除后自动恢复。
+    // 设置页改键后经 ipc.onConfigSaved 钩子重新注册，无需重启。
+    ipc.onConfigSaved(() => {
+      try { setupShortcut(); } catch (e) { __crashLog("shortcut-reload-failed", __describe(e)); }
+    });
+    try { setupShortcut(); } catch (e) { __crashLog("shortcut-setup-failed", __describe(e)); }
 
     // 依据配置启用开机自启（便携版不支持：注册的会是临时解压副本路径，退出即失效）。
     // 开关唯一来源是框架配置（设置 · 通用 · 应用行为），用量模块旧配置字段不再参与
@@ -518,24 +568,27 @@ if (!gotLock) {
   });
 
   app.on("before-quit", (e) => {
+    // 统一收尾：原先两条分支各自重复一遍 stop 调用，新增模块时极易漏改一处
+    const cleanup = () => {
+      scheduler.stop();
+      usageScheduler.stop();
+      watch.stop();
+      // 全局快捷键必须显式注销：更新重启是"拦下退出再重启"，
+      // 不注销会让旧键在重启窗口期内处于悬空占用状态
+      try { if (shortcutRegistrar) shortcutRegistrar.stop(); else shortcut.unregisterAll(globalShortcut); } catch { /* 忽略 */ }
+      proxy.shutdown();
+      memory.shutdown();
+    };
     // 下载完的更新：拦下这次退出，静默装完自动重启
     if (updater.pendingInstall()) {
       e.preventDefault();
       quitting = true;
-      scheduler.stop();
-      usageScheduler.stop();
-      watch.stop();
-      proxy.shutdown();
-      memory.shutdown();
+      cleanup();
       updater.triggerInstall();
       return;
     }
     quitting = true;
-    scheduler.stop();
-    usageScheduler.stop();
-    watch.stop();
-    proxy.shutdown();
-    memory.shutdown();
+    cleanup();
   });
 
   app.on("window-all-closed", () => {
