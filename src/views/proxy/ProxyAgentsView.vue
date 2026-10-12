@@ -7,7 +7,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import * as api from "../../api/ipc";
 import type { ProxyChannelView, ProxyAccount, ProxyChannelId, ProxyPoolStrategy, ProxyCostTier, ProxyScanCandidate, ProxyCheckinRow, ZcodeDeviceRow } from "../../types";
 import { useAppStore } from "../../stores/app";
-import { fmtInt, fmtK, fmtDate, fmtAgo, fmtCredits, ACCOUNT_STATUS, SOURCE_NAMES, channelName, fmtBalance, balanceUnit, isQoderChannel, costTierName, checkinLabels, todayStr } from "./format";
+import { fmtInt, fmtK, fmtDate, fmtAgo, fmtCredits, ACCOUNT_STATUS, SOURCE_NAMES, channelName, fmtBalance, balanceUnit, isQoderChannel, isClineChannel, costTierName, checkinLabels, todayStr } from "./format";
 import { coalesceAsync } from "../../utils/timing";
 import { solveCaptcha, cancelCaptcha, CaptchaCancelledError } from "../../utils/aliyunCaptcha";
 
@@ -72,6 +72,8 @@ const fileBusy = ref(false);
 const oauthWaiting = ref(false);
 const oauthMsg = ref("");
 const oauthMode = ref("");
+// Cline 设备授权返回的用户码（浏览器授权页已预填；显示出来供用户改用普通授权页时手动输码）
+const oauthUserCode = ref("");
 // 浏览器没跳回回环地址时的兜底：把地址栏整段粘回来
 const callbackInput = ref("");
 const callbackBusy = ref(false);
@@ -109,7 +111,7 @@ const SMS_ONLY_CHANNELS: ProxyChannelId[] = ["autoclaw"];
 // 无签到 / 奖励活动的渠道：适配器如实回报「不适用」（checkinStatus → unavailable），
 // 前端不渲染签到与自动签到入口——点了一次「一键签到」只得到一条无意义结果，徒增困惑。
 // 与 NO_OAUTH_CHANNELS 同一分工：渠道能力的展示层开关，判定口径在各自适配器
-const NO_CHECKIN_CHANNELS: ProxyChannelId[] = ["catpaw"];
+const NO_CHECKIN_CHANNELS: ProxyChannelId[] = ["catpaw", "cline_free", "cline_pass"];
 function addTabAllowed(key: AddMethod, channel: ProxyChannelId = activeChannel.value): boolean {
   if (key === "oauth" && NO_OAUTH_CHANNELS.includes(channel)) return false;
   // 手机验证码页签只给 AutoClaw 国内版；它自身也没有 OAuth 页签可放
@@ -183,6 +185,14 @@ const OAUTH_HELP: Record<string, { title: string; desc: string }> = {
     title: "用 Z.ai / Google 账号登录 AutoClaw 国际版",
     desc: "点「打开登录页」后<b>先弹出官方风控滑块</b>（阿里云验证，拖一次即可），验证通过自动打开官方登录页（默认 Z.ai），登录完成自动入池。<br />每账号独立执行一次，可反复添加多账号；3 分钟无响应即超时。<br />若浏览器停在回调页没自动跳回，可把地址栏内容整段粘到下方。",
   },
+  cline_free: {
+    title: "用 Cline 官方设备授权登录（免费额度池）",
+    desc: "点「打开登录页」会跳转 WorkOS 设备授权页（已带用户码，直接确认即可）——<b>无需安装 Cline 客户端</b>，也不占用本地回调端口。<br />确认后本机自动轮询完成入池；每账号独立执行一次，可反复添加多账号；3 分钟无响应即超时。<br />同一份 Cline 登录态可分别在 Free / Pass 两个渠道各导入一次（两个池的账号互不相通）。",
+  },
+  cline_pass: {
+    title: "用 Cline 官方设备授权登录（ClinePass 订阅池）",
+    desc: "点「打开登录页」会跳转 WorkOS 设备授权页（已带用户码，直接确认即可）——<b>无需安装 Cline 客户端</b>。<br />确认后本机自动轮询完成入池；每账号独立执行一次，可反复添加多账号；3 分钟无响应即超时。<br />注意：订阅池只对已开通 ClinePass 的账号开放模型（免费账号请求会得到 403 无权限提示）。",
+  },
 };
 
 // 粘贴 JSON 的字段示例（placeholder 用，随渠道切换 token 字段名提示）
@@ -193,6 +203,9 @@ const pastePlaceholder = computed(() => {
   if (addChannel.value === "catpaw") {
     // CatPaw 的凭据是桌面端会话 Cookie 里的 X-Passport-Token 值 + 独立 user-uid（不在 token 里）
     return `{\n  "name": "主账号（选填）",\n  "accessToken": "X-Passport-Token 值（必填，取自 CatPaw 客户端登录态）",\n  "uid": "user-uid（建议填：它不在 token 里，缺省时按账号名解析）"\n}\n也可整段粘贴 Cookie 串（X-Passport-Token=…; …），会自动取出该字段`;
+  }
+  if (isClineChannel(addChannel.value)) {
+    return `{\n  "name": "主账号（选填）",\n  "accessToken": "workos: 开头的凭据（必填；不带 workos: 前缀会自动补上）",\n  "refreshToken": "选填（建议填：access token 只有 1 小时有效期）",\n  "uid": "选填，缺省从 token 的 external_id 声明解析"\n}\n也可直接从 ~/.cline/data/settings/providers.json 的 providers.cline.settings.auth 整段粘贴`;
   }
   const tokenKey = addChannel.value === "trae" ? "jwt" : "accessToken";
   const extra = addChannel.value === "raccoon" ? `\n  "officeIdentity": "选填，团队版组织标识",` : "";
@@ -807,6 +820,7 @@ function openAdd(ch: ProxyChannelView) {
   fileErr.value = false;
   oauthMsg.value = "";
   oauthMode.value = "";
+  oauthUserCode.value = "";
   callbackInput.value = "";
   callbackMsg.value = "";
   smsPhone.value = "";
@@ -843,7 +857,10 @@ async function beginOauth() {
   oauthMsg.value =
     addChannel.value === "raccoon"
       ? "已弹出应用内授权窗，完成登录后自动截获授权码加入号池（3 分钟超时）…"
-      : "已在浏览器打开官方登录页，完成授权后自动加入号池（3 分钟超时）…";
+      : isClineChannel(addChannel.value)
+        ? "已在浏览器打开 Cline 授权页（已带用户码，确认即可），确认后自动加入号池（3 分钟超时）…"
+        : "已在浏览器打开官方登录页，完成授权后自动加入号池（3 分钟超时）…";
+  oauthUserCode.value = "";
   callbackMsg.value = "";
   try {
     const r = await api.proxyOauthBegin(addChannel.value);
@@ -853,6 +870,7 @@ async function beginOauth() {
       return;
     }
     oauthMode.value = r.mode || "";
+    oauthUserCode.value = r.userCode || "";
   } catch (e) {
     oauthMsg.value = String((e as Error).message || e);
     oauthWaiting.value = false;
@@ -961,6 +979,7 @@ async function cancelOauth() {
   oauthWaiting.value = false;
   oauthMsg.value = "";
   oauthMode.value = "";
+  oauthUserCode.value = "";
 }
 
 function reauthAccount(acc: ProxyAccount) {
@@ -1227,6 +1246,7 @@ onMounted(() => {
     if (p.type === "oauth-done") {
       oauthWaiting.value = false;
       oauthMode.value = "";
+      oauthUserCode.value = "";
       oauthMsg.value = p.ok ? "登录成功，已加入号池（已自动签到）" : `登录失败：${p.message || ""}`;
       if (p.ok) {
         addOpen.value = false;
@@ -1627,6 +1647,10 @@ onUnmounted(() => {
                 </button>
               </div>
               <div v-if="callbackMsg" class="add-msg">{{ callbackMsg }}</div>
+              <!-- Cline 设备授权：用户码（授权页已预填；换设备/手动输码时需要这串） -->
+              <div v-if="oauthWaiting && oauthUserCode" class="add-msg">
+                用户码：<b class="mono">{{ oauthUserCode }}</b>（授权页已预填，直接确认即可）
+              </div>
               <div v-if="oauthMsg" class="add-msg" :class="{ err: !oauthWaiting && oauthMsg.includes('失败') }">{{ oauthMsg }}</div>
             </div>
 
