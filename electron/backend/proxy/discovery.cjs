@@ -1540,6 +1540,11 @@ async function beginClineOAuth(channel, onDone) {
   const c = (rules.get("headers.json") || {}).cline || {};
   const start = await clineLogin.startDeviceAuth(c, adapters.httpJson);
   if (!start.ok) return { ok: false, message: start.message };
+  // startDeviceAuth 是网络 await：在途期间用户可能已另发登录并占位了 oauthSession
+  // （beginOAuth 入口的判空守卫挡不住这扇窗口——本流程占位前 oauthSession 一直是 null）。
+  // 此时不覆盖新会话：否则新会话的 timer 孤儿化（tick 首拍 state 不匹配即退出、deadline
+  // 兜底永不生效）、onDone 永不触发，前端该渠道卡死在「登录中」
+  if (oauthSession) return { ok: false, message: "已有进行中的登录，请先完成或取消" };
   const deviceCode = start.deviceCode;
   const intervalMs = Math.max(2000, Number(start.intervalMs) || 5000);
   // 会话超时对齐上游设备码有效期（实测 expires_in:300 = 5 分钟）：通用渠道的 3 分钟偏紧，
