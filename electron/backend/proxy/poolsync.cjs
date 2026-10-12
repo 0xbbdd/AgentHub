@@ -473,15 +473,19 @@ async function run(opts) {
   // 远端同步跨模块互斥（issue #92）：技能/用量/记忆同步进行中时跳过本轮
   if (!webdav.tryBeginSync("proxy")) throw new Error("其他模块的远端同步正在进行，本轮已跳过");
 
-  state = { ...state, running: true, stage: "connect", detail: "", lastError: "", percent: 0, channel };
-  cancelSignal = new AbortController();
-  webdav.setActiveSignal(cancelSignal.signal);
-  const persisted = loadPersisted();
-  const myId = deviceId();
-  const myName = deviceName();
-  const result = { pulled: 0, added: 0, updated: 0, removed: 0, skipped: 0, uploaded: false, skippedUpload: false };
-
+  // 占锁与收尾必须同处一个保护块（审查加固）：原先 state/cancelSignal/deviceId 等初始化
+  // 位于 try 之外，一旦其中任何一步抛错，finally 里的 webdav.endSync() 不会执行，
+  // 全局同步槽位（syncRunTag）将永久被占，技能/用量/号池/记忆四个模块的同步入口
+  // 全部被拒直到重启应用。当前这些调用在现有实现下不抛，但结构上必须收紧。
   try {
+    state = { ...state, running: true, stage: "connect", detail: "", lastError: "", percent: 0, channel };
+    cancelSignal = new AbortController();
+    webdav.setActiveSignal(cancelSignal.signal);
+    const persisted = loadPersisted();
+    const myId = deviceId();
+    const myName = deviceName();
+    const result = { pulled: 0, added: 0, updated: 0, removed: 0, skipped: 0, uploaded: false, skippedUpload: false };
+
     // ---- 连接检查 + 远端目录就绪 ----
     setStage("connect", "检查远端连接…");
     const t = await webdav.test(w);
