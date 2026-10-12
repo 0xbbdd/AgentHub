@@ -1058,13 +1058,18 @@ function buildApp(settings) {
   app.get("/v1/models", (_req, res) => {
     const st = settings();
     const aliveCache = new Map();
-    const poolAlive = (c) => {
+    // 「有没有号池」判定（issue #90）：只看渠道是否开启 + 池里是否有账号条目，
+    // **刻意不判账号此刻能否出请求**（冷却 / 额度耗尽 / 过期 / 停用都仍算「有号池」）——
+    // 这类暂时不可用保留展示，请求时给 503/402 明确文案，避免客户端模型列表整体闪没。
+    // 注意与 routeUsable() 判据不同（后者服务于路由，要求「此刻真的出得了请求」）；
+    // 两者口径不同是刻意的，切勿互相替换。
+    const channelHasAnyAccount = (c) => {
       if (!aliveCache.has(c)) {
         aliveCache.set(c, adapters.channelOn(c, st) && pool.poolAccounts(c).length > 0);
       }
       return aliveCache.get(c);
     };
-    res.json({ object: "list", data: adapters.listableModels(st).filter((m) => (m.sources || []).some(poolAlive)) });
+    res.json({ object: "list", data: adapters.listableModels(st).filter((m) => (m.sources || []).some(channelHasAnyAccount)) });
   });
 
   // 探活：无健康渠道时 503（只看启用渠道：全关时探活如实报不可用）
