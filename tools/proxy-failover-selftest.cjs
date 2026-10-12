@@ -363,6 +363,11 @@ async function main() {
         "rev-failover": { trae: "glm-5.3", workbuddy_ai: "glm-5.3", catpaw: "rev-failover" },
       };
       mode.trae = "ok";
+      // 前置用例（T1/T4a/T4b 的 3 次 500）会把 trae 账号打成账号级 5xx 熔断（连续 3 次 →
+      // 30 分钟冷却），压缩节奏下这个窗口不会自然过期；可用性优先排序会正确地绕开它落到
+      // 另一健康渠道。本用例的意图是「key 指到无有效映射渠道时落到有映射的 trae」，
+      // 故先复位该账号冷却，让断言保持确定性（与 T9 头部同款复位）
+      store.updateAccount(t1, { status: "online", coolUntil: 0, coolReason: "" });
       store.updateKey(k.id, { route: "catpaw" });
       const h10 = { ...hits };
       rr = await call({ model: "rev-failover", stream: false, messages: bodyMsg });

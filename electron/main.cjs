@@ -318,6 +318,9 @@ function registerModuleToggle() {
         if (enabled) usageScheduler.start();
         else {
           usageScheduler.stop();
+          // 在途同步一并取消（与 proxy 停用时 poolsync.cancel 对称）：否则收尾写库会把
+          // 刚关掉的库惰性重开，违背「停用后后台完全不运行」的语义
+          try { usagesync.cancel(); } catch { /* 无在途任务时无碍 */ }
           try { usagedb.close(); } catch { /* 关闭失败无碍，重新启用时惰性重开 */ }
         }
       } else if (m === "proxy") {
