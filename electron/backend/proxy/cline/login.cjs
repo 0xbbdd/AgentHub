@@ -17,6 +17,7 @@
 // 的 oauthSession tick 里（与其它渠道同一套会话/超时/取消机制，少一套状态管理）。
 "use strict";
 const credentials = require("./credentials.cjs");
+const headersMod = require("./headers.cjs");
 
 /** 表单 POST（WorkOS 两个端点都是 x-www-form-urlencoded，不是 JSON） */
 async function postForm(cfg, path, body, httpJson) {
@@ -105,9 +106,8 @@ function upstreamErrorMessage(data, fallback) {
  */
 async function registerSession(cfg, workosAccessToken, workosRefreshToken, httpJson) {
   const base = String(cfg.apiBase || "https://api.cline.bot/api/v1").replace(/\/+$/, "");
-  const headers = { "content-type": "application/json", accept: "application/json" };
-  const c = cfg || {};
-  for (const [k, v] of Object.entries(c.upstreamHeaders || {})) headers[k.toLowerCase()] = String(v);
+  // 伪装头走唯一实现（默认值 ∪ 逐键覆盖；空串=不发；协议必需头拒绝覆盖），与对话/续期同一口径
+  const headers = headersMod.buildUpstreamHeaders(cfg, { "content-type": "application/json", accept: "application/json" });
   const r = await httpJson(`${base}${cfg.registerPath || "/auth/register"}`, {
     method: "POST",
     headers,

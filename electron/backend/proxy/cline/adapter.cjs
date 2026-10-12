@@ -34,6 +34,7 @@ const credentials = require("./credentials.cjs");
 const modelsMod = require("./models.cjs");
 const balanceMod = require("./balance.cjs");
 const refreshMod = require("./refresh.cjs");
+const headersMod = require("./headers.cjs");
 
 /** 默认思考档位（参考实现 cline-proxy 同值；官方 CLI 未显式给档时的默认形态） */
 const DEFAULT_REASONING_EFFORT = "high";
@@ -107,15 +108,7 @@ function makeCline(channel, deps) {
     return entries;
   }
 
-  /** 伪装头（默认值 ∪ 逐键覆盖；空串=该头不发），键统一小写出（fetch 的 Headers 语义） */
-  function disguiseHeaders(c) {
-    const out = {};
-    for (const [k, v] of Object.entries(c.upstreamHeaders || {})) {
-      const val = String(v == null ? "" : v);
-      if (val) out[k.toLowerCase()] = val;
-    }
-    return out;
-  }
+  /** 伪装头统一走 headers.cjs（对话/登录/续期三处同一实现），见下方 chat/headers 的 buildUpstreamHeaders 调用 */
 
   return {
     id: channel,
@@ -156,7 +149,7 @@ function makeCline(channel, deps) {
     /** 非会话语义：标准 OpenAI 兼容单发请求 */
     headers() {
       const c = cfg();
-      return { "content-type": "application/json", accept: "text/event-stream", ...disguiseHeaders(c) };
+      return headersMod.buildUpstreamHeaders(c, { "content-type": "application/json", accept: "text/event-stream" });
     },
 
     /**
@@ -186,14 +179,13 @@ function makeCline(channel, deps) {
       if (!token) throw Object.assign(new Error("该账号没有凭据"), { status: 401 });
       const base = String(c.apiBase || "https://api.cline.bot/api/v1").replace(/\/+$/, "");
       const { body: out, sessionId } = this.rewriteBody(model, body);
-      const headers = {
+      const headers = headersMod.buildUpstreamHeaders(c, {
         "content-type": "application/json",
         accept: "text/event-stream",
         authorization: `Bearer ${token}`,
         // 任务标识：与 body 的 session_id 同值（官方 CLI 形态）
         "x-task-id": sessionId,
-        ...disguiseHeaders(c),
-      };
+      });
 
       let resp = null;
       let cancelTimer = () => {};

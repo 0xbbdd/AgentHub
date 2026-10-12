@@ -14,6 +14,7 @@
 // 不是 Cline 客户端文件——providers.json 绝不回写（方案 §9）。
 "use strict";
 const credentials = require("./credentials.cjs");
+const headersMod = require("./headers.cjs");
 
 /** 上游错误体 → 可读文案（{"error":"..."} 与 {"error":{"code":..,"message":..}} 都认） */
 function upstreamErrorMessage(data, fallback) {
@@ -38,8 +39,8 @@ async function refreshToken(p) {
   const { cfg, refreshToken, httpJson } = p;
   if (!refreshToken) return { ok: false, message: "无 refreshToken，请重新登录或导入登录态" };
   const base = String(cfg.apiBase || "https://api.cline.bot/api/v1").replace(/\/+$/, "");
-  const headers = { "content-type": "application/json", accept: "application/json" };
-  for (const [k, v] of Object.entries(cfg.upstreamHeaders || {})) headers[k.toLowerCase()] = String(v);
+  // 伪装头走唯一实现（与对话/登录同一口径）：空串=不发、协议必需头拒绝覆盖
+  const headers = headersMod.buildUpstreamHeaders(cfg, { "content-type": "application/json", accept: "application/json" });
   const r = await httpJson(`${base}${cfg.refreshPath || "/auth/refresh"}`, {
     method: "POST",
     headers,

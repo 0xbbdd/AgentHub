@@ -25,6 +25,7 @@ const assert = (cond, msg) => {
 const clineCredentials = require("../electron/backend/proxy/cline/credentials.cjs");
 const clineLogin = require("../electron/backend/proxy/cline/login.cjs");
 const clineModels = require("../electron/backend/proxy/cline/models.cjs");
+const clineHeaders = require("../electron/backend/proxy/cline/headers.cjs");
 const { makeCline, parseTryAgainMs } = require("../electron/backend/proxy/cline/adapter.cjs");
 const rulesMod = require("../electron/backend/proxy/rules.cjs");
 const storeMod = require("../electron/backend/proxy/store.cjs");
@@ -120,7 +121,21 @@ function offline() {
     assert(parseTryAgainMs("no wait text") === 0, "无文案归 0");
   }
 
-  // ⑦ 双池注册与配置（双表一致性由 consistencyReport 兜底）
+  // ⑦ 上游请求头唯一实现（对话/登录/续期三处共用，方案 §3 契约）
+  {
+    const h = clineHeaders.buildUpstreamHeaders(
+      { upstreamHeaders: { "User-Agent": "Cline/9.9", "X-Custom": "", "Content-Type": "text/plain", Authorization: "Bearer hack", "X-Task-ID": "hack" } },
+      { "content-type": "application/json", accept: "text/event-stream", authorization: "Bearer real", "x-task-id": "sess_1" }
+    );
+    assert(h["user-agent"] === "Cline/9.9", "伪装头按小写键覆盖默认值");
+    assert(!("x-custom" in h), "覆盖值空串 = 该头不发（显式删除）");
+    assert(h["content-type"] === "application/json", "Content-Type 拒绝覆盖（协议必需）");
+    assert(h.accept === "text/event-stream", "Accept 拒绝覆盖（协议必需）");
+    assert(h.authorization === "Bearer real", "Authorization 拒绝覆盖（协议必需）");
+    assert(h["x-task-id"] === "sess_1", "X-Task-ID 拒绝覆盖（每请求动态生成）");
+  }
+
+  // ⑧ 双池注册与配置（双表一致性由 consistencyReport 兜底）
   {
     const rules = rulesMod.DEFAULTS;
     const chIds = storeMod.CHANNELS.map((c) => c.id);
