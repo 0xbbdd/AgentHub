@@ -79,7 +79,8 @@ function normalizeSubscription(plan, parseExpiresAt) {
  * 余额查询主流程（纯协议函数，由 adapter.queryCredits 组装 env）：
  *   env = { cfg, token, httpJson, userId?, jwtAccountId?, parseExpiresAt }
  * 成功返回 { credits, expiresAt, unit, wallets, subscription, detail }；
- * 登录态失效抛 authError；其余失败抛错（由 adapter 包成 { error }）。
+ * 登录态失效抛 authError；余额响应缺 balance 字段抛错（不返回 0——0 会被判成「余额耗尽」）；
+ * 其余失败抛错（由 adapter 包成 { error }）。
  *
  * credits 的既有边界：store.updateAccount 把 < -1 的余额归 0（-1 是企业版无限哨兵）——
  * Cline 欠费通常是小额负值（-0.02 级），能如实落库展示；大额欠费显示 0，
@@ -93,15 +94,17 @@ async function queryBalance(env) {
   const balancePayload = await getJson(base, `/users/${encodeURIComponent(userId)}/balance`, token, httpJson);
   const data = (balancePayload && balancePayload.data) || balancePayload || {};
   const rawBalance = Number(data.balance);
-  const credits = Number.isFinite(rawBalance) ? rawBalance / CREDITS_PER_MICRO : null;
-  const wallets = [];
-  if (credits !== null) {
-    wallets.push({
+  // 上游 200 但缺 balance（字段改名/结构变化）：**如实报错**，不返回 0——0 会落库后被
+  // routeUsable 当成「余额已耗尽」把可用渠道静默踢出（且污染账号余额），违背方案 §7「如实展示」
+  if (!Number.isFinite(rawBalance)) throw new Error("Cline 余额响应缺少 balance 字段（上游结构可能已变）");
+  const credits = rawBalance / CREDITS_PER_MICRO;
+  const wallets = [
+    {
       type: "cline_credit",
       displayName: credits < 0 ? "Cline Credits（已欠费）" : "Cline Credits",
       balance: Math.round(credits * 100) / 100,
-    });
-  }
+    },
+  ];
   // 订阅（404 = 没订阅，正常状态；其余失败不影响余额结果）
   let subscription = null;
   let subscriptionError = "";
@@ -112,7 +115,7 @@ async function queryBalance(env) {
     subscriptionError = String((e && e.message) || e).slice(0, 120);
   }
   return {
-    credits: credits === null ? 0 : Math.round(credits * 100) / 100,
+    credits: Math.round(credits * 100) / 100,
     // credit 余额无 token 到期概念：expire 信息在 subscription 里，不冒充凭据到期
     expiresAt: 0,
     unit: "credit",
@@ -120,7 +123,7 @@ async function queryBalance(env) {
     subscription,
     detail: {
       userId,
-      ...(credits === null ? {} : { balanceMicrocredits: rawBalance }),
+      balanceMicrocredits: rawBalance,
       ...(subscriptionError ? { subscriptionError } : {}),
     },
   };

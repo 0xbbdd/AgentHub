@@ -26,6 +26,7 @@ const clineCredentials = require("../electron/backend/proxy/cline/credentials.cj
 const clineLogin = require("../electron/backend/proxy/cline/login.cjs");
 const clineModels = require("../electron/backend/proxy/cline/models.cjs");
 const clineHeaders = require("../electron/backend/proxy/cline/headers.cjs");
+const clineBalance = require("../electron/backend/proxy/cline/balance.cjs");
 const { makeCline, parseTryAgainMs } = require("../electron/backend/proxy/cline/adapter.cjs");
 const rulesMod = require("../electron/backend/proxy/rules.cjs");
 const storeMod = require("../electron/backend/proxy/store.cjs");
@@ -360,6 +361,19 @@ async function e2e() {
       assert(q.detail.balanceMicrocredits === -17704, "原始微 credit 留存排障");
       assert(q.subscription === null && !q.detail.subscriptionError, "plan 404 是正常态（没订阅），不算失败");
       assert(fu.seen.other.some((s) => /\/users\/usr-01M2VW\/balance$/.test(s.path)), "余额路径用账号 uid（usr-...）");
+      // 上游 200 但缺 balance 字段：必须如实报错，不能返回 0——
+      // 0 会落库后被 routeUsable 判成「余额已耗尽」，把可用渠道静默踢出
+      let balErr = null;
+      try {
+        await clineBalance.queryBalance({
+          cfg: rules.get("headers.json").cline,
+          token: "workos:x",
+          httpJson: async () => ({ status: 200, ok: true, data: { data: { userId: "usr-x" }, success: true } }),
+          userId: "usr-x",
+          parseExpiresAt: clineCredentials.parseExpiresAt,
+        });
+      } catch (e) { balErr = e; }
+      assert(balErr && /balance/.test(balErr.message), "上游 200 但缺 balance 字段 → 如实报错（不返回 0）");
     }
 
     // —— 5. 续期：裸 JWT 补前缀 + 轮换 + ISO expiresAt + camelCase grantType
