@@ -1487,6 +1487,11 @@ async function beginQoderOAuth(channel, onDone) {
       .httpJson(pollUrl.toString(), { method: "GET", headers: { Accept: "application/json" } })
       .catch(() => null);
 
+    // 会话一致性守卫（对齐 Cline 版）：await 在途期间用户可能已取消并另发登录
+    // （oauthSession 被替换）——旧 tick 的结果必须丢弃。不守卫的话 finishOAuth 取的是
+    // **当前全局**会话，会把新登录连同其 timer 一起终结、并把旧结果经新会话的 onDone 回给前端
+    if (oauthSession !== session) return;
+
     // 404 = 尚未完成登录（客户端同款：继续轮询）。网络错误/5xx 也继续等，由 deadline 兜底。
     if (r && r.ok && r.data && typeof r.data.token === "string" && typeof r.data.refresh_token === "string") {
       try {
@@ -1495,9 +1500,11 @@ async function beginQoderOAuth(channel, onDone) {
           refreshToken: r.data.refresh_token,
           machineId,
         });
+        // saveQoderAccount 也是网络 await：恢复后同样先确认会话未被取消/替换，再收尾
+        if (oauthSession !== session) return;
         finishOAuth({ ok: true, id: saved.id, uid: saved.uid });
       } catch (e) {
-        finishOAuth({ ok: false, message: String((e && e.message) || e) });
+        if (oauthSession === session) finishOAuth({ ok: false, message: String((e && e.message) || e) });
       }
       return;
     }

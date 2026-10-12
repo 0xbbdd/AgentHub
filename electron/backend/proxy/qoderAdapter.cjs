@@ -73,9 +73,13 @@ const newId = () => crypto.randomUUID();
 /** 把 OpenAI messages 转成 Qoder 的 content 数组格式 */
 function toQoderMessages(messages) {
   const out = [];
+  const systemHeads = [];
+  // system 统一前置（参考实测：上游只认首条 system，放中间会失效）；OpenAI 新协议的
+  // developer 角色归并为 system（静默丢弃会让用户的系统提示词无声消失）
   for (const m of Array.isArray(messages) ? messages : []) {
     if (!m || typeof m !== "object") continue;
-    const role = String(m.role || "user");
+    let role = String(m.role || "user");
+    if (role === "developer") role = "system";
     if (!["system", "user", "assistant", "tool"].includes(role)) continue;
     let content = m.content;
     if (typeof content === "string") {
@@ -102,9 +106,11 @@ function toQoderMessages(messages) {
     const hasContent = Array.isArray(content) && content.length > 0;
     const hasTools = Array.isArray(item.tool_calls) && item.tool_calls.length > 0;
     if (!hasContent && !hasTools) continue;
-    out.push(item);
+    if (role === "system") systemHeads.push(item);
+    else out.push(item);
   }
-  return out;
+  // 全部 system（含 developer 归并）按原相对顺序置首
+  return [...systemHeads, ...out];
 }
 
 /** tools 透传：OpenAI 形态 {type:"function", function:{…}} 实测可被上游接受 */
@@ -160,8 +166,16 @@ function makeQoder(product, deps) {
           qoderSignerDown: true,
         });
       }
-      entry = { session, at: Date.now(), inUse: 0 };
-      sessionPool.set(k, entry);
+      // createSession 在途时同 key 请求可能已并发创建：命中则 free 新实例复用旧条目，
+      // 否则先到的 entry 成孤儿 wasm 会话（release 只减自己的 inUse，销毁只发生在池淘汰）
+      const existing = sessionPool.get(k);
+      if (existing) {
+        try { session.free && session.free(); } catch { /* 已释放 */ }
+        entry = existing;
+      } else {
+        entry = { session, at: Date.now(), inUse: 0 };
+        sessionPool.set(k, entry);
+      }
       while (sessionPool.size > SESSION_POOL_MAX) {
         let evictKey = null;
         let oldest = Infinity;
@@ -410,6 +424,13 @@ function makeQoder(product, deps) {
               emit({ type: "error", status: 402, code: 116, message: msg });
               return;
             }
+            // 10605 免费模型排队中（参考实测 403+10605，官方 CLI 按可重试排队态处理）：
+            // 按 429 归类走通用退避（无明示重置时间时 1s 重试一次再落冷却），
+            // 落 502 会被当成「上游不稳定」熔断节奏，高峰期整池无自救
+            if (String(innerCode) === "10605" || /排队/.test(String(msg))) {
+              emit({ type: "error", status: 429, code: 10605, message: `Qoder 模型排队中：${String(msg)}` });
+              return;
+            }
             const st = code === "UNAUTHORIZED" || /token|unauthor/i.test(String(msg)) ? 401 : 502;
             emit({ type: "error", status: st, code: innerCode || code, message: String(msg) });
             return;
@@ -520,7 +541,8 @@ function makeQoder(product, deps) {
      */
     async checkin(account, secrets) {
       const c = this.cfg();
-      const base = c.openApi || c.quotaBase || "https://openapi.qoder.com.cn";
+      // 兜底对齐 chat（auth.PRODUCTS[product].openApi）：INTL 配置缺失时不再拿 INTL token 打 CN 域必 401
+      const base = c.openApi || c.quotaBase || auth.PRODUCTS[product].openApi || "https://openapi.qoder.com.cn";
       const uid = (account && account.uid) || "";
       const risk = auth.readRiskIdentity ? auth.readRiskIdentity(product, uid) : null;
       if (!risk) {
@@ -540,7 +562,7 @@ function makeQoder(product, deps) {
         "Cosy-MachineType": risk.machineType,
         "Cosy-MachineCode": risk.machineCode,
       };
-      const listUrl = `${String(base).replace(/\/+$/, "")}/sash/api/v1/me/campaigns`;
+      const listUrl = `${String(base).replace(/\/+$/, "")}/sash/api/v1/me/campaigns?forceRefresh=true`;
       let list;
       try {
         list = await httpJson(listUrl, { method: "GET", headers: hdrs });
@@ -596,6 +618,13 @@ function makeQoder(product, deps) {
           continue;
         }
         if (r.status === 401 || r.status === 403) return { authError: true, message: "凭证失效" };
+        // 409 + ALREADY_CLAIMED 是上游并发/重放时的「今天已领过」成功语义（参考实测），
+        // 落 !r.ok 会误报领取失败
+        if (r.status === 409 && r.data && r.data.result === "ALREADY_CLAIMED") {
+          replayedAny += 1;
+          lastMsg = "今日已领取";
+          continue;
+        }
         if (!r.ok || !r.data) {
           const code = r.data && r.data.errorCode;
           // GRANT_NOT_FOUND 是活动页预期的可重试分支（服务端状态未就绪），非致命
@@ -629,7 +658,7 @@ function makeQoder(product, deps) {
      */
     async checkinStatus(account, secrets) {
       const c = this.cfg();
-      const base = c.openApi || "https://openapi.qoder.com.cn";
+      const base = c.openApi || auth.PRODUCTS[product].openApi || "https://openapi.qoder.com.cn";
       const uid = (account && account.uid) || "";
       const risk = auth.readRiskIdentity ? auth.readRiskIdentity(product, uid) : null;
       if (!risk) return { unavailable: true, message: "需安装 Qoder 客户端（风控身份不可用）" };
@@ -647,7 +676,7 @@ function makeQoder(product, deps) {
         "Cosy-MachineCode": risk.machineCode,
       };
       try {
-        const list = await httpJson(`${String(base).replace(/\/+$/, "")}/sash/api/v1/me/campaigns`, { method: "GET", headers: hdrs });
+        const list = await httpJson(`${String(base).replace(/\/+$/, "")}/sash/api/v1/me/campaigns?forceRefresh=true`, { method: "GET", headers: hdrs });
         if (list.status === 401 || list.status === 403) return { authError: true, message: "凭证失效" };
         if (!list.ok || !list.data) return { unavailable: true, message: `活动列表 HTTP ${list.status}` };
         const campaigns = Array.isArray(list.data.campaigns) ? list.data.campaigns : [];
