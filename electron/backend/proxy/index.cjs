@@ -1027,7 +1027,11 @@ function register(ipcMain) {
         fallback: (cfg.modelFallback || {})[m.id] || "",
         custom: (cfg.modelCustom || {})[m.id] || undefined,
       };
-      // 原始渠道目录只需随响应返回一次；渲染层从首条读取，避免新增 IPC 和重复传输。
+      // 原始渠道目录只需随响应返回一次：渲染层从首条读取（ProxyModelsView 的
+      // `models[0]?.channelModelIds || {}`），避免新增 IPC 与重复传输。
+      // 该隐式契约是安全的——空列表时不挂载也不会丢有效数据：mergedModels 为空 ⟺ 所有渠道
+      // ad.models() 均为空（见 adapters.mergedModels：逐渠道并集、无过滤），此时
+      // channelModelIds 各值本就为空数组。切勿把本字段挪到别处或改成逐条挂载（会重复传输）。
       if (index === 0) item.channelModelIds = channelModelIds;
       return item;
     });
