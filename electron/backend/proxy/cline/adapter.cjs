@@ -343,7 +343,9 @@ function makeCline(channel, deps) {
       }
       if (status === 429) {
         const ms = parseTryAgainMs(`${e.body || ""} ${e.message || ""}`);
-        return { kind: "rate", switchable: true, status: 429, resetMs: ms > 0 ? Date.now() + ms : 0 };
+        // 文案解析不出时接住 fetchStream 已解析的 Retry-After 三头族（通用层同款兜底）：
+        // 不接住的话 resetMs=0 会先白打一次 1s 就地重试，再落 softBackoff 短冷却，墙钟对齐失效
+        return { kind: "rate", switchable: true, status: 429, resetMs: ms > 0 ? Date.now() + ms : (Number(e.retryAfterMs) > 0 ? Date.now() + Number(e.retryAfterMs) : 0) };
       }
       return null;
     },
