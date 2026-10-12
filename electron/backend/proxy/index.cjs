@@ -4,6 +4,7 @@
 "use strict";
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto"); // JSON 导入账号的 uid 派生用（Node 22 全局 crypto 是 WebCrypto，无 createHash）
 const { shell } = require("electron");
 const config = require("../config.cjs");
 const store = require("./store.cjs");

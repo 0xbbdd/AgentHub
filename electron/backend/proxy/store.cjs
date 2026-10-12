@@ -245,6 +245,9 @@ function gc() {
   const logCut = Date.now() - 30 * 86400000;
   db.prepare("DELETE FROM op_logs WHERE ts < ?").run(logCut);
   db.prepare("DELETE FROM op_logs WHERE id NOT IN (SELECT id FROM op_logs ORDER BY id DESC LIMIT 50000)").run();
+  // 流水行数上限：未认证请求也写流水（401 早退处记账），仅 90 天裁剪挡不住
+  // 失控进程刷 401 撑大 stats.db——超限删最老，口径对齐 op_logs 的双上限
+  db.prepare("DELETE FROM usage_requests WHERE id NOT IN (SELECT id FROM usage_requests ORDER BY id DESC LIMIT 200000)").run();
 }
 
 function dayStr(ts) {
