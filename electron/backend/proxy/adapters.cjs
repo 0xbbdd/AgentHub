@@ -1122,8 +1122,14 @@ function makeWorkBuddy(channelId) {
         if (Number.isFinite(mct) && mct > 0 && out.max_tokens == null) out.max_tokens = mct;
         delete out.max_completion_tokens;
       }
-      // tool_choice 归一（对象报 400 code 11101）：{type:function} → name；none→none；any/required→required；其余→auto
-      if (out.tool_choice && typeof out.tool_choice === "object") {
+      // tool_choice 归一（对象报 400 code 11101）：{type:function} → name；none→none；any/required→required；其余→auto。
+      // 字符串 "none" 也要撤 tools/functions（对齐 trae rewriteBody 与参考 normalize 实测：
+      // 上游语义是不调用工具时连声明一起撤，保留 tools 会报参数错误）
+      if (out.tool_choice === "none") {
+        delete out.tools;
+        delete out.functions;
+        delete out.tool_choice;
+      } else if (out.tool_choice && typeof out.tool_choice === "object") {
         const tc = out.tool_choice;
         if (tc.function && tc.function.name) out.tool_choice = tc.function.name;
         else if (tc.type === "none") out.tool_choice = "none";
@@ -4099,7 +4105,9 @@ function modelOwners(model, cfg) {
   const lower = String(model || "").toLowerCase();
   const mapped = [];
   const entry = reverseAliasEntry(model, c);
-  if (entry) mapped.push(...Object.keys(entry).filter((ch) => ADAPTERS[ch] && reverseAliasTarget(model, ch, c)));
+  // channelOn 过滤（与目录循环 4114 同口径）：反向映射命中的已关闭渠道不算归属——
+  // 否则统一请求名的唯一归属/固定策略可把请求强制打进已关闭渠道
+  if (entry) mapped.push(...Object.keys(entry).filter((ch) => ADAPTERS[ch] && channelOn(ch, c) && reverseAliasTarget(model, ch, c)));
   const out = [];
   const seen = new Set();
   for (const ch of mapped) {

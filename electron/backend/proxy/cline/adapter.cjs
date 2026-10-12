@@ -196,6 +196,9 @@ function makeCline(channel, deps) {
         .find((v) => v) || DEFAULT_REASONING_EFFORT;
       out.reasoning_effort = effort;
       delete out.reasoningEffort;
+      // max_tokens ≤ 0 按缺失处理（对齐参考 adapter.rs：0/负数不算显式小值，对上游只会是
+      // 参数错误）；保留「缺失时透传缺失」的既有取舍（本适配器刻意不注入默认值）
+      if (Number(out.max_tokens) <= 0) delete out.max_tokens;
       return { body: out, sessionId };
     },
 
@@ -294,7 +297,7 @@ function makeCline(channel, deps) {
           httpJson,
           // uid 已在导入/登录时解析为 usr-...（外部 id）；没有时从 JWT 兜底
           userId: String((account && account.uid) || ""),
-          jwtAccountId: credentials.accountIdFromJwt(secrets.token),
+          jwtAccountId: credentials.accountIdFromJwt(secrets && secrets.token),
           parseExpiresAt: credentials.parseExpiresAt,
         });
       } catch (e) {

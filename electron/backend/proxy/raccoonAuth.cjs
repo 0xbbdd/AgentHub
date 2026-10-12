@@ -76,7 +76,9 @@ function writeTokens({ accessToken, refreshToken, officeIdentity } = {}) {
   if (accessToken) next.access_token = String(accessToken);
   if (refreshToken) next.refresh_token = String(refreshToken);
   if (officeIdentity) next.office_identity = String(officeIdentity);
-  const tmp = `${file}.agenthub-tmp`;
+  // 临时文件带进程号（对齐参考 credentials.rs）：双方同时刷新不互踩
+  // （固定名会让并发写一方把另一方的半成品 rename 走）
+  const tmp = `${file}.agenthub-${process.pid}.tmp`;
   try {
     fs.writeFileSync(tmp, JSON.stringify(next, null, 2), { encoding: "utf8", mode: 0o600 });
     fs.renameSync(tmp, file);
