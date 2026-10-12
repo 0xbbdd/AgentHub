@@ -377,7 +377,9 @@ function applyCool(accId, model, cls, message) {
   // 参数/模型配置类错误与账号无关，不罚号也不记错；其余落冷却的错误都记入账号最近错误（号池气泡展示）
   // slow（首字节超时）同样不记错：它是"这次请求太大/上游这一刻慢"，记在账号上只会留下误导性的
   // 长期错误气泡（实测一次 54 万 token 请求超时，账号卡片挂了两天的"上游首字节超时"）
-  if (cls.kind !== "model_config" && cls.kind !== "bad_params" && cls.kind !== "prompt_too_long" && cls.kind !== "slow" && message) {
+  // model_denied（Cline 403/404：该账号对该模型无权限 / 模型名不对）同样不记错：
+  // 账号本身是好的，错的是「账号×模型」组合或模型名
+  if (cls.kind !== "model_config" && cls.kind !== "bad_params" && cls.kind !== "prompt_too_long" && cls.kind !== "slow" && cls.kind !== "model_denied" && message) {
     store.noteError(accId, message);
   }
   switch (cls.kind) {
@@ -385,6 +387,9 @@ function applyCool(accId, model, cls, message) {
     case "bad_params": // 11101：参数问题不罚号（换号仍会发生，由外层轮转决定）
     case "prompt_too_long": // 11115：同一 body 换任何号都超限，零动作
     case "slow": // 首字节超时：请求/上游侧的慢，账号本身没问题，零冷却（外层仍会换号重试）
+    case "model_denied": // Cline 403（未订阅该模型/产品面校验）与 404（模型名不对）：
+      // 确定性拒绝，冷却账号会把"换一个模型就能用"的账号无意义地静默跳过——
+      // 零动作、如实透传（classifyError 已置 switchable:false，链在此终止不再换号）
       return;
     case "model_rate":
       pool.coolAccountModel(accId, model, cls.resetMs || Date.now() + 600000, message); // 6004：对齐墙钟优先，缺省 10min

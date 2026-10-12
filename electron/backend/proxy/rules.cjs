@@ -314,9 +314,6 @@ const DEFAULTS = {
       workosTokenPath: "/user_management/authenticate",
       // 设备授权页兜底（正常情况用上游返回的 verification_uri）
       deviceVerifyFallback: "https://authkit.cline.bot/device",
-      // access token 有效期实测 1 小时（exp-iat=3600）：临期窗口取 10 分钟（1/6），
-      // 在「不过度消耗 refresh 轮换」与「不把临期 token 发上去挨 401」之间取平衡
-      refreshWindowSec: 600,
       // 伪装头（默认值；逐键可覆盖，空串=该头不发）
       upstreamHeaders: {
         "User-Agent": "Cline/3.0.62",
