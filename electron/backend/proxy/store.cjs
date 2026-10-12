@@ -145,6 +145,15 @@ const QODER_INTL_ENABLED = true;
 const AUTOCLAW_INTL_ENABLED = true;
 
 const CHANNELS = [
+  // Cline 双池（免费额度池 / ClinePass 订阅池）：标准 OpenAI 兼容上游（api.cline.bot/api/v1），
+  // 鉴权 Authorization: Bearer workos:<JWT>，无签名、无会话、无桌面端依赖——登录走 WorkOS
+  // 设备授权（RFC 8628，四步：authorize/device → 浏览器确认 → authenticate 轮询 → /auth/register
+  // 换 Cline 会话令牌）。两个独立 channel id 不做成「一家的一个选项」：界面混池、模型启停键冲突、
+  // 同名模型短名归属漂移都是混池建模的真实缺陷（参考实现 agent2api 同款拆分）。
+  // 池是身份不是账号属性，cline_free 标 costTier "free"（免费额度池，cost-first 路由正确优先），
+  // cline_pass 不标（付费订阅，错标 free 会让 cost-first 烧钱）。
+  { id: "cline_free", display: "Cline Free", domain: "api.cline.bot", costTier: "free" },
+  { id: "cline_pass", display: "Cline Pass", domain: "api.cline.bot" },
   { id: "trae", display: "Trae SOLO CN", domain: "api.trae.cn" },
   { id: "workbuddy", display: "WorkBuddy CN", domain: "copilot.tencent.com" },
   { id: "workbuddy_ai", display: "WorkBuddy AI", domain: "www.workbuddy.ai" },
