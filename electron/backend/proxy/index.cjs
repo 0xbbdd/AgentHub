@@ -901,8 +901,10 @@ function register(ipcMain) {
     // 带授权地址的渠道在系统浏览器打开（小浣熊走内嵌授权窗，不回 url——深链回调绝不能进浏览器
     // 再被系统交给官方客户端：授权码是一次性的，官方客户端消费掉 AgentHub 就永远收不到回调）
     if (r.ok && r.url) await shell.openExternal(r.url);
-    // port 一并回传：AutoClaw 国际版回环登录会占用 z.ai 登记的白名单端口，前端展示/排障需要它
-    return r.ok ? ok({ url: r.url, mode: r.mode, port: r.port }) : fail(r.message);
+    // port 一并回传：AutoClaw 国际版回环登录会占用 z.ai 登记的白名单端口，前端展示/排障需要它；
+    // userCode 一并回传：Cline 设备授权要显示「用户码」供手动输码（verification_uri_complete
+    // 已带码，但用户改用普通授权页时仍需要这串码）
+    return r.ok ? ok({ url: r.url, mode: r.mode, port: r.port, userCode: r.userCode }) : fail(r.message);
   }));
   ipcMain.handle("proxy_oauth_cancel", handle(() => ok({ cancelled: discovery.cancelOAuth() })));
   // ===== AutoClaw 登录辅助：国内版手机验证码两跳 + 国际版风控配置（验证码由前端跑 SDK）=====
