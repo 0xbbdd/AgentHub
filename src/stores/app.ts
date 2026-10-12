@@ -4,6 +4,21 @@ import { MODULES } from "../types";
 import type { AppConfig, SettingsTab, ModuleDef, ModuleKey, PageDef, Overview, ToolRow } from "../types";
 import * as api from "../api/ipc";
 
+/** 递归合并：以 base 为基线补全 patch 缺失的嵌套字段；数组与原始值一律整体取 patch（有则覆盖）。
+ *  用途：后端返回的配置一旦缺某个嵌套字段（旧版后端 / 字段重命名 / mock 未同步），浅合并会让
+ *  模板访问形如 proxy.poolsyncSchedule 时直接抛错白屏——这里保证任何层级都有 defaultConfig 兜底。 */
+function mergeConfigDeep<T>(base: T, patch: unknown): T {
+  if (Array.isArray(base) || Array.isArray(patch)) return (patch === undefined ? base : (patch as T));
+  if (base && typeof base === "object" && patch && typeof patch === "object") {
+    const out: Record<string, unknown> = { ...(base as Record<string, unknown>) };
+    for (const key of Object.keys(patch as Record<string, unknown>)) {
+      out[key] = mergeConfigDeep((base as Record<string, unknown>)[key], (patch as Record<string, unknown>)[key]);
+    }
+    return out as T;
+  }
+  return patch === undefined ? base : (patch as T);
+}
+
 // 浏览器 mock / 后端加载失败时的兜底默认值；后端权威默认值见 electron/backend/config.cjs
 const defaultConfig: AppConfig = {
   theme: "dark",
@@ -140,7 +155,9 @@ export const useAppStore = defineStore("app", {
     },
     async load() {
       try {
-        Object.assign(this.config, await api.loadConfig());
+        // 深合并而非 Object.assign（浅合并会把 proxy 等嵌套对象整体替换，后端一旦缺字段即白屏）
+        const remote = await api.loadConfig();
+        Object.assign(this.config, mergeConfigDeep(structuredClone(defaultConfig), remote));
       } catch {
         this.config = JSON.parse(JSON.stringify(defaultConfig));
       }
