@@ -1545,9 +1545,15 @@ async function beginClineOAuth(channel, onDone) {
       return;
     }
     const r = await clineLogin.pollDeviceToken(c, deviceCode, adapters.httpJson);
+    // 会话一致性守卫：await 在途期间用户可能已取消并另发登录（oauthSession 被替换）——
+    // 旧 tick 的结果必须丢弃。不守卫的话 finishOAuth 取的是**当前全局**会话，会把新登录
+    // 连同其 timer 一起终结、并把旧结果经新会话的 onDone 回给前端（单会话机制被破坏）
+    if (oauthSession !== session) return;
     if (r.kind === "confirmed") {
       // 第四步：WorkOS 令牌 → Cline 会话令牌（换来的带 workos: 前缀 + accountId，才能打 LLM 端点）
       const reg = await clineLogin.registerSession(c, r.accessToken, r.refreshToken, adapters.httpJson);
+      // registerSession 也是网络 await：恢复后同样先确认会话未被取消/替换，再落库与收尾
+      if (oauthSession !== session) return;
       if (!reg.ok) {
         finishOAuth({ ok: false, message: reg.message });
         return;
