@@ -333,6 +333,25 @@ async function e2e() {
       assert(JSON.stringify(pass.models()) === JSON.stringify(pm.models.map((m) => m.id)), "拉取后订阅池只认目录（双池隔离）");
     }
 
+    // —— 3b. 目录缓存：空目录段也不得每次重读（判据与 entries.length 解耦）
+    {
+      const cat2 = JSON.parse(JSON.stringify(rules.DEFAULTS["catalog.json"]));
+      cat2.cline_free = { syncedAt: Date.now(), models: [] };
+      fs.writeFileSync(path.join(rules.rulesDir(), "catalog.json"), JSON.stringify(cat2, null, 2), "utf8");
+      rules.reload("catalog.json");
+      assert(Array.isArray(free.models()) && free.models().length === 0, "空目录段返回空数组（不抛错）");
+      // 缓存命中只省「读文件 + 解析」（statSync 在判据之前必执行），故统计 readFileSync 增量
+      const origRead = fs.readFileSync;
+      let n = 0;
+      fs.readFileSync = (p, ...rest) => { n++; return origRead(p, ...rest); };
+      free.models();
+      const before = n;
+      free.models();
+      const after = n;
+      fs.readFileSync = origRead;
+      assert(after === before, `空目录段二次 models() 命中缓存（不再读文件，增量 ${after - before}）`);
+    }
+
     // —— 4. 余额：÷1e6 + 负值保留 + plan 404 正常态
     {
       const q = await free.queryCredits(acc, secrets);

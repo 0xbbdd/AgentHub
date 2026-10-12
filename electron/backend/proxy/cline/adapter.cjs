@@ -91,12 +91,14 @@ function makeCline(channel, deps) {
   const cfg = () => (rules.get("headers.json") || {}).cline || {};
 
   // ===== 目录索引（catalog.json 对应渠道段，mtime 缓存；models 与 body 模型名归一共用）=====
-  let catalogCache = { at: 0, entries: [] };
+  // at 初值 -1（mtimeMs 恒 ≥ 0）保证首次必读；判据**只看 mtime**、不看 entries.length——
+  // 否则「该渠道目录段为空」时判据恒假，models() 每次调用都重复 stat + 读文件 + 解析
+  let catalogCache = { at: -1, entries: [] };
   function catalogEntries() {
     const file = path.join(rules.rulesDir(), "catalog.json");
     let st = 0;
     try { st = fs.statSync(file).mtimeMs; } catch { /* 无缓存文件 */ }
-    if (catalogCache.at === st && catalogCache.entries.length) return catalogCache.entries;
+    if (catalogCache.at === st) return catalogCache.entries;
     const all = (() => {
       try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { /* 文件缺失/损坏 */ }
       // 回退内存态（rules.get 链路自带内置 DEFAULTS 兜底）：删掉规则文件时模型清单不该变空
