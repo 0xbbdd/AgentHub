@@ -103,28 +103,31 @@ function desktopProvidersPath() {
 
 /**
  * 读本机 Cline 登录态（providers.cline.settings.auth）。
- * 返回 { ok, auth } / { ok: false, reason }；文件不存在返回 { ok: false, reason: "absent" }。
+ * 返回 { ok, auth } / { ok: false, silent, reason }：
+ *   silent=true  = 「没装/没登录」类（文件不存在、文件在但没有 cline 凭证）——
+ *                  扫描时不出候选（与 AutoClaw「无登录态直接跳过」同口径）；
+ *   silent=false = 「登录态在但读不了」（JSON 坏等）——如实出行让用户看到原因。
  * 只读不写：providers.json 属于 Cline 客户端，导入时复制凭据入池，运行时不回读不回写。
  */
 function readDesktopProviders() {
   const file = desktopProvidersPath();
-  if (!file) return { ok: false, reason: "无法确定用户主目录" };
+  if (!file) return { ok: false, silent: false, reason: "无法确定用户主目录" };
   let text;
   try {
     text = fs.readFileSync(file, "utf8");
   } catch {
-    return { ok: false, reason: "absent" };
+    return { ok: false, silent: true, reason: "absent" };
   }
   let root;
   try {
     root = JSON.parse(text);
   } catch (e) {
-    return { ok: false, reason: `登录态文件不是合法 JSON：${e.message}` };
+    return { ok: false, silent: false, reason: `登录态文件不是合法 JSON：${e.message}` };
   }
   const auth = root && root.providers && root.providers.cline && root.providers.cline.settings && root.providers.cline.settings.auth;
-  if (!auth || typeof auth !== "object") return { ok: false, reason: "登录态文件里没有 cline 凭证（请先在 Cline 客户端登录）" };
+  if (!auth || typeof auth !== "object") return { ok: false, silent: true, reason: "登录态文件里没有 cline 凭证（请先在 Cline 客户端登录）" };
   const token = String(auth.accessToken || "").trim();
-  if (!token) return { ok: false, reason: "cline 凭证缺少 accessToken" };
+  if (!token) return { ok: false, silent: true, reason: "cline 凭证缺少 accessToken" };
   return {
     ok: true,
     auth: {

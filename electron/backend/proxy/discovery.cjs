@@ -30,6 +30,8 @@ const raccoonAuth = require("./raccoonAuth.cjs");
 const zcodeLocal = require("./zcodeLocal.cjs");
 const wbCrypto = require("./wbCrypto.cjs");
 const qoderAuth = require("./qoderAuth.cjs");
+const clineCredentials = require("./cline/credentials.cjs");
+const clineLogin = require("./cline/login.cjs");
 
 const OAUTH_PORT = 17388; // 首选回环端口；被占用时退到系统随机端口（授权地址里会带实际端口）
 const OAUTH_TIMEOUT_MS = 180000;
@@ -567,7 +569,7 @@ function scanCatpaw() {
 
 /** 全量扫描（本机全渠道候选） */
 function scanAll() {
-  return [...scanTrae(), ...scanWorkBuddy(), ...scanRaccoon(), ...scanZcode(), ...scanQoder(), ...scanCatpaw(), ...scanAutoclaw()];
+  return [...scanTrae(), ...scanWorkBuddy(), ...scanRaccoon(), ...scanZcode(), ...scanQoder(), ...scanCatpaw(), ...scanAutoclaw(), ...scanCline()];
 }
 
 /** AutoClaw 本机登录态扫描：读 %APPDATA%/AutoClaw/auth.json（加密）→ ~/.openclaw-autoclaw/openclaw.json（明文 JWT）。
@@ -607,6 +609,43 @@ function scanAutoclaw() {
       meta: { desktop: true, ...(login.deviceId ? { deviceId: login.deviceId } : {}) },
       source: "scan",
       file: `%APPDATA%/AutoClaw/auth.json（${login.source}）`,
+    });
+  }
+  return out;
+}
+
+// ===== Cline 本机登录态扫描 =====
+// 读 ~/.cline/data/settings/providers.json → providers.cline.settings.auth（accessToken 带
+// workos: 前缀 / expiresAt 毫秒 / accountId 是 usr-...）。
+// 两个池（cline_free / cline_pass）**共用同一份客户端登录态**：不猜池——
+// 对两个渠道各产出一份候选，用户在哪个渠道下点导入就得到哪一家的账号（与 AutoClaw 双区
+// 「两地共用一个登录态文件」同口径；池由渠道身份决定，客户端登录态本身不属于任何一个池）。
+function scanCline() {
+  const out = [];
+  const channels = ["cline_free", "cline_pass"].filter((ch) => store.CHANNELS.some((c) => c.id === ch) && adapters.channelOn(ch));
+  if (!channels.length) return out;
+  const r = clineCredentials.readDesktopProviders();
+  if (!r.ok) {
+    // 没装 / 没登录（silent）不出候选；登录态在但读不了如实出行让用户看到原因（与 AutoClaw 同口径）
+    if (!r.silent) {
+      for (const ch of channels) {
+        out.push({ channel: ch, uid: "", name: "", token: "", refreshToken: "", source: "scan", encrypted: true, file: `Cline 登录态：${r.reason}` });
+      }
+    }
+    return out;
+  }
+  const auth = r.auth;
+  const uid = auth.accountId || clineCredentials.accountIdFromJwt(auth.accessToken);
+  for (const ch of channels) {
+    out.push({
+      channel: ch,
+      uid,
+      name: auth.email || auth.name || (uid ? `账号 ${String(uid).slice(-6)}` : ""),
+      token: auth.accessToken,
+      refreshToken: auth.refreshToken,
+      expiresAt: auth.expiresAt || clineCredentials.expiresAtFromJwt(auth.accessToken),
+      source: "scan",
+      file: "~/.cline/data/settings/providers.json",
     });
   }
   return out;
@@ -720,6 +759,18 @@ function currentLocalLogins() {
       const name = String(login.name || login.email || "");
       out.autoclaw = { uid: login.uid, name };
       if (store.AUTOCLAW_INTL_ENABLED) out.autoclaw_intl = { uid: login.uid, name };
+    }
+  } catch { /* 同上 */ }
+  try {
+    // Cline 两池同样是「一个客户端登录态」：两键同值（池由渠道身份决定）
+    const r = clineCredentials.readDesktopProviders();
+    if (r.ok) {
+      const uid = r.auth.accountId || clineCredentials.accountIdFromJwt(r.auth.accessToken);
+      if (uid) {
+        const name = String(r.auth.email || r.auth.name || "");
+        out.cline_free = { uid, name };
+        out.cline_pass = { uid, name };
+      }
     }
   } catch { /* 同上 */ }
   return out;
@@ -1460,6 +1511,103 @@ async function beginQoderOAuth(channel, onDone) {
   oauthSession.timer = setTimeout(tick, 1000);
 
   return { ok: true, url: loginUrl.toString(), mode: "poll" };
+}
+
+// ===== Cline：WorkOS 设备授权登录（RFC 8628，无本地回调端口）=====
+// 与 Qoder 同为 poll 模式（beginOAuth 返回 { url } 由编排层开系统浏览器，本函数只轮询），
+// 差异：① 上游返回 user_code，用户可在任意设备输码——不需要回调地址、不起回环服务器；
+// ② 拿到 WorkOS 令牌后还要经 /auth/register 换 Cline 自己的会话令牌（不能省）。
+async function beginClineOAuth(channel, onDone) {
+  const c = (rules.get("headers.json") || {}).cline || {};
+  const start = await clineLogin.startDeviceAuth(c, adapters.httpJson);
+  if (!start.ok) return { ok: false, message: start.message };
+  const deviceCode = start.deviceCode;
+  const intervalMs = Math.max(2000, Number(start.intervalMs) || 5000);
+  oauthSession = {
+    mode: "device",
+    channel,
+    state: deviceCode,
+    onDone,
+    server: null,
+    timer: null,
+    intervalMs,
+    deadline: Date.now() + OAUTH_TIMEOUT_MS,
+  };
+  const tick = async () => {
+    const session = oauthSession;
+    if (!session || session.state !== deviceCode) return;
+    if (Date.now() > session.deadline) {
+      finishOAuth({ ok: false, message: "登录超时（3 分钟），请重新发起" });
+      return;
+    }
+    const r = await clineLogin.pollDeviceToken(c, deviceCode, adapters.httpJson);
+    if (r.kind === "confirmed") {
+      // 第四步：WorkOS 令牌 → Cline 会话令牌（换来的带 workos: 前缀 + accountId，才能打 LLM 端点）
+      const reg = await clineLogin.registerSession(c, r.accessToken, r.refreshToken, adapters.httpJson);
+      if (!reg.ok) {
+        finishOAuth({ ok: false, message: reg.message });
+        return;
+      }
+      try {
+        const saved = saveClineAccount(channel, reg);
+        finishOAuth({ ok: true, id: saved.id, uid: saved.uid });
+      } catch (e) {
+        finishOAuth({ ok: false, message: String((e && e.message) || e) });
+      }
+      return;
+    }
+    if (r.kind === "failed") {
+      finishOAuth({ ok: false, message: r.message });
+      return;
+    }
+    // slow_down：按 RFC 8628 拉长间隔（上限 30s）；pending 维持原间隔
+    if (r.kind === "slowDown") session.intervalMs = Math.min(session.intervalMs + 2000, 30000);
+    if (oauthSession && oauthSession.state === deviceCode) session.timer = setTimeout(tick, session.intervalMs);
+  };
+  oauthSession.timer = setTimeout(tick, intervalMs);
+  // 授权页开系统浏览器（编排层消费 r.url）；把用户码一并回传，前端可显示「输码」形态
+  return {
+    ok: true,
+    url: start.verificationUriComplete || start.verificationUri,
+    mode: "device",
+    userCode: start.userCode,
+  };
+}
+
+/** Cline OAuth 结果落库：uid = JWT 的 external_id（usr-...，余额路径也是它）；
+ *  两个池各有一条独立记录（同 uid 不同 channel），按 channel 查重。 */
+function saveClineAccount(channel, sess) {
+  const token = String(sess.accessToken || "").trim();
+  if (!token) throw new Error("登录结果缺少 accessToken");
+  const uid = clineCredentials.accountIdFromJwt(token);
+  if (!uid) throw new Error("登录成功但取不到账号 id（JWT 缺少 external_id 声明），请改用「粘贴 JSON」导入");
+  const name = clineCredentials.identityFromJwt(token);
+  const expiresAt = clineCredentials.expiresAtFromJwt(token);
+  const existing = store.listAccounts(channel).find((a) => a.uid === uid);
+  if (existing) {
+    const oldMeta = readAccountMeta(existing.id);
+    store.updateAccount(existing.id, {
+      token,
+      refreshToken: String(sess.refreshToken || "").trim() || undefined,
+      expiresAt: expiresAt || undefined,
+      status: "online",
+      coolUntil: 0,
+      coolReason: "",
+      meta: { ...oldMeta, email: name.includes("@") ? name : oldMeta.email || "" },
+    });
+    return { id: existing.id, uid, updated: true };
+  }
+  const id = store.addAccount({
+    channel,
+    uid,
+    name,
+    token,
+    refreshToken: String(sess.refreshToken || "").trim(),
+    source: "oauth",
+    expiresAt: expiresAt || undefined,
+    meta: { email: name.includes("@") ? name : "" },
+  });
+  return { id, uid, updated: false };
 }
 
 /**
@@ -3023,6 +3171,8 @@ async function beginOAuth(channel, onDone, helpers, opts) {
   if (ch === "trae") return beginTraeOAuth(ch, onDone);
   if (ch === "zcode") return beginZcodeOAuth(ch, onDone);
   if (ch === "qoder" || ch === "qoder_intl") return beginQoderOAuth(ch, onDone);
+  // Cline 双池：WorkOS 设备授权（显示用户码 + 浏览器确认，无本地回调端口，少一处失败面）
+  if (ch === "cline_free" || ch === "cline_pass") return beginClineOAuth(ch, onDone);
   // AutoClaw 国际版：前端先跑完阿里云滑块（captchaVerifyParam 经 IPC 传入）再进本流程
   if (ch === "autoclaw_intl") return beginAutoClawOauth(ch, onDone, opts);
   // AutoClaw 国内版：官方主登录是手机验证码（IPC 两跳直调，不走 oauthSession）；
