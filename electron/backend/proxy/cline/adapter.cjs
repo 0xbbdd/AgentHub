@@ -137,7 +137,8 @@ function makeCline(channel, deps) {
       const base = String(c.apiBase || "https://api.cline.bot/api/v1").replace(/\/+$/, "");
       const r = await httpJson(`${base}${c.modelsPath || "/ai/cline/recommended-models"}`, {
         method: "GET",
-        headers: { accept: "application/json", "x-client-type": "cline-sdk" },
+        // 伪装头走唯一实现（headers.json upstreamHeaders 覆盖层），与对话/登录/续期同一口径
+        headers: headersMod.buildUpstreamHeaders(c, { accept: "application/json" }),
       }).catch((e) => ({ status: 0, ok: false, data: null, message: String((e && e.message) || e) }));
       if (!r.ok || !r.data) return { ok: false, message: `模型目录 HTTP ${r.status}${r.message ? `：${r.message}` : ""}` };
       const parsed = modelsMod.filterByPool(modelsMod.parseRecommended(r.data), pool);
