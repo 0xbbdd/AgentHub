@@ -395,9 +395,10 @@ function applyTombstones(remote, channel) {
     const local = accounts.find((a) => accountKeyOf(a) === key);
     if (!local) continue;
     // 本机账号比墓碑新（删完后又重新添加了同身份账号）：不删，并视为复活（下面合并墓碑时本机包会盖过它）。
-    // updatedAt 并入判据（与 mergeSnapshot 的 localUpdatedAt 同口径）：账号在墓碑时间之后
-    // 刷新过 token（updatedAt 更新但 creditsAt/createdAt 都更早）时墓碑仍胜出会吃掉本机新凭据
-    if (Number(local.updatedAt || local.creditsAt || local.createdAt || 0) > Number(at)) continue;
+    // ⚠ 判据刻意不含 updatedAt（与 mergeSnapshot 的 LWW 口径不同）：删除是显式操作理当生效，
+    // 若并入 updatedAt，「A 删除、B 后台 token 刷新顶新 updated_at」会让账号永远存活，
+    // 删除永远无法传播——这是有注释声明的取舍，勿「对齐 mergeSnapshot」
+    if (Number(local.creditsAt || local.createdAt || 0) > Number(at)) continue;
     if (store.removeAccount(local.id)) removed++;
   }
   return removed;

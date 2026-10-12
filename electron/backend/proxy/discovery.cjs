@@ -2611,11 +2611,10 @@ async function beginLobsterOAuth(channel, onDone) {
       // 兑换成功即作废该 state（配合授权码一次性语义，双重防重放）
       if (gotState) lobsterIssuedStates.delete(String(gotState));
       if (res) res.end(OK_PAGE("登录成功，已加入 LobsterAI 号池，可关闭本页"));
-      // 晚到的回调（会话已关）不再有 onDone 消费者，直接落库即可。
-      // onDone 必须走 state 对应的会话（resolved.sess）：入口捕获的全局 oauthSession 可能是
-      // **另一渠道正在进行中**的新登录，把龙虾的成功结果经别的会话回给前端会串结果
+      // 晚到的回调（宽限表命中 = 原会话已超时/结束）：onDone 消费者已不存在，
+      // 只落库不再通知——入口捕获的全局 oauthSession 可能是**另一渠道正在进行中**
+      // 的新登录，把旧回调的成功结果经它回给前端会串结果
       if (resolved.live) finishOAuth({ ok: true, id: r.id, uid: r.uid });
-      else if (resolved.sess && resolved.sess.onDone) resolved.sess.onDone({ ok: true, id: r.id, uid: r.uid });
     } catch (e) {
       const msg = String((e && e.message) || e);
       if (res) res.end(ERR_PAGE(`登录失败：${msg}`));
@@ -3174,13 +3173,9 @@ async function beginAutoClawOauth(channel, onDone, opts) {
     const code = q.get("code");
     if (!code) { writeRes(() => res.end(PENDING_PAGE)); return { ok: false, message: "回调地址缺少 code 参数（授权码）" }; } // 官方页登录前可能空参探测回调可达性
     const state = q.get("state") || "";
-    // state 校验（对齐 ModelScope 同款 CSRF 防线）：回调带了 state 且与发起时不符 → 外来
-    // 请求拒绝。state 缺失不拦（部分上游形态不回传，强校验会把正常登录误杀）
-    if (state && String(state) !== String(started.state || "")) {
-      const msg = "state 校验不通过（非本应用发起的授权回调）";
-      writeRes(() => { res.statusCode = 400; res.end(ERR_PAGE(msg)); });
-      return { ok: false, message: msg };
-    }
+    // ⚠ 本渠道无本机 state 锚点：授权地址（oauth_url）由上游生成，oauthStart 不下发
+    // state、回调也无法与本机比对（Trae/ModelScope/Lobster 是本机生成 state 才能强校验）。
+    // CSRF 面靠「回环端口 + 一次性授权码」兜底，与原型一致，勿仿照其他渠道强校验。
     try {
       const ex = await autoclawLogin.oauthExchange({ cfg: c, httpJson: adapters.httpJson, vendor, deviceId, code, state, navigateUri });
       if (!ex.ok) throw new Error(ex.message);
