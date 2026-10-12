@@ -357,7 +357,7 @@ async function e2e() {
     {
       const cfg = rules.get("headers.json").cline;
       const start = await clineLogin.startDeviceAuth(cfg, adapters.httpJson);
-      assert(start.ok && start.userCode === "PXQF-MWRC" && start.intervalMs === 5000, "设备授权起会话（user_code + interval）");
+      assert(start.ok && start.userCode === "PXQF-MWRC" && start.intervalMs === 5000 && start.expiresIn === 300, "设备授权起会话（user_code + interval + expires_in，会话超时跟随有效期）");
       const poll = await clineLogin.pollDeviceToken(cfg, start.deviceCode, adapters.httpJson);
       assert(poll.kind === "confirmed" && poll.accessToken, "轮询直达 confirmed");
       const reg = await clineLogin.registerSession(cfg, poll.accessToken, poll.refreshToken, adapters.httpJson);

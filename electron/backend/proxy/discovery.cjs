@@ -1523,6 +1523,9 @@ async function beginClineOAuth(channel, onDone) {
   if (!start.ok) return { ok: false, message: start.message };
   const deviceCode = start.deviceCode;
   const intervalMs = Math.max(2000, Number(start.intervalMs) || 5000);
+  // 会话超时对齐上游设备码有效期（实测 expires_in:300 = 5 分钟）：通用渠道的 3 分钟偏紧，
+  // 用户确认稍慢就会在本机侧先超时、白等一次；不低于通用值，防上游返回异常小值
+  const timeoutMs = Math.max(OAUTH_TIMEOUT_MS, (Number(start.expiresIn) || 300) * 1000);
   oauthSession = {
     mode: "device",
     channel,
@@ -1531,13 +1534,14 @@ async function beginClineOAuth(channel, onDone) {
     server: null,
     timer: null,
     intervalMs,
-    deadline: Date.now() + OAUTH_TIMEOUT_MS,
+    deadline: Date.now() + timeoutMs,
+    timeoutMin: Math.round(timeoutMs / 60000),
   };
   const tick = async () => {
     const session = oauthSession;
     if (!session || session.state !== deviceCode) return;
     if (Date.now() > session.deadline) {
-      finishOAuth({ ok: false, message: "登录超时（3 分钟），请重新发起" });
+      finishOAuth({ ok: false, message: `登录超时（${session.timeoutMin || 3} 分钟），请重新发起` });
       return;
     }
     const r = await clineLogin.pollDeviceToken(c, deviceCode, adapters.httpJson);

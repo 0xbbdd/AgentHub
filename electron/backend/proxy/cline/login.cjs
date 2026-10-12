@@ -54,6 +54,9 @@ async function startDeviceAuth(cfg, httpJson) {
     verificationUri: String(d.verification_uri || "").trim() || cfg.deviceVerifyFallback || "https://authkit.cline.bot/device",
     verificationUriComplete: String(d.verification_uri_complete || "").trim(),
     intervalMs: interval * 1000,
+    // 设备码有效期（实测 300s）：会话超时应跟随它，而不是套用通用渠道的 3 分钟——
+    // 上游允许用户在 5 分钟内确认，本机更早放弃会让用户白等一次
+    expiresIn: Math.max(1, Number(d.expires_in) || 300),
   };
 }
 
