@@ -377,9 +377,17 @@ function applyCool(accId, model, cls, message) {
   // 参数/模型配置类错误与账号无关，不罚号也不记错；其余落冷却的错误都记入账号最近错误（号池气泡展示）
   // slow（首字节超时）同样不记错：它是"这次请求太大/上游这一刻慢"，记在账号上只会留下误导性的
   // 长期错误气泡（实测一次 54 万 token 请求超时，账号卡片挂了两天的"上游首字节超时"）
-  // model_denied（Cline 403/404：该账号对该模型无权限 / 模型名不对）同样不记错：
-  // 账号本身是好的，错的是「账号×模型」组合或模型名
-  if (cls.kind !== "model_config" && cls.kind !== "bad_params" && cls.kind !== "prompt_too_long" && cls.kind !== "slow" && cls.kind !== "model_denied" && message) {
+  // model_denied 默认也不记错：账号本身是好的，错的是「账号×模型」组合或模型名，用户从客户端
+  // 就能看到该模型的拒绝原因，记到卡片只会误导。**但渠道级 model_denied 必须记**——Cline 403
+  // 产品面校验失败（多为伪装头 X-CLIENT-TYPE 配置错）是配置故障，它不冷却账号，就只有靠
+  // noteError 才看得见（与 11128/WAF 同理），否则「整池静默失效」而用户完全无感
+  const silent =
+    cls.kind === "model_config" ||
+    cls.kind === "bad_params" ||
+    cls.kind === "prompt_too_long" ||
+    cls.kind === "slow" ||
+    (cls.kind === "model_denied" && !cls.channelLevel);
+  if (!silent && message) {
     store.noteError(accId, message);
   }
   switch (cls.kind) {

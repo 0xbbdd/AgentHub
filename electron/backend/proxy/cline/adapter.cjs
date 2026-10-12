@@ -329,6 +329,9 @@ function makeCline(channel, deps) {
           kind: "model_denied",
           switchable: false,
           status: 403,
+          // channelLevel 供 server 侧决定是否记入账号错误：渠道级故障（配置问题）需要可见，
+          // 账号×模型的确定性拒绝不需要（用户从客户端就能看到，记到卡片只会误导）
+          channelLevel,
           message: channelLevel
             ? `${msg}（疑似渠道级产品面校验失败：请检查 headers.json 的 X-CLIENT-TYPE 伪装头是否被删或改空——它是 Cline 免费池的硬门槛）`
             : msg,

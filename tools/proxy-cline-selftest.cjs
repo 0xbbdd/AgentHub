@@ -289,6 +289,9 @@ async function e2e() {
       const cls = free.classifyError(err403);
       assert(cls && cls.kind === "model_denied" && cls.switchable === false, "403 → model_denied（不重试不罚号，确定性拒绝）");
       assert(/not subscribed/.test(cls.message), "403 上游文案带给客户端（用户据此知道该换模型或订阅）");
+      assert(!cls.channelLevel, "账号级 403 不带渠道级标记（不污染账号卡片）");
+      const clsCh = free.classifyError({ status: 403, body: JSON.stringify({ error: { message: "This model is only available via Cline product surfaces" } }) });
+      assert(clsCh.kind === "model_denied" && clsCh.channelLevel === true && /伪装头/.test(clsCh.message), "渠道级 403 带 channelLevel 标记与可操作提示（server 侧据此记入账号错误，整池失效不再静默）");
       const cls404 = free.classifyError({ status: 404, body: JSON.stringify({ error: "model not found" }) });
       assert(cls404.kind === "model_denied" && cls404.switchable === false, "404 → model_denied（模型名不对，换号无用）");
       const cls429 = free.classifyError({ status: 429, body: JSON.stringify({ error: { code: "INFERENCE_CAP_ERROR", message: "Rate limited. Try again in 17h 59m." } }) });
