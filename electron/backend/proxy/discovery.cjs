@@ -560,7 +560,10 @@ function scanCatpaw() {
   }
   out.push({
     channel: "catpaw",
-    uid: String(login.uid || ""),
+    // uid 兜底 loginName（与 readDesktopLogin 的 uid: uid || loginName 同口径）：
+    // auth.json 只有 loginName 时落库 uid 为空，token 路径与桌面路径的凭证身份
+    // 口径不一致会让 reconcileIdentity 误判 identity-changed 作废全部会话
+    uid: String(login.uid || login.loginName || ""),
     name: String(login.loginName || (login.uid ? `账号 ${login.uid}` : "")),
     token: login.token,
     refreshToken: "",
