@@ -687,6 +687,10 @@ async function handleChat(req, res, settings) {
     // 「真正发给上游的模型名」供 record 记 rev→ 归因。链路一漏，每个成功请求都会在记账时抛
     // ReferenceError，被外层 catch 落成 502/0 token 的假流水（v1.30.0 起曾如此）。
     let usedTargetModel = actualModel;
+    // 适配器内部改写后的「实际转发名」（Cline 短名补本池前缀）：**仅**用于记账 rev→ 归因。
+    // 不能覆盖 usedTargetModel——后者还喂 pool.noteSuccess，其键须与 applyCool 的 targetModel
+    // 同口径，否则「成功清负缓存」与「失败落冷却」会键不一致、负缓存残留
+    let usedForwardModel = "";
     // 跨渠道故障转移的请求级状态：全局上游尝试预算 / 渠道轨迹 / failover 归因
     const maxTries = 6 * modelChain.length; // 每个模型 6 次上游尝试（跨渠道共享；429 就地重试、
     // 401 刷新重试各计 1）。按模型链长度放大：预算按请求计但逐模型消耗，避免主模型耗尽预算后饿死回退模型
@@ -820,6 +824,10 @@ async function handleChat(req, res, settings) {
               }
             }
             r = await attemptChat(chan, acc, targetModel, effectiveBody, emitTimed, chatMeta);
+            // 适配器可能改写实际转发的模型名（Cline 短名补池前缀）：记入 usedForwardModel 供链外
+            // record() 以 rev→ 呈现「请求 X 实际发 Y」（否则只有适配器内部知道，属静默改写）。
+            // ⚠ 不能写 usedTargetModel——它同时喂 pool.noteSuccess，键须与冷却同口径
+            if (r && r.model) usedForwardModel = r.model;
             if (r && r.planLimit) {
               pool.coolAccount(acc.id, "credit");
               lastErr = Object.assign(new Error("积分不足"), { status: 402 });
@@ -963,7 +971,7 @@ async function handleChat(req, res, settings) {
       if (actualModel !== requestedModel) errParts.push("alias→" + actualModel);
       if (failoverFrom) errParts.push(`failover:${failoverFrom}→${usageRow.channel}`);
       if (usedModel !== actualModel) errParts.push("fallback→" + usedModel);
-      else if (usedTargetModel !== actualModel) errParts.push("rev→" + usedTargetModel);
+      else if ((usedForwardModel || usedTargetModel) !== actualModel) errParts.push("rev→" + (usedForwardModel || usedTargetModel));
       // 上游 200 但一个 token 都没产出：只标注、不改判成功/失败（本机真实流水 id=63 就是这种行，
       // 用户与维护者都容易把它读成「正常回答」）——issue #78 的诊断增强
       if (Number(usage.completion_tokens) === 0) errParts.push("notice:empty-completion");

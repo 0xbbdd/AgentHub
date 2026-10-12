@@ -275,6 +275,7 @@ async function e2e() {
       meta: {},
     });
     assert(r.status === 200, "chat 返回 200");
+    assert(r.model === "cline-free/deepseek-v4.1-flash", "chat 回传实际转发模型名（短名补前缀对记账可见，不静默）");
     const sent = fu.seen.chat[0];
     assert(sent.path === "/api/v1/chat/completions", "路径只有一个 v1（/api/v1/v1 会 404）");
     assert(sent.headers.authorization === "Bearer workos:eyJx", "Authorization 带 workos: 前缀（去掉会 401）");

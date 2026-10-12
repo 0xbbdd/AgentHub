@@ -189,7 +189,9 @@ function makeCline(channel, deps) {
 
       let resp = null;
       let cancelTimer = () => {};
-      const result = { status: 200 };
+      // model 回传实际转发名（短名已补本池前缀）：server 侧据此记账 rev→，让
+      // 「请求 X 实际发 Y」在用量明细里可见——此前只有适配器内部知道，属静默改写
+      const result = { status: 200, model: out.model };
       let sentDelta = false;
       try {
         const r = await fetchStream(`${base}/chat/completions`, {
