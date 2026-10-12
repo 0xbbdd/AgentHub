@@ -97,7 +97,9 @@ function makeCline(channel, deps) {
     try { st = fs.statSync(file).mtimeMs; } catch { /* 无缓存文件 */ }
     if (catalogCache.at === st && catalogCache.entries.length) return catalogCache.entries;
     const all = (() => {
-      try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return {}; }
+      try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { /* 文件缺失/损坏 */ }
+      // 回退内存态（rules.get 链路自带内置 DEFAULTS 兜底）：删掉规则文件时模型清单不该变空
+      return rules.get("catalog.json") || {};
     })();
     const entry = all[channel];
     const entries = (entry && Array.isArray(entry.models) ? entry.models : []).filter((m) => m && m.id);
