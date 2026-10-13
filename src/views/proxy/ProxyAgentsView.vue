@@ -229,6 +229,16 @@ const COST_TIERS: { value: ProxyCostTier; label: string }[] = [
   { value: "normal", label: "普通" },
 ];
 
+// ===== 调度策略小弹窗：策略 / 成本档两个下拉收进弹窗（工具栏只留入口按钮），改动即时生效 =====
+const strategyOpen = ref(false);
+const strategyChannel = ref<ProxyChannelId>("trae");
+const shownStrategyChannel = computed(() => pool.value.find((c) => c.id === strategyChannel.value) || null);
+
+function openStrategy(ch: ProxyChannelView) {
+  strategyChannel.value = ch.id;
+  strategyOpen.value = true;
+}
+
 const loading = ref(false);
 const zcodeHasReward = ref(false);
 
@@ -1302,33 +1312,11 @@ onUnmounted(() => {
           </span>
           <span v-if="ch.summary.expiringSoon" class="tag tag-warn">24h 内有到期</span>
           <span v-if="costTierName(ch.costTier) !== '普通'" class="tag" :class="ch.costTier === 'free' ? 'tag-ok' : 'tag-dim'">{{ costTierName(ch.costTier) }}</span>
-          <!-- 工具栏：只属于当前渠道（策略 / 成本档 / 添加 / 签到或加油包 / 刷新），与其他渠道互不关联 -->
+          <!-- 工具栏：只属于当前渠道（调度策略 / 添加 / 签到或加油包 / 刷新），与其他渠道互不关联；
+               策略与成本档两个下拉已收进「调度策略」小弹窗 -->
           <span class="panel-tools">
-            <el-tooltip content="渠道账号调度策略" placement="top">
-              <span>
-                <el-select
-                  class="f-el-select strategy-select"
-                  popper-class="glass-popper"
-                  :model-value="ch.poolStrategy"
-                  style="width: 140px"
-                  @update:model-value="(v: string) => setStrategy(ch, v as ProxyPoolStrategy)"
-                >
-                  <el-option v-for="s in STRATEGIES" :key="s.value" :value="s.value" :label="s.label" />
-                </el-select>
-              </span>
-            </el-tooltip>
-            <el-tooltip content="成本档位：全局开启「免费 / 低成本优先」排序时，免费渠道的额度先消耗（配置 → 反代网关）" placement="top">
-              <span>
-                <el-select
-                  class="f-el-select strategy-select"
-                  popper-class="glass-popper"
-                  :model-value="ch.costTier || 'normal'"
-                  style="width: 108px"
-                  @update:model-value="(v: string) => setCostTier(ch, v as ProxyCostTier)"
-                >
-                  <el-option v-for="t in COST_TIERS" :key="t.value" :value="t.value" :label="t.label" />
-                </el-select>
-              </span>
+            <el-tooltip content="渠道账号调度策略与成本档位" placement="top">
+              <button class="btn btn-sm" @click="openStrategy(ch)">调度策略</button>
             </el-tooltip>
             <button class="btn btn-sm" @click="openAdd(ch)">添加账号</button>
             <el-tooltip v-if="ch.id === 'workbuddy_ai'" :content="checkinToolbarTitle(ch)" placement="top">
@@ -1931,6 +1919,49 @@ onUnmounted(() => {
         </div>
       </div>
 
+      <!-- 调度策略小弹窗：策略 / 成本档两个下拉收进弹窗（工具栏只留入口按钮），改动即时生效（后端返回 ok 后 refresh） -->
+      <div v-if="strategyOpen" class="p-mask" @click.self="strategyOpen = false">
+        <div class="p-dlg glass strategy-dlg">
+          <div class="p-title checkin-head">
+            <i class="ph ph-sliders-horizontal"></i>
+            调度策略
+            <span class="add-chip">{{ shownStrategyChannel?.display || strategyChannel }}</span>
+          </div>
+          <div class="set-desc">
+            新请求按「渠道账号调度策略」挑选号池账号；成本档位在配置里全局开启「免费 / 低成本优先」排序时才参与排序（配置 → 反代网关）。
+          </div>
+          <div class="auto-rows">
+            <div class="auto-row">
+              <span class="auto-label">渠道账号调度策略</span>
+              <el-select
+                class="f-el-select strategy-select"
+                popper-class="glass-popper"
+                :model-value="shownStrategyChannel?.poolStrategy"
+                style="width: 140px"
+                @update:model-value="(v: string) => shownStrategyChannel && setStrategy(shownStrategyChannel, v as ProxyPoolStrategy)"
+              >
+                <el-option v-for="s in STRATEGIES" :key="s.value" :value="s.value" :label="s.label" />
+              </el-select>
+            </div>
+            <div class="auto-row">
+              <span class="auto-label">成本档位</span>
+              <el-select
+                class="f-el-select strategy-select"
+                popper-class="glass-popper"
+                :model-value="shownStrategyChannel?.costTier || 'normal'"
+                style="width: 140px"
+                @update:model-value="(v: string) => shownStrategyChannel && setCostTier(shownStrategyChannel, v as ProxyCostTier)"
+              >
+                <el-option v-for="t in COST_TIERS" :key="t.value" :value="t.value" :label="t.label" />
+              </el-select>
+            </div>
+          </div>
+          <div class="p-actions">
+            <button class="btn btn-primary" @click="strategyOpen = false">完成</button>
+          </div>
+        </div>
+      </div>
+
       <!-- 自动签到设置（按渠道）：每天几点自动执行 + 抖动分钟；保存即生效（后端 60s tick 热读配置） -->
       <div v-if="autoDlg" class="p-mask" @click.self="autoDlg = null">
         <div class="p-dlg glass auto-dlg">
@@ -2303,9 +2334,8 @@ onUnmounted(() => {
   padding: 0 12px;
   font-size: 12px;
 }
+/* 调度策略下拉（在「调度策略」小弹窗内，宽度由模板内联给定） */
 .strategy-select {
-  width: 108px;
-  margin-right: 8px;
   vertical-align: middle;
   height: 34px;
   font-size: 11px;
@@ -2805,6 +2835,10 @@ onUnmounted(() => {
 
 /* ===== 自动签到设置弹窗（按渠道：时间 + 抖动） ===== */
 .auto-dlg {
+  width: 440px;
+}
+/* 调度策略小弹窗：两行 label + 下拉，版式复用 auto-rows */
+.strategy-dlg {
   width: 440px;
 }
 .auto-rows {
