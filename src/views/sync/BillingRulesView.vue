@@ -228,7 +228,9 @@ function mergeCandidates(aliasModelId: string): MergeCandidate[] {
   const missed: string[] = [];
   const seen = new Set<string>();
   for (const p of prices.value) {
-    if (!p.active || seen.has(p.modelId)) continue;
+    // 排除待归并模型自身：同名价格行不构成归并目标（后端同样拒绝自归并，issue #98），
+    // 它的正确出路是把生效日期补到最早记录日（见 activePriceByModel / extendRowPriceBack）
+    if (!p.active || p.modelId === aliasModelId || seen.has(p.modelId)) continue;
     seen.add(p.modelId);
     const tokens = [...new Set(tokenizeModel(p.modelId))];
     const hitTokens = tokens.filter((t) => src.has(t));
@@ -241,14 +243,33 @@ function mergeCandidates(aliasModelId: string): MergeCandidate[] {
   return [...hits, ...missed.sort().map((m) => ({ modelId: m, hit: 0, total: 0, tokens: [] as string[], source: meta.get(m)?.source, exactOnly: !!(meta.get(m)?.exact && !meta.get(m)?.generic) }))];
 }
 
+/** 价格表里的同名现行行（按 modelId 取首个：通配组在前、来源优先级已由 listCurrentPrices 排好）。
+ *  未配置模型命中它 = 有价格但没覆盖这些记录（生效日期晚于记录，或只有其它供应商的精确价）——
+ *  出口是「补生效日期」，不是归并（issue #98） */
+const activePriceByModel = computed(() => {
+  const m = new Map<string, PriceRow>();
+  for (const p of prices.value) if (p.active && !m.has(p.modelId)) m.set(p.modelId, p);
+  return m;
+});
+
+/** 未配置行内提示文案：已有同名现行价格（未覆盖历史记录） */
+function priceHint(u: UnpricedModel): string {
+  const p = activePriceByModel.value.get(u.modelId);
+  if (!p) return "";
+  return `已有价格（${sourceLabel[p.source] || p.source} · ${dateToStr(p.effectiveFrom)} 起）、未覆盖历史记录`;
+}
+
 const mergeModal = reactive({
   show: false,
   aliasModelId: "",
   records: 0,
   tokens: 0,
+  firstSeen: 0,
   candidates: [] as MergeCandidate[],
+  selfPrice: null as PriceRow | null, // 本模型的现行价格行（存在 = 应走「补生效日期」，而不是归并）
   target: "",
   submitting: false,
+  extending: false,
   error: "",
 });
 
@@ -256,8 +277,12 @@ function openMerge(u: UnpricedModel) {
   mergeModal.aliasModelId = u.modelId;
   mergeModal.records = u.records;
   mergeModal.tokens = u.tokens;
+  mergeModal.firstSeen = u.firstSeen;
   mergeModal.candidates = mergeCandidates(u.modelId);
-  mergeModal.target = mergeModal.candidates[0]?.modelId || "";
+  mergeModal.selfPrice = activePriceByModel.value.get(u.modelId) || null;
+  // 自有现行价格时不再默认选中「最像的」其它模型：自动归并过去会改错计费口径；
+  // 正确动作是给自有价格补生效日期，归并目标需用户显式改选
+  mergeModal.target = mergeModal.selfPrice ? "" : mergeModal.candidates[0]?.modelId || "";
   mergeModal.error = "";
   mergeModal.show = true;
 }
@@ -267,6 +292,61 @@ const bestMerge = computed(() => {
   const c = mergeModal.candidates[0];
   return c && c.hit > 0 ? c : null;
 });
+
+/** 「补生效日期」按钮文案：现行价确实晚于最早记录才说「提前」，否则说「补录」（供应商维度未覆盖的场景） */
+const extendLabel = computed(() => {
+  const day = dateToStr(mergeModal.firstSeen);
+  const sp = mergeModal.selfPrice;
+  return sp && sp.effectiveFrom <= mergeModal.firstSeen ? `按现行价格补录历史记录（${day} 起生效）` : `生效日期提前到 ${day} 并重算`;
+});
+
+/** 让 modelId 的历史记录按现行价格计费：价格段起点补到最早记录日（与草稿行「生效日期默认最早记录日」同一口径）。
+ *  写通配行（providerId=null）以同时兜住「只有其它供应商精确价」的场景；沿用原行来源（remote 保持随远程源更新）。
+ *  savePrice 会把同来源同维度的后续段并入这一段——数值不变，只挪生效起点，历史费用随即重算 */
+function priceHistoryBack(modelId: string, firstSeen: number, sp: PriceRow) {
+  return api.savePrice({
+    providerId: null,
+    modelId,
+    inputPerM: sp.inputPerM,
+    outputPerM: sp.outputPerM,
+    cacheReadPerM: sp.cacheReadPerM,
+    cacheWritePerM: sp.cacheWritePerM,
+    currency: sp.currency,
+    effectiveFrom: dateToMs(dateToStr(firstSeen)),
+    source: sp.source,
+  });
+}
+
+/** 归并弹窗顶部「补生效日期」：本模型已有现行价格时的一键出口（无需归并） */
+async function extendPriceBack() {
+  const sp = mergeModal.selfPrice;
+  if (!sp || mergeModal.extending) return;
+  mergeModal.extending = true;
+  mergeModal.error = "";
+  try {
+    const r = await priceHistoryBack(mergeModal.aliasModelId, mergeModal.firstSeen, sp);
+    if (r.ok) {
+      ElMessage.success(`已按现行价格重算 ${mergeModal.aliasModelId} 的历史记录`);
+      mergeModal.show = false;
+      await Promise.all([loadPrices(), loadUnpriced()]);
+    } else {
+      mergeModal.error = r.message || "保存失败，请重试";
+    }
+  } catch (e) {
+    mergeModal.error = e instanceof Error ? e.message : "保存失败，请重试";
+  } finally {
+    mergeModal.extending = false;
+  }
+}
+
+/** 未配置行内的「补生效日期」：同上，不经过弹窗 */
+async function extendRowPriceBack(u: UnpricedModel) {
+  const sp = activePriceByModel.value.get(u.modelId);
+  if (!sp) return;
+  const r = await priceHistoryBack(u.modelId, u.firstSeen, sp);
+  flash(r.ok ? { ok: true, message: `已按现行价格重算 ${u.modelId} 的历史记录` } : r);
+  if (r.ok) await Promise.all([loadPrices(), loadUnpriced()]);
+}
 
 async function submitMerge() {
   if (!mergeModal.target || mergeModal.submitting) return;
@@ -574,7 +654,7 @@ watch(() => app.activePage, (p) => {
     <div class="card" v-if="unpriced.length">
       <div class="card-head">
         <h2>未配置价格的模型</h2>
-        <span class="hint">来自本机真实用量 · 填写后保存即计价（生效日期默认该模型最早记录日，历史一并计入）· 渠道变体可「归并」到已配置模型</span>
+        <span class="hint">来自本机真实用量 · 填写后保存即计价（生效日期默认该模型最早记录日，历史一并计入）· 已有同名价格的行可「补生效日期」 · 渠道变体名可「归并」到已配置模型</span>
       </div>
       <div class="table-scroll">
         <table class="table">
@@ -584,7 +664,10 @@ watch(() => app.activePage, (p) => {
           </tr></thead>
           <tbody>
             <tr v-for="u in unpriced" :key="draftKey(u)" class="tr-unpriced">
-              <td class="mono">{{ u.modelId }}</td>
+              <td class="mono">
+                {{ u.modelId }}
+                <div v-if="activePriceByModel.has(u.modelId)" class="u-note">{{ priceHint(u) }}</div>
+              </td>
               <td>{{ u.providerId }}</td>
               <td class="num mono">{{ formatInteger(u.records) }}</td>
               <td class="num mono">{{ formatToken(u.tokens) }}</td>
@@ -598,6 +681,7 @@ watch(() => app.activePage, (p) => {
               </td>
               <td><input class="f-input mini-input" type="date" v-model="draftRows[draftKey(u)].effectiveFrom" /></td>
               <td class="op-cell">
+                <button v-if="activePriceByModel.has(u.modelId)" class="btn-outline sm" @click="extendRowPriceBack(u)">补生效日期</button>
                 <button class="btn-outline sm" @click="openMerge(u)">归并</button>
                 <button class="btn-outline sm" @click="saveDraft(u)">保存</button>
               </td>
@@ -781,8 +865,20 @@ watch(() => app.activePage, (p) => {
           <div class="sd-sub mono">{{ mergeModal.aliasModelId }} · {{ formatInteger(mergeModal.records) }} 条记录 · {{ formatToken(mergeModal.tokens) }} tokens</div>
         </div>
       </template>
-      <div class="form-field">
-        <label>归并目标（该模型的全部记录按目标价格计费，生效日期不适用）</label>
+      <!-- 本模型在价格表里已有现行价格：正确出口是补生效日期（归并只用于渠道变体名），置顶为主动作 -->
+      <div v-if="mergeModal.selfPrice" class="self-price-box">
+        <p class="sp-line">
+          本模型在价格表里已有现行价格：<b>{{ sourceLabel[mergeModal.selfPrice.source] || mergeModal.selfPrice.source }}</b>
+          · 输入 <b>{{ mergeModal.selfPrice.inputPerM }}</b>/M · 输出 <b>{{ mergeModal.selfPrice.outputPerM }}</b>/M（{{ mergeModal.selfPrice.currency }}）
+          · {{ formatDateTime(mergeModal.selfPrice.effectiveFrom) }} 起生效
+        </p>
+        <p class="m-hint">点下面按钮即可让这批历史记录按此价格计费；归并只用于渠道变体模型名，这种情况不需要归并。</p>
+        <button class="btn btn-cta" :disabled="mergeModal.extending" @click="extendPriceBack">
+          {{ mergeModal.extending ? "重算中…" : extendLabel }}
+        </button>
+      </div>
+      <div class="form-field" v-if="mergeModal.candidates.length">
+        <label>{{ mergeModal.selfPrice ? "或：归并到其它已配置模型（渠道变体名场景）" : "归并目标（该模型的全部记录按目标价格计费，生效日期不适用）" }}</label>
         <el-select v-model="mergeModal.target" class="f-el-select" popper-class="glass-popper" style="width: 100%" filterable>
           <el-option
             v-for="c in mergeModal.candidates"
@@ -792,11 +888,13 @@ watch(() => app.activePage, (p) => {
           />
         </el-select>
       </div>
-      <p v-if="bestMerge" class="m-hint">
-        关键字匹配：<code>{{ mergeModal.aliasModelId }}</code> 与 <b>{{ bestMerge.modelId }}</b> 命中
-        {{ bestMerge.hit }}/{{ bestMerge.total }}{{ bestMerge.hit === bestMerge.total ? "（全命中）" : "" }}，已默认选中；也可改选其它模型。
-      </p>
-      <p v-else class="m-hint">未能按关键字自动匹配（与已配置模型无重合关键字），请从列表手动选择归并目标。</p>
+      <template v-if="!mergeModal.selfPrice">
+        <p v-if="bestMerge" class="m-hint">
+          关键字匹配：<code>{{ mergeModal.aliasModelId }}</code> 与 <b>{{ bestMerge.modelId }}</b> 命中
+          {{ bestMerge.hit }}/{{ bestMerge.total }}{{ bestMerge.hit === bestMerge.total ? "（全命中）" : "" }}，已默认选中；也可改选其它模型。
+        </p>
+        <p v-else class="m-hint">未能按关键字自动匹配（与已配置模型无重合关键字），请从列表手动选择归并目标。</p>
+      </template>
       <p class="m-hint">归并后该模型历史费用按目标模型价格自动重算；别名显示在价格表模型名下方，可随时取消。归并关系随价格表经 WebDAV 多设备同步。</p>
       <p v-if="mergeModal.error" class="m-error">{{ mergeModal.error }}</p>
       <div class="modal-actions">
@@ -830,6 +928,14 @@ td.op-cell { text-align: right; white-space: nowrap; }
 .save-line.ok { color: var(--ok); }
 /* 归并弹窗内错误行：失败时留在弹窗里（全局 toast 3 秒消失，红字停留供重试时对照） */
 .m-error { font-size: 12px; color: var(--err); margin: 10px 0 0; line-height: 1.6; }
+/* 未配置行内提示：已有同名现行价格、未覆盖历史记录——出口是补生效日期而非归并 */
+.u-note { font-size: 11px; color: var(--text-3); font-weight: 400; margin-top: 2px; line-height: 1.5; }
+/* 归并弹窗的「补生效日期」提示块（本模型已有现行价格时置顶） */
+.self-price-box { border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); padding: 10px 12px; margin-bottom: 12px; }
+.self-price-box .sp-line { font-size: 12.5px; color: var(--text-2); line-height: 1.6; margin-bottom: 4px; }
+.self-price-box .sp-line b { color: var(--text); }
+.self-price-box .m-hint { margin-bottom: 10px; }
+.self-price-box .btn { margin-bottom: 2px; }
 .footnote-card { padding: 16px 20px; }
 
 .tr-unpriced td { background: rgba(217, 119, 6, 0.045); }
