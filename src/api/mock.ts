@@ -44,7 +44,7 @@ function defaultConfig(): AppConfig {
       deviceId: "b3f2a1c8-77d2-4e5a-9b01-3f6c8d2e4a7b",
       deviceName: "DESK-01",
     },
-    schedule: { minimizeToTray: true, shortcutToggle: "Alt+`", autoStart: true, hourly: false, daily: true, dailyTime: "09:00", notifyOnSuccess: false },
+    schedule: { minimizeToTray: true, shortcutToggle: "Alt+`", lightweightMode: false, autoStart: true, hourly: false, daily: true, dailyTime: "09:00", notifyOnSuccess: false },
     watch: { enabled: true, intervalSeconds: 15 },
     memory: { enabled: true, rootDir: "" },
     proxy: {

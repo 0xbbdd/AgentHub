@@ -157,6 +157,10 @@ function defaultConfig() {
       // Electron 会当成三键组合，用户按两键没反应、极易误判为快捷键失效。
       // 空串 = 不注册快捷键。注册失败（被别的程序占用）时界面会明确提示，不静默换键。
       shortcutToggle: "Alt+`",
+      // 轻量模式：关窗时销毁窗口（释放整个渲染进程），托盘常驻期间后端照旧跑。
+      // 实测依据：hide() 只是藏窗口，渲染进程仍占 ~298 MB；destroy() 才会让它整只消失。
+      // 仅在 minimizeToTray 开启时有意义（否则关窗本来就销毁窗口）。默认关，与改造前行为一致。
+      lightweightMode: false,
       autoStart: false,     // 开机自启（便携版无效）
       hourly: false,        // 每小时自动同步
       daily: false,         // 每天定时同步

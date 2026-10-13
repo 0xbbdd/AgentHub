@@ -248,6 +248,9 @@ export interface AppConfig {
      *  注意 ~ 会被归一成 `（~ 需要 Shift，实际是三键组合）；空串 = 不注册。
      *  冲突时弹气泡提示并持续重试，解除后自动恢复。 */
     shortcutToggle: string;
+    /** 轻量模式：关窗时销毁窗口（释放整个渲染进程），托盘常驻期间后端照旧跑。
+     *  仅在 minimizeToTray 开启时有意义。默认关（与改造前行为一致）。 */
+    lightweightMode: boolean;
     autoStart: boolean;
     hourly: boolean;
     daily: boolean;
