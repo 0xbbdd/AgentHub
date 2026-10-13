@@ -1319,13 +1319,9 @@ function fmtClock(ts: number): string {
   return new Date(ts).toLocaleTimeString("zh-CN", { hour12: false });
 }
 
-// ===== UID 查看（列表副行只显示缩略，点击弹小窗看全文 + 复制） =====
+// ===== UID 查看（列表副行只显示「UID」小按钮，点击弹小窗看全文 + 复制） =====
 const uidRow = ref<ProxyAccount | null>(null);
 const uidCopied = ref(false);
-/** 列表副行的 UID 缩略：过长截断，全文在弹窗里看 */
-function uidBrief(uid: string): string {
-  return uid.length > 14 ? `${uid.slice(0, 14)}…` : uid;
-}
 async function copyUid() {
   if (!uidRow.value?.uid) return;
   try {
@@ -1577,12 +1573,12 @@ onUnmounted(() => {
                       @keydown.enter="commitRename(acc)"
                       @keydown.esc="renamingId = ''"
                     />
-                    <span class="acc-sub">
+                      <span class="acc-sub">
                       <span class="acc-src">{{ SOURCE_NAMES[acc.source] || acc.source }}</span>
                       <i>·</i>
                       <el-tooltip :content="acc.uid ? '点击查看完整 UID' : ''" :disabled="!acc.uid" placement="top">
                         <button class="acc-uid mono" :disabled="!acc.uid" @click="uidRow = acc">
-                          {{ acc.uid ? uidBrief(acc.uid) : "无 UID" }}
+                          {{ acc.uid ? "UID" : "无 UID" }}
                         </button>
                       </el-tooltip>
                       <template v-if="acc.note">
@@ -3107,12 +3103,20 @@ onUnmounted(() => {
   align-items: center;
   gap: 5px;
   margin-top: 2px;
+  /* 副行限宽锚定 .acc-name 的 220px：账号列宽度由名称行决定，备注再长也不撑列 */
+  max-width: 220px;
+  min-width: 0;
   font-size: 10.5px;
   color: var(--text-3);
 }
 .acc-sub i {
   font-style: normal;
   opacity: 0.6;
+  flex-shrink: 0;
+}
+.acc-src {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 /* 「本机登录」徽标：本机 agent 客户端当前登录的就是这个账号（与全局 tag 同构，自带小图标） */
 .acc-live {
@@ -3120,28 +3124,33 @@ onUnmounted(() => {
   align-items: center;
   gap: 3px;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 .acc-live .ph {
   font-size: 11px;
 }
+/* UID 小按钮：只显示「UID」二字，全文点击弹窗看 */
 .acc-uid {
-  border: none;
+  flex-shrink: 0;
+  border: 1px solid var(--line-strong);
   background: none;
-  padding: 0;
+  padding: 0 6px;
+  border-radius: var(--r-pill);
   color: var(--text-3);
-  font-size: 10.5px;
+  font-size: 10px;
+  line-height: 16px;
   cursor: pointer;
-  max-width: 130px;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
-  transition: color 0.15s;
+  transition: color 0.15s, border-color 0.15s;
 }
 .acc-uid:hover:not(:disabled) {
   color: var(--accent-strong);
+  border-color: var(--accent-line);
 }
-/* 备注缩略（有则显示）：限宽省略号，全文由 tooltip 与备注弹窗展示 */
+/* 备注缩略（有则显示）：副行剩余空间内收缩出省略号，全文由 tooltip 与备注弹窗展示 */
 .acc-note {
+  flex: 0 1 auto;
+  min-width: 0;
   max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
