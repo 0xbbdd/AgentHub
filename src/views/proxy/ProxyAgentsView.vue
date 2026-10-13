@@ -212,7 +212,7 @@ const pastePlaceholder = computed(() => {
   return `单个对象或数组均可，字段容忍别名：\n{\n  "name": "主账号（选填）",\n  "${tokenKey}": "渠道原生 token（必填）",\n  "refreshToken": "选填",${extra}\n  "uid": "选填，缺省从 token 解析"\n}`;
 });
 
-// 移出确认
+// 删除确认
 const delOpen = ref(false);
 const delRow = ref<ProxyAccount | null>(null);
 
@@ -1555,7 +1555,7 @@ onUnmounted(() => {
                         :disabled="ideSwitching === acc.id || !ideSupported(acc)"
                         @click="ideSwitch(acc)"
                       >
-                        {{ ideSwitching === acc.id ? "切换中…" : "切到 IDE" }}
+                        {{ ideSwitching === acc.id ? "切换中…" : "切换" }}
                       </button>
                     </el-tooltip>
                     <el-tooltip
@@ -1587,7 +1587,7 @@ onUnmounted(() => {
                       </button>
                     </el-tooltip>
                     <button class="btn-link btn-sm" @click="toggleAccount(acc)">{{ acc.status === "disabled" ? "启用" : "停用" }}</button>
-                    <button class="btn-link btn-sm danger" @click="delRow = acc; delOpen = true">移出</button>
+                    <button class="btn-link btn-sm danger" @click="delRow = acc; delOpen = true">删除</button>
                   </td>
                 </tr>
               </template>
@@ -1772,8 +1772,8 @@ onUnmounted(() => {
                 <i class="ph ph-circle-notch"></i>{{ addChannel === "raccoon" ? "已弹出应用内授权窗，完成后会自动入池（不经过本机小浣熊客户端）" : "已在浏览器打开登录页，完成后会自动入池" }}
               </template>
               <template v-else-if="addMethod === 'sms'">验证通过后自动入池，余额与签到随后自动刷新</template>
-              <template v-else-if="addMethod === 'local'">导入后仍可刷新余额、切到 IDE 或停用</template>
-              <template v-else>入池后可在下方列表里刷新余额、切到 IDE 或停用</template>
+              <template v-else-if="addMethod === 'local'">导入后仍可刷新余额、切换本机登录或停用</template>
+              <template v-else>入池后可在下方列表里刷新余额、切换本机登录或停用</template>
             </span>
             <button class="btn" @click="closeAdd()">{{ addMethod === "oauth" && oauthWaiting ? "取消登录" : "取消" }}</button>
 
@@ -1811,16 +1811,16 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- 移出确认 -->
+      <!-- 删除确认 -->
       <div v-if="delOpen" class="p-mask" @click.self="delOpen = false">
         <div class="p-dlg glass">
-          <div class="p-title">移出号池</div>
+          <div class="p-title">删除账号</div>
           <div class="set-desc">
-            确定把「{{ delRow?.name }}」移出号池？本地加密保管的凭据会一并删除，该账号不再参与调度。
+            确定把「{{ delRow?.name }}」从号池删除？本地加密保管的凭据会一并删除，该账号不再参与调度。
           </div>
           <div class="p-actions">
             <button class="btn" @click="delOpen = false">取消</button>
-            <button class="btn btn-primary danger-solid" @click="doDelete">移出</button>
+            <button class="btn btn-primary danger-solid" @click="doDelete">删除</button>
           </div>
         </div>
       </div>
