@@ -363,9 +363,11 @@ const KEY_ALIASES: Record<string, string> = {
   // 故统一归一成不带 Shift 的 ` 键，保证「按两键」即可触发。
   "~": "`", "`": "`", "-": "-", "=": "=", "[": "[", "]": "]", "\\": "\\",
   ";": ";", "'": "'", ",": ",", ".": ".", "/": "/",
-  space: "Space", tab: "Tab", enter: "Enter", backspace: "Backspace", delete: "Delete",
+  space: "Space", tab: "Tab", enter: "Enter", return: "Enter",
+  backspace: "Backspace", delete: "Delete", insert: "Insert",
   home: "Home", end: "End", pageup: "PageUp", pagedown: "PageDown",
   up: "Up", down: "Down", left: "Left", right: "Right",
+  plus: "Plus", numpadadd: "numadd", numpadsub: "numsub",
 };
 
 /** 与 backend/shortcut.cjs 的 normalize 同口径（保持两边规则一致，改一处要改两处） */
