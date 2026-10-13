@@ -89,8 +89,13 @@ async function refreshAccount(id) {
   // 注意 acc 是本次刷新开始前的旧快照，中间隔了上游网络请求（数秒）——期间请求链路可能刚把
   // 该号冷却（429 → cooling），必须用最新状态判定复活，不然会把新冷却无条件覆盖回 online
   const cur = store.getAccount(acc.id) || acc;
+  // credits === -1 = 「不限额度」哨兵（pool.cjs 选号、server.cjs 扣减都按这个念法豁免）。
+  // 本条之前它只是防御性写法、没有 producer 真产得出 -1；逐包链路里一个 remaining=-1 的包
+  // 经上面派生就会让 credits 变成 -1。而 exhausted 不只由余额判据产生——错误分类走 pool.cjs 的
+  // coolAccount("exhausted") 也会打进来，于是「无限额度的号被误标耗尽」再也刷不回来：
+  // 拿不到有限余额就无法证伪「余额不足」，按可用复活。
   const revive =
-    cur.status === "relogin" || (cur.status === "exhausted" && (credits > 0 || (expiresAt || 0) > Date.now()));
+    cur.status === "relogin" || (cur.status === "exhausted" && (credits > 0 || credits === -1 || (expiresAt || 0) > Date.now()));
   store.updateAccount(acc.id, {
     credits,
     creditsAt: Date.now(),
