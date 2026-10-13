@@ -812,6 +812,22 @@ function register(ipcMain) {
     oplog.log("info", "号池账号", `移除 ${store.channelDisplay(acc.channel)} 账号「${acc.name}」`, { channel: acc.channel, target: acc.name });
     return ok({});
   }));
+  // 批量删除（号池列表多选）：逐个走与单删相同的链路（墓碑先行 + CatPaw 会话清理），oplog 只记汇总一条
+  ipcMain.handle("proxy_account_remove_batch", handle(({ ids }) => {
+    const list = Array.isArray(ids) ? ids.map(String).filter(Boolean) : [];
+    if (!list.length) return fail("未选择账号");
+    let removed = 0;
+    let missing = 0;
+    for (const id of list) {
+      const acc = store.getAccount(id);
+      if (!acc) { missing++; continue; }
+      poolsync.noteRemoved(poolsync.accountKeyOf(acc));
+      if (store.removeAccount(id)) removed++;
+      try { require("./catpaw/registry.cjs").registry.clearAccount(id); } catch { /* 无会话不影响删除 */ }
+    }
+    if (removed) oplog.log("info", "号池账号", `批量删除 ${removed} 个账号（选择 ${list.length} 个${missing ? `，${missing} 个已不存在` : ""}）`, {});
+    return ok({ removed, missing });
+  }));
   ipcMain.handle("proxy_account_toggle", handle(({ id, enabled }) => {
     const acc = store.getAccount(id);
     if (!acc) return fail("账号不存在");

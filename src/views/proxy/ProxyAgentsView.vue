@@ -216,6 +216,82 @@ const pastePlaceholder = computed(() => {
 const delOpen = ref(false);
 const delRow = ref<ProxyAccount | null>(null);
 
+// ===== 多选 / 全选 + 导出 / 批量删除（选择只对当前渠道有意义，切渠道即清空） =====
+const selectedIds = ref<Set<string>>(new Set());
+const batchDelOpen = ref(false);
+const batchDelBusy = ref(false);
+const activeChannelAccounts = computed(() => pool.value.find((c) => c.id === activeChannel.value)?.accounts || []);
+const selectedCount = computed(() => activeChannelAccounts.value.filter((a) => selectedIds.value.has(a.id)).length);
+const allSelected = computed(
+  () => activeChannelAccounts.value.length > 0 && activeChannelAccounts.value.every((a) => selectedIds.value.has(a.id))
+);
+function toggleSelect(accId: string) {
+  const next = new Set(selectedIds.value);
+  if (next.has(accId)) next.delete(accId);
+  else next.add(accId);
+  selectedIds.value = next;
+}
+function toggleSelectAll() {
+  selectedIds.value = allSelected.value ? new Set() : new Set(activeChannelAccounts.value.map((a) => a.id));
+}
+watch(activeChannel, () => {
+  selectedIds.value = new Set();
+});
+
+/** 导出选中账号为 JSON 文件：仅元数据，不含凭据（凭据仅本机 DPAPI 加密保管，不外发） */
+function exportSelected() {
+  const rows = activeChannelAccounts.value.filter((a) => selectedIds.value.has(a.id));
+  if (!rows.length) return;
+  const payload = {
+    format: "agenthub-accounts",
+    exportedAt: new Date().toISOString(),
+    channel: activeChannel.value,
+    accounts: rows.map((a) => ({
+      id: a.id,
+      channel: a.channel,
+      uid: a.uid,
+      name: a.name,
+      source: a.source,
+      status: a.status,
+      credits: a.credits,
+      creditsAt: a.creditsAt,
+      expiresAt: a.expiresAt,
+      createdAt: a.createdAt,
+    })),
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `agenthub-accounts-${activeChannel.value}-${todayStr()}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+  toast(`已导出 ${rows.length} 个账号（仅元数据，不含凭据）`);
+}
+
+/** 批量删除：主进程逐个走单删链路（墓碑先行，经 WebDAV 传播到其他设备） */
+async function doBatchDelete() {
+  if (batchDelBusy.value) return;
+  const ids = activeChannelAccounts.value.filter((a) => selectedIds.value.has(a.id)).map((a) => a.id);
+  if (!ids.length) {
+    batchDelOpen.value = false;
+    return;
+  }
+  batchDelBusy.value = true;
+  try {
+    const r = await api.proxyAccountRemoveBatch(ids);
+    const okDone = r.ok !== false;
+    toast(okDone ? `已删除 ${r.removed ?? ids.length} 个账号` : r.message || "批量删除失败", okDone ? "info" : "err");
+    batchDelOpen.value = false;
+    selectedIds.value = new Set();
+    await refresh();
+  } catch (e) {
+    toast(String((e as Error).message || e), "err");
+  } finally {
+    batchDelBusy.value = false;
+  }
+}
+
 const STRATEGIES: { value: ProxyPoolStrategy; label: string }[] = [
   { value: "expire_first", label: "到期优先" },
   { value: "credit_first", label: "余额优先" },
@@ -1319,6 +1395,15 @@ onUnmounted(() => {
               <button class="btn btn-sm" @click="openStrategy(ch)">调度策略</button>
             </el-tooltip>
             <button class="btn btn-sm" @click="openAdd(ch)">添加账号</button>
+            <!-- 多选后出现的批量操作：导出（仅元数据）与批量删除（二次确认） -->
+            <template v-if="selectedCount">
+              <el-tooltip content="把选中账号导出为 JSON 文件（仅元数据，不含凭据）" placement="top">
+                <button class="btn btn-sm" @click="exportSelected">导出</button>
+              </el-tooltip>
+              <el-tooltip content="删除选中的账号（本地加密凭据一并删除，删除会经 WebDAV 同步传播到其他设备）" placement="top">
+                <button class="btn btn-sm danger" :disabled="batchDelBusy" @click="batchDelOpen = true">批量删除</button>
+              </el-tooltip>
+            </template>
             <el-tooltip v-if="ch.id === 'workbuddy_ai'" :content="checkinToolbarTitle(ch)" placement="top">
               <button
                 class="btn btn-sm"
@@ -1416,6 +1501,9 @@ onUnmounted(() => {
           <table class="table table-bare pool-tbl">
             <thead>
               <tr>
+                <th class="sel-col">
+                  <input type="checkbox" :checked="allSelected" :disabled="!ch.accounts.length" @change="toggleSelectAll" />
+                </th>
                 <th>账号</th><th>状态</th><th>{{ ch.id === 'zcode' ? 'Token 余额' : '余额' }}</th><th>到期</th><th>今日</th><th>操作</th>
               </tr>
             </thead>
@@ -1423,6 +1511,7 @@ onUnmounted(() => {
               <!-- 骨架屏加载 -->
               <template v-if="loading && !ch.accounts.length">
                 <tr v-for="n in 4" :key="'sk-' + n">
+                  <td class="sel-col"><div class="skeleton" style="height: 14px; width: 14px; margin: 0 auto"></div></td>
                   <td><div class="skeleton" style="height: 20px; width: 120px"></div></td>
                   <td><div class="skeleton" style="height: 18px; width: 50px"></div></td>
                   <td><div class="skeleton" style="height: 18px; width: 70px"></div></td>
@@ -1432,12 +1521,15 @@ onUnmounted(() => {
                 </tr>
               </template>
               <tr v-else-if="!ch.accounts.length">
-                <td colspan="6" style="text-align: center; color: var(--text-3); padding: 24px 0">
+                <td colspan="7" style="text-align: center; color: var(--text-3); padding: 24px 0">
                   号池为空 —— 点「添加账号」：OAuth 登录 / 从本机软件导入 / 文件导入 / 手动粘贴
                 </td>
               </tr>
               <template v-else>
                 <tr v-for="(acc, i) in ch.accounts" :key="acc.id" :style="{ '--i': i }">
+                  <td class="sel-col">
+                    <input type="checkbox" :checked="selectedIds.has(acc.id)" @change="toggleSelect(acc.id)" />
+                  </td>
                   <td class="acc-cell">
                     <el-tooltip v-if="renamingId !== acc.id" :content="acc.name + '（点击重命名）'" placement="top">
                       <span class="acc-name" @click="startRename(acc)">{{ acc.name || "（未命名账号）" }}</span>
@@ -1809,6 +1901,22 @@ onUnmounted(() => {
           <div class="p-actions">
             <button class="btn" @click="delOpen = false">取消</button>
             <button class="btn btn-primary danger-solid" @click="doDelete">删除</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 批量删除确认（号池列表多选后出现） -->
+      <div v-if="batchDelOpen" class="p-mask" @click.self="batchDelOpen = false">
+        <div class="p-dlg glass">
+          <div class="p-title">批量删除账号</div>
+          <div class="set-desc">
+            确定把选中的 {{ selectedCount }} 个账号从号池删除？本地加密保管的凭据会一并删除，这些账号不再参与调度（删除会经 WebDAV 同步传播到其他设备）。
+          </div>
+          <div class="p-actions">
+            <button class="btn" @click="batchDelOpen = false">取消</button>
+            <button class="btn btn-primary danger-solid" :disabled="batchDelBusy" @click="doBatchDelete">
+              {{ batchDelBusy ? "删除中…" : "删除" }}
+            </button>
           </div>
         </div>
       </div>
@@ -2895,6 +3003,16 @@ onUnmounted(() => {
 /* ===== 列表布局：账号两行式 + 数字列右对齐 ===== */
 .pool-tbl td.num {
   text-align: right;
+}
+/* 选择列：全选与行选 checkbox 居中 */
+.sel-col {
+  width: 34px;
+  text-align: center;
+}
+.sel-col input[type="checkbox"] {
+  vertical-align: middle;
+  cursor: pointer;
+  accent-color: var(--accent);
 }
 .acc-cell {
   line-height: 1.3;

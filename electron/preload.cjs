@@ -125,6 +125,7 @@ const ALLOWED_COMMANDS = new Set([
   "proxy_pool_tier",
   "proxy_account_add",
   "proxy_account_remove",
+  "proxy_account_remove_batch",
   "proxy_account_toggle",
   "proxy_account_rename",
   "proxy_account_cool_off",

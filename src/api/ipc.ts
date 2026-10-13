@@ -256,6 +256,9 @@ export const proxyPoolTier = (channel: ProxyChannelId, tier: ProxyCostTier) =>
 export const proxyAccountAdd = (opts: { channel: ProxyChannelId; name?: string; token: string; refreshToken?: string; uid?: string }) =>
   call<{ ok: boolean; id?: string; message?: string }>("proxy_account_add", opts as unknown as Record<string, unknown>);
 export const proxyAccountRemove = (id: string) => call<{ ok: boolean; message?: string }>("proxy_account_remove", { id });
+/** 批量删除（号池列表多选）：主进程逐个走单删链路（墓碑先行 + WebDAV 传播），removed = 实删条数 */
+export const proxyAccountRemoveBatch = (ids: string[]) =>
+  call<{ ok: boolean; removed?: number; missing?: number; message?: string }>("proxy_account_remove_batch", { ids });
 export const proxyAccountToggle = (id: string, enabled: boolean) =>
   call<{ ok: boolean; message?: string }>("proxy_account_toggle", { id, enabled });
 /** 重命名账号（自定义备注），WebDAV 同步时 LWW 传播 */
