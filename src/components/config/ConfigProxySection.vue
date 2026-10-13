@@ -239,7 +239,10 @@ function openDataDir() {
         </div>
         <template v-if="app.config.proxy.channelFailover !== false">
           <div class="set-row">
-            <div class="set-info"><div class="set-name">单请求最多尝试渠道数</div></div>
+            <div class="set-info">
+              <div class="set-name">单请求最多尝试渠道数</div>
+              <div class="set-desc">范围 1~5；超出上限按 5 保存（与每模型 6 次上游尝试预算配套）</div>
+            </div>
             <input v-model.number="app.config.proxy.channelFailoverMax" class="input mono" style="width: 90px" type="number" min="1" max="5" />
             <span style="font-size: 11px; color: var(--text-3)">个（含主渠道）</span>
           </div>
