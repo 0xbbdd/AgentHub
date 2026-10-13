@@ -397,6 +397,30 @@ export interface CcSwitchRegisterResult {
   message?: string;
 }
 
+/** 单个积分包/加油包明细：上游按包发放，逐包各有面值/已用/到期。
+ *  expired / expiringSoon 是「时间态」，由主进程按 proxy.expiringSoonDays 出视图时现算，
+ *  不落库——写进库的"今天"会被刷新时刻冻结，隔天再看全是旧的。 */
+export interface ProxyCreditPackage {
+  /** 包唯一标识（同账号内稳定，列表 key 用）；上游缺失时回落 pack{i} */
+  code: string;
+  /** 包名/来源（如 Trae 的 display_desc、WorkBuddy 的 PackageName） */
+  name: string;
+  /** ⚠ -1 = 「上游不给这一包的总额」（界面渲染「—」），**不是**「额度不限」；
+   *  后者只由 remaining === -1 表达。两者混为一谈时，一个只是缺面值字段的包会把整个
+   *  账号的余额派生成无限并绕开 cost-first 路由。 */
+  total: number;
+  /** 已用（total 未知时为 0） */
+  used: number;
+  /** 剩余；-1 = 额度不限 */
+  remaining: number;
+  /** 到期时间戳（毫秒）；0 = 无到期 / 长期有效 */
+  expiresAt: number;
+  /** 已过期（expiresAt > 0 且 <= now） */
+  expired?: boolean;
+  /** 即将到期（now < expiresAt < now + expiringSoonDays 天） */
+  expiringSoon?: boolean;
+}
+
 export interface ProxyAccount {
   id: string;
   channel: ProxyChannelId;
@@ -414,6 +438,8 @@ export interface ProxyAccount {
   checkin?: ProxyCheckinRecord | null;
   /** 生效中的模型级负缓存（6004/11102 只罚"账号×模型"不落账号状态；空数组 = 无） */
   modelCool?: { model: string; until: number; reason: string }[];
+  /** 逐包明细（有包的渠道才有；无包的渠道这个字段不出，界面回落账号级聚合行） */
+  packages?: ProxyCreditPackage[];
   source: "scan" | "oauth" | "paste";
   /** 账号备注（备注弹窗写入；落 meta.note，副行展示 + 随 WebDAV 同步） */
   note?: string;
@@ -776,6 +802,7 @@ export const MODULES: ModuleDef[] = [
     pages: [
       { id: "home", name: "总览" },
       { id: "agents", name: "号池" },
+      { id: "expiry", name: "积分日历" },
       { id: "keys", name: "API Keys" },
       { id: "models", name: "模型目录" },
       { id: "stats", name: "用量统计" },

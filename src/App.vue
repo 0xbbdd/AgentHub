@@ -32,6 +32,7 @@ import SyncLogView from "./views/sync/LogView.vue";
 import ProxyHomeView from "./views/proxy/ProxyHomeView.vue";
 import ProxyKeysView from "./views/proxy/ProxyKeysView.vue";
 import ProxyAgentsView from "./views/proxy/ProxyAgentsView.vue";
+import ProxyExpiryView from "./views/proxy/ProxyExpiryView.vue";
 import ProxyModelsView from "./views/proxy/ProxyModelsView.vue";
 import ProxyStatsView from "./views/proxy/ProxyStatsView.vue";
 import ProxyPoolSyncView from "./views/proxy/ProxyPoolSyncView.vue";
@@ -665,6 +666,7 @@ const seen = (mod: string, page: string) => !!visited.value[`${mod}/${page}`];
         <ProxyHomeView v-if="seen('proxy', 'home')" v-show="on('proxy', 'home')" :class="{ 'page-anim': on('proxy', 'home') }" />
         <ProxyKeysView v-if="seen('proxy', 'keys')" v-show="on('proxy', 'keys')" :class="{ 'page-anim': on('proxy', 'keys') }" />
         <ProxyAgentsView v-if="seen('proxy', 'agents')" v-show="on('proxy', 'agents')" :class="{ 'page-anim': on('proxy', 'agents') }" />
+        <ProxyExpiryView v-if="seen('proxy', 'expiry')" v-show="on('proxy', 'expiry')" :class="{ 'page-anim': on('proxy', 'expiry') }" />
         <ProxyModelsView v-if="seen('proxy', 'models')" v-show="on('proxy', 'models')" :class="{ 'page-anim': on('proxy', 'models') }" />
         <ProxyStatsView v-if="seen('proxy', 'stats')" v-show="on('proxy', 'stats')" :class="{ 'page-anim': on('proxy', 'stats') }" />
         <ProxyPoolSyncView v-if="seen('proxy', 'poolsync')" v-show="on('proxy', 'poolsync')" :class="{ 'page-anim': on('proxy', 'poolsync') }" />

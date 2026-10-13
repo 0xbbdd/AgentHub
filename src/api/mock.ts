@@ -254,9 +254,9 @@ const PROXY_POOL = [
     summary: { channel: "trae", totalCredits: 72480, accountCount: 2, onlineCount: 2, earliestExpire: NOW + 48 * 86400000, expiringSoon: false, todayReq: 412, todayTokens: 96400, lastCreditsAt: ago(25) },
     accounts: [
       // 今日已签到（行内按钮"已签到"态；点开看今日详情）
-      { id: "a1", channel: "trae", uid: "88213476", name: "主账号 · 沐", status: "online", credits: 51230, creditsAt: ago(25), expiresAt: NOW + 48 * 86400000, coolUntil: 0, coolReason: "", source: "oauth", lastUsed: ago(3), todayReq: 301, todayTokens: 70200, createdAt: NOW - 20 * 86400000, hasToken: true, checkin: { day: TODAY, at: NOW - 3600000, action: "checkin", ok: true, credit: 100, streakDays: 5, message: "签到成功" } },
+      { id: "a1", channel: "trae", uid: "88213476", name: "主账号 · 沐", status: "online", credits: 51230, creditsAt: ago(25), expiresAt: NOW + 48 * 86400000, coolUntil: 0, coolReason: "", source: "oauth", lastUsed: ago(3), todayReq: 301, todayTokens: 70200, createdAt: NOW - 20 * 86400000, hasToken: true, packages: [{ code: "trae-solo", name: "SOLO 基础包", total: 40000, used: 0, remaining: 40000, expiresAt: NOW + 48 * 86400000, expired: false, expiringSoon: false }, { code: "trae-boost", name: "SOLO 加油包", total: 20000, used: 8770, remaining: 11230, expiresAt: NOW + 12 * 86400000, expired: false, expiringSoon: false }], checkin: { day: TODAY, at: NOW - 3600000, action: "checkin", ok: true, credit: 100, streakDays: 5, message: "签到成功" } },
       // 今日签到失败（行内按钮"签到失败"态；点开看失败原因）
-      { id: "a2", channel: "trae", uid: "90247811", name: "备用号", status: "online", credits: 21250, creditsAt: ago(25), expiresAt: NOW + 21 * 86400000, coolUntil: 0, coolReason: "", source: "paste", lastUsed: ago(40), todayReq: 111, todayTokens: 26200, createdAt: NOW - 6 * 86400000, hasToken: true, checkin: { day: TODAY, at: NOW - 3000000, action: "checkin", ok: false, message: "上游 429：签到请求过于频繁，请稍后重试" } },
+      { id: "a2", channel: "trae", uid: "90247811", name: "备用号", status: "online", credits: 21250, creditsAt: ago(25), expiresAt: NOW + 21 * 86400000, coolUntil: 0, coolReason: "", source: "paste", lastUsed: ago(40), todayReq: 111, todayTokens: 26200, createdAt: NOW - 6 * 86400000, hasToken: true, packages: [{ code: "trae-old", name: "去年双十一赠送包", total: 5000, used: 0, remaining: 5000, expiresAt: NOW - 3 * 86400000, expired: true, expiringSoon: false }, { code: "trae-solo2", name: "SOLO 基础包", total: 25000, used: 3750, remaining: 21250, expiresAt: NOW + 21 * 86400000, expired: false, expiringSoon: false }], checkin: { day: TODAY, at: NOW - 3000000, action: "checkin", ok: false, message: "上游 429：签到请求过于频繁，请稍后重试" } },
     ],
   },
   {
@@ -266,7 +266,7 @@ const PROXY_POOL = [
     summary: { channel: "workbuddy", totalCredits: 34120, accountCount: 2, onlineCount: 1, earliestExpire: NOW + 12 * 86400000, expiringSoon: false, todayReq: 203, todayTokens: 41200, lastCreditsAt: ago(40) },
     accounts: [
       // 该渠道今日已全部签完（工具栏按钮应显示"签到成功"完成态）
-      { id: "a3", channel: "workbuddy", uid: "wb_7c21", name: "工作号", status: "online", credits: 34120, creditsAt: ago(40), expiresAt: NOW + 12 * 86400000, coolUntil: 0, coolReason: "", source: "scan", lastUsed: ago(8), todayReq: 203, todayTokens: 41200, createdAt: NOW - 15 * 86400000, hasToken: true, checkin: { day: TODAY, at: NOW - 4000000, action: "checkin", ok: true, already: true, streakDays: 12, message: "今日已签到" } },
+      { id: "a3", channel: "workbuddy", uid: "wb_7c21", name: "工作号", status: "online", credits: 34120, creditsAt: ago(40), expiresAt: NOW + 12 * 86400000, coolUntil: 0, coolReason: "", source: "scan", lastUsed: ago(8), todayReq: 203, todayTokens: 41200, createdAt: NOW - 15 * 86400000, hasToken: true, packages: [{ code: "wb-base", name: "CodeBuddy 个人版月度包", total: 30000, used: 0, remaining: 30000, expiresAt: NOW + 12 * 86400000, expired: false, expiringSoon: false }, { code: "wb-fission", name: "国内运营裂变包", total: 5000, used: 880, remaining: 4120, expiresAt: NOW + 6 * 86400000, expired: false, expiringSoon: false }], checkin: { day: TODAY, at: NOW - 4000000, action: "checkin", ok: true, already: true, streakDays: 12, message: "今日已签到" } },
       { id: "a4", channel: "workbuddy", uid: "wb_9e05", name: "历史快照", status: "cooling", credits: 0, creditsAt: ago(300), expiresAt: 0, coolUntil: NOW + 42000, coolReason: "上游限流", source: "scan", lastUsed: ago(55), todayReq: 0, todayTokens: 0, createdAt: NOW - 15 * 86400000, hasToken: true, checkin: { day: TODAY, at: NOW - 4000000, action: "checkin", ok: true, credit: 50, streakDays: 3, message: "签到成功" } },
     ],
   },
@@ -277,7 +277,7 @@ const PROXY_POOL = [
     summary: { channel: "workbuddy_ai", totalCredits: 8120, accountCount: 1, onlineCount: 1, earliestExpire: NOW + 33 * 86400000, expiringSoon: false, todayReq: 66, todayTokens: 14800, lastCreditsAt: ago(70) },
     accounts: [
       // 一次性加油包已领（行内按钮应显示"已领取"）
-      { id: "a5", channel: "workbuddy_ai", uid: "wba_3d88", name: "Trial 加油包", status: "online", credits: 8120, creditsAt: ago(70), expiresAt: NOW + 33 * 86400000, coolUntil: 0, coolReason: "", source: "paste", lastUsed: ago(30), todayReq: 66, todayTokens: 14800, createdAt: NOW - 4 * 86400000, hasToken: true, checkin: { day: TODAY, at: NOW - 5000000, action: "trial", ok: true, already: true, credit: 500, message: "加油包已领取" } },
+      { id: "a5", channel: "workbuddy_ai", uid: "wba_3d88", name: "Trial 加油包", status: "online", credits: 8120, creditsAt: ago(70), expiresAt: NOW + 33 * 86400000, coolUntil: 0, coolReason: "", source: "paste", lastUsed: ago(30), todayReq: 66, todayTokens: 14800, createdAt: NOW - 4 * 86400000, hasToken: true, packages: [{ code: "wba-bonus", name: "Bonus Pack", total: -1, used: 0, remaining: 8120, expiresAt: NOW + 33 * 86400000, expired: false, expiringSoon: false }], checkin: { day: TODAY, at: NOW - 5000000, action: "trial", ok: true, already: true, credit: 500, message: "加油包已领取" } },
     ],
   },
   {
