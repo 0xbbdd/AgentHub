@@ -251,6 +251,7 @@ function exportSelected() {
       channel: a.channel,
       uid: a.uid,
       name: a.name,
+      note: a.note || "",
       source: a.source,
       status: a.status,
       credits: a.credits,
@@ -859,6 +860,39 @@ async function commitRename(acc: ProxyAccount) {
   } finally {
     renamingId.value = "";
     renameText.value = "";
+    await refresh();
+  }
+}
+
+// ===== 账号备注弹窗（一个输入框，保存落 meta.note；随 WebDAV 快照导出 + 备注新者胜传播） =====
+const noteOpen = ref(false);
+const noteRow = ref<ProxyAccount | null>(null);
+const noteText = ref("");
+const noteBusy = ref(false);
+
+function openNote(acc: ProxyAccount) {
+  noteRow.value = acc;
+  noteText.value = acc.note || "";
+  noteOpen.value = true;
+}
+
+async function saveNote() {
+  const acc = noteRow.value;
+  if (!acc || noteBusy.value) return;
+  const text = noteText.value.trim();
+  noteBusy.value = true;
+  try {
+    const r = await api.proxyAccountNote(acc.id, text);
+    if (r.ok === false) {
+      toast(r.message || "保存失败", "err");
+      return;
+    }
+    noteOpen.value = false;
+    toast(text ? "备注已保存（将随 WebDAV 同步）" : "备注已清除");
+  } catch (e) {
+    toast(String((e as Error).message || e), "err");
+  } finally {
+    noteBusy.value = false;
     await refresh();
   }
 }
@@ -1667,6 +1701,9 @@ onUnmounted(() => {
                       </button>
                     </el-tooltip>
                     <button class="btn-link btn-sm" @click="toggleAccount(acc)">{{ acc.status === "disabled" ? "启用" : "停用" }}</button>
+                    <el-tooltip content="添加 / 编辑备注（随 WebDAV 同步到其他设备）" placement="top">
+                      <button class="btn-link btn-sm" @click="openNote(acc)">备注</button>
+                    </el-tooltip>
                     <button class="btn-link btn-sm danger" @click="delRow = acc; delOpen = true">删除</button>
                   </td>
                 </tr>
@@ -2158,6 +2195,26 @@ onUnmounted(() => {
           <div class="p-actions">
             <button class="btn" @click="uidRow = null">关闭</button>
             <button class="btn btn-primary" :disabled="!uidRow.uid" @click="copyUid">{{ uidCopied ? "已复制" : "复制 UID" }}</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 备注弹窗：一个输入框，保存落 meta.note（清空即清除），随 WebDAV 同步 -->
+      <div v-if="noteOpen" class="p-mask" @click.self="noteOpen = false">
+        <div class="p-dlg glass note-dlg">
+          <div class="p-title">账号备注</div>
+          <div class="set-desc">{{ noteRow?.name }}（{{ noteRow ? channelName(noteRow.channel) : "" }}）</div>
+          <input
+            v-model="noteText"
+            class="input note-input"
+            placeholder="输入备注（留空保存即清除）"
+            maxlength="200"
+            @keydown.enter="saveNote"
+            @keydown.esc="noteOpen = false"
+          />
+          <div class="p-actions">
+            <button class="btn" @click="noteOpen = false">取消</button>
+            <button class="btn btn-primary" :disabled="noteBusy" @click="saveNote">{{ noteBusy ? "保存中…" : "保存" }}</button>
           </div>
         </div>
       </div>
@@ -2988,6 +3045,14 @@ onUnmounted(() => {
 /* ===== UID 查看弹窗 ===== */
 .uid-dlg {
   width: 400px;
+}
+/* ===== 备注弹窗 ===== */
+.note-dlg {
+  width: 420px;
+}
+.note-input {
+  margin-top: 10px;
+  width: 100%;
 }
 .uid-text {
   margin-top: 10px;

@@ -1138,6 +1138,7 @@ export const mock = {
       case "proxy_pool_tier":
       case "proxy_account_remove":
       case "proxy_account_remove_batch":
+      case "proxy_account_note":
       case "proxy_account_toggle":
       case "proxy_oauth_cancel":
       case "proxy_oauth_submit_callback":

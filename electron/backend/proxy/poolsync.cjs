@@ -378,6 +378,14 @@ function mergeSnapshot(snap, channel) {
       patch.name = ra.name;
     }
 
+    // 账号备注（meta.note）：与备注名同一 LWW 口径——远端修改时间更新时覆盖本机。
+    // meta 合并只在采纳远端凭据时发生（凭据相同时不合并），备注必须独立一条才传播得动
+    const remoteNote = ra.meta && typeof ra.meta.note === "string" ? ra.meta.note.trim() : "";
+    const localNote = local.meta && typeof local.meta.note === "string" ? local.meta.note : "";
+    if (remoteNote && remoteNote !== localNote && raUpdatedAt > localUpdatedAt) {
+      patch.meta = { ...(patch.meta || local.meta || {}), note: remoteNote };
+    }
+
     if (Object.keys(patch).length) {
       store.updateAccount(local.id, patch);
       updated++;

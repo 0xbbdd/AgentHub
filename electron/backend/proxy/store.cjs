@@ -511,6 +511,8 @@ function accountView(r) {
     checkin: meta.checkin && typeof meta.checkin === "object" ? meta.checkin : null,
     /** 首登奖励结算台账（小浣熊一次性新手福利；key → 结算时刻，落了即「已领取」） */
     onboardingGrants: meta.onboardingGrants && typeof meta.onboardingGrants === "object" ? meta.onboardingGrants : null,
+    /** 账号备注（号池列表副行展示 + 备注弹窗；落 meta.note，随 WebDAV 同步） */
+    note: typeof meta.note === "string" ? meta.note : "",
     source: r.source,
     lastUsed: r.last_used,
     todayReq: r.today_day === dayStr() ? r.today_req : 0,
@@ -656,6 +658,21 @@ function clearError(id) {
   const meta = parseMeta(cur.meta);
   delete meta.lastError;
   updateAccount(id, { meta });
+}
+
+/** 设置账号备注（号池列表「备注」按钮）：落 meta.note（合并进现有 meta，不整包替换），
+ *  随 exportPool 快照导出 + mergeSnapshot 备注新者胜传播到其他设备 */
+function noteAccount(id, note) {
+  if (!id) return false;
+  open();
+  const cur = getAccount(id);
+  if (!cur) return false;
+  const meta = { ...parseMeta(cur.meta) };
+  const text = String(note || "").trim().slice(0, 200);
+  if (text) meta.note = text;
+  else delete meta.note;
+  updateAccount(id, { meta });
+  return true;
 }
 
 /** 记录账号今日签到结果（meta.checkin）：号池行内按钮「已签到 / 签到失败 + 详情弹窗」的数据源。
@@ -938,7 +955,7 @@ module.exports = {
   channelDisplay: (id) => (CHANNELS.find((c) => c.id === id) || {}).display || String(id),
   createKey, importKey, listKeys, findKeyBySecret, updateKey, deleteKey, keyTodayReq,
   listAgents, setPoolStrategy, setAgentCostTier,
-  listAccounts, getAccount, accountSecrets, addAccount, updateAccount, bumpAccountUsage, removeAccount, noteError, clearError, noteCheckin, noteOnboardingGrant,
+  listAccounts, getAccount, accountSecrets, addAccount, updateAccount, bumpAccountUsage, removeAccount, noteError, clearError, noteCheckin, noteOnboardingGrant, noteAccount,
   insertOpLog, listOpLogs, listOpLogOps, exportOpLogRows,
   listModelCooldowns, upsertModelCooldown, deleteModelCooldowns,
   snapshotCredits,

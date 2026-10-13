@@ -412,6 +412,8 @@ export interface ProxyAccount {
   /** 生效中的模型级负缓存（6004/11102 只罚"账号×模型"不落账号状态；空数组 = 无） */
   modelCool?: { model: string; until: number; reason: string }[];
   source: "scan" | "oauth" | "paste";
+  /** 账号备注（备注弹窗写入；落 meta.note，副行展示 + 随 WebDAV 同步） */
+  note?: string;
   lastUsed: number;
   todayReq: number;
   todayTokens: number;

@@ -264,6 +264,9 @@ export const proxyAccountToggle = (id: string, enabled: boolean) =>
 /** 重命名账号（自定义备注），WebDAV 同步时 LWW 传播 */
 export const proxyAccountRename = (id: string, name: string) =>
   call<{ ok: boolean; message?: string }>("proxy_account_rename", { id, name });
+/** 账号备注（号池列表「备注」弹窗）：落 meta.note，随 WebDAV 快照导出 + 备注新者胜传播 */
+export const proxyAccountNote = (id: string, note: string) =>
+  call<{ ok: boolean; message?: string }>("proxy_account_note", { id, note });
 /** 手动解除冷却：cooling 账号立即回 online，releasedModels = 同时豁免的模型级负缓存条数 */
 export const proxyAccountCoolOff = (id: string) =>
   call<{ ok: boolean; message?: string; releasedModels?: number }>("proxy_account_cool_off", { id });
