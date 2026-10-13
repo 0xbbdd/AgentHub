@@ -1585,6 +1585,12 @@ onUnmounted(() => {
                           {{ acc.uid ? uidBrief(acc.uid) : "无 UID" }}
                         </button>
                       </el-tooltip>
+                      <template v-if="acc.note">
+                        <i>·</i>
+                        <el-tooltip :content="`${acc.note}（点击编辑备注）`" placement="top">
+                          <span class="acc-note" @click="openNote(acc)">{{ acc.note }}</span>
+                        </el-tooltip>
+                      </template>
                       <template v-if="acc.liveHere">
                         <i>·</i>
                         <el-tooltip :content="`${ch.display} 客户端在本机当前登录的就是这个账号`" placement="top">
@@ -3132,6 +3138,19 @@ onUnmounted(() => {
   transition: color 0.15s;
 }
 .acc-uid:hover:not(:disabled) {
+  color: var(--accent-strong);
+}
+/* 备注缩略（有则显示）：限宽省略号，全文由 tooltip 与备注弹窗展示 */
+.acc-note {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  color: var(--text-2);
+  transition: color 0.15s;
+}
+.acc-note:hover {
   color: var(--accent-strong);
 }
 /* ===== 状态列：冷却剩余 + 点击弹最近错误小窗 ===== */
