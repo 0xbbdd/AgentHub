@@ -325,6 +325,61 @@ function pickEntitlementPack(packs) {
   return shaped.reduce((a, b) => (b.credits > a.credits ? b : a), { productType: 0, credits: 0, expiresAt: 0 });
 }
 
+/** Trae 逐包：user_entitlement_pack_list → 到期日历的包行（纯函数，自测直接喂合成样本）。
+ *  口径与本渠道既有的账号级算法保持一字不差：只认 credits_limit > 0 的包，剩余 = limit - used。
+ *  ⚠ 已知缺口（刻意留给后续一条 PR，别在本条里顺手改）：上游响应里的「不限量」包
+ *  是 credits_limit < 0，会被下面这个 `limit <= 0` 整条丢掉 ⇒ 日历少一行、连带丢掉它的到期。
+ *  修它要同时把账号级 credits 改成 -1 哨兵，那是行为变更，不该混在一条纯增量的 PR 里。 */
+function traeCreditPackages(packs) {
+  const out = [];
+  for (const p of Array.isArray(packs) ? packs : []) {
+    const limit = Number(util.dig(p, /^credits_limit$/i)) || 0;
+    if (limit <= 0) continue;
+    const used = Number(util.dig(p, /^credits_amount$/i)) || 0;
+    out.push({
+      code: String(util.dig(p, /^entitlement_pack_id$|^pack_id$|^id$/i) || `pack${out.length}`).slice(0, 128),
+      name: String(util.dig(p, /^display_desc$|^name$|^pack_name$/i) || "资源包").slice(0, 128),
+      total: limit,
+      used,
+      remaining: Math.max(limit - used, 0),
+      expiresAt: util.toMs(util.dig(p, /end_time|expire|deadline|valid_until/i)),
+    });
+  }
+  return out;
+}
+
+/** zcode（JWT 侧）逐包：balances 一条 = 一个套餐额度（纯函数，自测直接喂合成样本）。
+ *  plan 的名字在 plans 里，按 plan_id join 过来，否则日历每行只能显示一串 id。
+ *  ⚠ remaining 一律夹成 >=0：上游欠额时给的是负数，而 store 的入库归一只把 **< -1** 夹成 0、
+ *  原样保留 -1（-1 是「额度不限」哨兵）。不夹的话一个欠额到 -1 的包会把整个账号的余额
+ *  派生成无限，并绕开 cost-first 路由——这个坑在 lobster 那侧已经踩过一次。 */
+function zcodeCreditPackages(balances, plans) {
+  const planName = {};
+  for (const pl of Array.isArray(plans) ? plans : []) {
+    const pid = String((pl && (pl.plan_id || pl.planId)) || "");
+    if (pid) planName[pid] = String((pl && pl.name) || pid);
+  }
+  return (Array.isArray(balances) ? balances : []).map((b, idx) => {
+    if (!b || typeof b !== "object") return null;
+    const total = Number(b.total_units);
+    const used = Number(b.used_units);
+    const raw = b.remaining_units != null ? Number(b.remaining_units)
+      : (b.available_units != null ? Number(b.available_units) : NaN);
+    const pid = String(b.plan_id || b.planId || b.entitlement_id || "");
+    const remaining = Number.isFinite(raw) ? raw
+      // 缺 remaining 时退回 total-used：与本渠道账号级 credits 同口径，少一个字段不至于把整包读成 0
+      : (Number.isFinite(total) && Number.isFinite(used) ? total - used : 0);
+    return {
+      code: (pid || `pack${idx}`).slice(0, 128),
+      name: String(b.show_name || b.name || planName[pid] || pid || "套餐额度").slice(0, 128),
+      total: Number.isFinite(total) ? total : 0,
+      used: Number.isFinite(used) ? used : 0,
+      remaining: Math.max(0, remaining),
+      expiresAt: util.toMs(b.expires_at ?? b.expiresAt),
+    };
+  }).filter(Boolean);
+}
+
 const trae = {
   id: "trae",
 
@@ -671,15 +726,12 @@ const trae = {
         if (packs.length) {
           let credits = 0;
           let expiresAt = 0;
-          for (const p of packs) {
-            const limit = Number(util.dig(p, /^credits_limit$/i)) || 0;
-            if (limit <= 0) continue;
-            const used = Number(util.dig(p, /^credits_amount$/i)) || 0;
-            credits += Math.max(limit - used, 0);
-            const end = util.toMs(util.dig(p, /end_time|expire|deadline|valid_until/i));
-            if (end && end > Date.now() && (!expiresAt || end < expiresAt)) expiresAt = end;
+          const packages = traeCreditPackages(packs);
+          for (const p of packages) {
+            credits += p.remaining;
+            if (p.expiresAt > Date.now() && (!expiresAt || p.expiresAt < expiresAt)) expiresAt = p.expiresAt;
           }
-          if (credits > 0) return { credits, expiresAt };
+          if (credits > 0) return { credits, expiresAt, packages };
           // 新版字段缺失时退回旧档位口径（单一包 remain）
           const best = pickEntitlementPack(packs);
           if (best.credits > 0) return { credits: best.credits, expiresAt: best.expiresAt };
@@ -860,6 +912,7 @@ function parseWbResource(data, isEnterprise) {
   let used = 0;
   let size = 0;
   let earliestEnd = 0;
+  const packages = [];
   const num = (a, re) => Number(util.dig(a, re)) || 0;
   for (const a of accounts) {
     // 单包口径（参考项目 packageRemainUsed）：Cycle 期套餐优先，缺 Cycle 退回 Capacity 三字段
@@ -882,6 +935,16 @@ function parseWbResource(data, isEnterprise) {
     const end = util.toMs(util.dig(a, /^PackageEndTime$|^CycleEndTime$|^CycleResetTime$/i));
     // 只取未来的到期时间：响应里混着已过期的历史包（Status=3），取其到期会把账号误判成「余额已到期」
     if (end && end > Date.now() && (!earliestEnd || end < earliestEnd)) earliestEnd = end;
+    // 逐包明细：上面三个数（r/u/s）与到期本来就是**按包**算出来的，此前只在 return 里被折成
+    // 账号级两个标量。per-pack 的到期刻意不做「只取未来」过滤——已过期的包正是要在日历里看得见。
+    packages.push({
+      code: String(util.dig(a, /^PackageCode$|^SubProductCode$|^ProductCode$/i) || `pack${packages.length}`).slice(0, 128),
+      name: String(util.dig(a, /^PackageName$|^SubProductName$|^ProductName$/i) || "资源包").slice(0, 128),
+      total: s,
+      used: u,
+      remaining: r,
+      expiresAt: end,
+    });
   }
   // TotalDosage 作 size 下限（已消耗的总量不该小于套餐总量）
   const dosage = Number(util.dig(data, /^TotalDosage$/i)) || 0;
@@ -891,7 +954,7 @@ function parseWbResource(data, isEnterprise) {
   } else if (size > 0 && size - remain > used) {
     used = size - remain;
   }
-  return { credits: Math.max(remain, 0), expiresAt: earliestEnd };
+  return { credits: Math.max(remain, 0), expiresAt: earliestEnd, packages };
 }
 
 /** 官方客户端会话头族（参考项目 ChatMeta 实证：后台按 X-Conversation-Request-ID 聚合请求，
@@ -2801,6 +2864,34 @@ function setModelScopeRefresh(fn) {
   modelScopeRefreshImpl = typeof fn === "function" ? fn : null;
 }
 
+/** LobsterAI（有道）逐包：profile-summary 的 creditItems[] → 到期日历的包行。三条实测口径：
+ *  · 上游**不下发逐包面值** ⇒ total 落 -1 =「不给总额」（渲染成「5297 / —」）。
+ *    落 0 会被读成「已用完」，落别的数字就是编出来的。
+ *  · expiresAt 是 string|null，且可能是空格形式 "2099-01-01 00:00:00"；统一走 normalizeExpiryMs
+ *    （它认 ISO / 空格形式 / 秒毫秒，并把远未来哨兵夹成 0 = 长期有效）。
+ *  · creditsRemaining 是浮点且**可为负**（欠额）。负值一律夹成 0：既因为「已用完」才是它的真实
+ *    语义，更因为 -1 在本项目是「不限」哨兵，透下去会把整号余额派生成无限、绕开 cost-first 路由。
+ *  非数组 / 空数组 ⇒ []，调用方回落到账号级聚合行（上游结构变更时不会把余额读成 0）。 */
+function lobsterCreditPackages(items) {
+  if (!Array.isArray(items) || !items.length) return [];
+  const out = [];
+  for (const it of items) {
+    if (!it || typeof it !== "object") continue;
+    const remaining = Number(it.creditsRemaining ?? it.credits_remaining);
+    if (!Number.isFinite(remaining)) continue;
+    out.push({
+      code: String(it.type || `item${out.length}`).slice(0, 128),
+      name: String(it.label || it.labelEn || it.type || "积分包").slice(0, 128),
+      total: -1,
+      used: 0,
+      remaining: Math.max(0, remaining),
+      expiresAt: util.normalizeExpiryMs(it.expiresAt ?? it.expires_at),
+      ord: out.length,
+    });
+  }
+  return out;
+}
+
 const lobster = {
   id: "lobster",
 
@@ -3078,7 +3169,7 @@ const lobster = {
     }
     const d = r.data.data || r.data;
     const credits = Number(d.totalCreditsRemaining ?? d.total_credits_remaining ?? d.remainingCredits) || 0;
-    return { credits, raw: d };
+    return { credits, packages: lobsterCreditPackages(d.creditItems ?? d.credit_items), raw: d };
   },
 
   /** 签到状态：读活动 context 的 claimedToday（不消费签到动作） */
@@ -3617,7 +3708,8 @@ const zcode = {
         last = { error: "额度数据为空（新账号可能激活延迟）" };
         continue;
       }
-      return { credits, expiresAt, raw: { balances: balances.length, plans: plans.length } };
+      const packages = zcodeCreditPackages(balances, plans);
+      return { credits, expiresAt, packages, raw: { balances: balances.length, plans: plans.length } };
     }
     // 终判：全程 401 → 最后再等 1.5s 用同一 jwt 试一次，仍 401 才算凭证失效
     if (last && last.authError) {
@@ -4163,4 +4255,6 @@ module.exports = { get, ADAPTERS, channelModelIds, reverseAliasEntry, resolveMod
   // 供自测校验模态识别（通用嗅探 / 能力合并 OR 语义）
   sniffImages, mergeCapabilities,
   // 供自测校验模型上限归一化（缺失/非法 → 0，绝不编造）与 trae 目录结构解析
-  tokenLimit, traeLimits };
+  tokenLimit, traeLimits,
+  // 供自测校验「逐包积分」的三条映射（到期日历的数据源）：都是纯函数，喂合成样本即可，不出网
+  traeCreditPackages, zcodeCreditPackages, lobsterCreditPackages, parseWbResource };
