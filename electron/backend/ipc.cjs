@@ -66,6 +66,13 @@ function handle(fn) {
 }
 
 /** 应用主题同步到原生窗口框架（标题栏/边框）颜色；主题变化时调用 */
+/** 配置保存后的回调钩子（由 main.cjs 注册）：全局快捷键重新注册等。
+ *  方向：main → backend 注册，backend 只在保存时回调，避免 backend 反向依赖主进程。 */
+const configSavedHooks = [];
+function onConfigSaved(fn) {
+  if (typeof fn === "function") configSavedHooks.push(fn);
+}
+
 function applyNativeTheme(nativeTheme, cfgObj) {
   const theme = cfgObj && cfgObj.theme;
   if (theme === "dark" || theme === "light") nativeTheme.themeSource = theme;
@@ -94,6 +101,12 @@ function register(ctx) {
     cfg = merged;
     applyNativeTheme(nativeTheme, merged);
     config.applyAutoStart(merged);
+    // 通知主进程侧「配置已保存」：全局快捷键要按新值重新注册。
+    // 为什么不用 ipcMain 反向调用：globalShortcut 只有 main.cjs 持有，
+    // backend 不该反向依赖主进程；用一个注册回调把方向理顺（与 remotesync.setOnFinish 同款）。
+    for (const fn of configSavedHooks) {
+      try { fn(merged); } catch { /* 单个钩子失败不影响保存结果 */ }
+    }
     return r;
   }));
 
@@ -514,4 +527,4 @@ function register(ctx) {
   memory.register(ipcMain);
 }
 
-module.exports = { register };
+module.exports = { register, onConfigSaved };

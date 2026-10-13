@@ -244,6 +244,10 @@ export interface AppConfig {
   };
   schedule: {
     minimizeToTray: boolean;
+    /** 全局快捷键：唤起/收起主窗口（默认 Alt+`，两键）。必须是「功能键+字符键」组合；
+     *  注意 ~ 会被归一成 `（~ 需要 Shift，实际是三键组合）；空串 = 不注册。
+     *  冲突时弹气泡提示并持续重试，解除后自动恢复。 */
+    shortcutToggle: string;
     autoStart: boolean;
     hourly: boolean;
     daily: boolean;

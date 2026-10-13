@@ -343,9 +343,96 @@ const DISCLAIMER: { h: string; p: string[] }[] = [
   },
 ];
 
+// ===== 全局快捷键（默认 Alt+`，两键）=====
+// 校验口径与后端一致（功能键+字符键），但**前端先拦一道**：非法值即时红字提示，
+// 不让用户提交后才由后端拒绝（后端仍是权威，两边都校验）。
+// 注意：前端只能做语法校验；「是否已被别的程序占用」只有主进程注册时才知道，
+// 故冲突提示走系统气泡（见 shortcut.cjs 的 createRegistrar）。
+const shortcutDraft = ref("");
+const shortcutMsg = ref<{ ok: boolean; text: string } | null>(null);
+const shortcutBusy = ref(false);
+
+/** 是否桌面端：全局快捷键依赖窗口与 Electron 的 globalShortcut，
+ *  Web/容器端（NAS）没有这些能力，该设置项必须隐藏而不是让用户点了没反应 */
+const isDesktop = computed(() => api.isElectron());
+
+const MODS = ["Ctrl", "Alt", "Shift", "Super"];
+const KEY_ALIASES: Record<string, string> = {
+  // ~ → ` ：与后端 shortcut.cjs 同口径（此表两边必须一致）。
+  // ~ 在标准键盘要 Shift+`，Electron 会当成**三键**组合 —— 用户按两键没反应。
+  // 故统一归一成不带 Shift 的 ` 键，保证「按两键」即可触发。
+  "~": "`", "`": "`", "-": "-", "=": "=", "[": "[", "]": "]", "\\": "\\",
+  ";": ";", "'": "'", ",": ",", ".": ".", "/": "/",
+  space: "Space", tab: "Tab", enter: "Enter", backspace: "Backspace", delete: "Delete",
+  home: "Home", end: "End", pageup: "PageUp", pagedown: "PageDown",
+  up: "Up", down: "Down", left: "Left", right: "Right",
+};
+
+/** 与 backend/shortcut.cjs 的 normalize 同口径（保持两边规则一致，改一处要改两处） */
+function normalizeShortcut(input: string): { ok: boolean; accelerator?: string; message?: string } {
+  const raw = String(input || "").trim();
+  if (!raw) return { ok: false, message: "快捷键不能为空（留空表示不启用快捷键）" };
+  const parts = raw.split("+").map((s) => s.trim()).filter((s) => s !== "");
+  if (!parts.length) return { ok: false, message: "快捷键不能为空" };
+  const mods: string[] = [];
+  const keys: string[] = [];
+  for (const p of parts) {
+    const lower = p.toLowerCase();
+    const canon = MODS.find((m) => m.toLowerCase() === lower)
+      || (lower === "option" ? "Alt" : lower === "cmd" || lower === "meta" || lower === "win" || lower === "command" ? "Super" : "");
+    if (canon) { if (!mods.includes(canon)) mods.push(canon); }
+    else keys.push(p);
+  }
+  if (!mods.length) return { ok: false, message: "必须包含至少一个功能键（Ctrl / Alt / Shift / Super）" };
+  if (!keys.length) return { ok: false, message: "必须包含一个字符键（如 ~、A、1、F5）" };
+  if (keys.length > 1) return { ok: false, message: `只能有一个字符键，当前给了 ${keys.length} 个` };
+  let key = keys[0];
+  if (/^[A-Za-z]$/.test(key)) key = key.toUpperCase();
+  else if (/^F([1-9]|1[0-9]|2[0-4])$/i.test(key)) key = key.toUpperCase();
+  else {
+    const alias = KEY_ALIASES[key.toLowerCase()] || KEY_ALIASES[key];
+    if (alias) key = alias;
+    else if (!/^[0-9]$/.test(key)) return { ok: false, message: `不支持的字符键「${keys[0]}」` };
+  }
+  return { ok: true, accelerator: [...MODS.filter((m) => mods.includes(m)), key].join("+") };
+}
+
+/** 保存快捷键：前端校验 → 落盘（主进程注册时才知道是否冲突，冲突会弹系统气泡） */
+async function saveShortcut() {
+  const v = normalizeShortcut(shortcutDraft.value);
+  if (!v.ok) {
+    shortcutMsg.value = { ok: false, text: v.message || "格式不正确" };
+    return;
+  }
+  shortcutBusy.value = true;
+  try {
+    app.config.schedule.shortcutToggle = v.accelerator!;
+    await app.save();
+    shortcutDraft.value = v.accelerator!;
+    shortcutMsg.value = { ok: true, text: `已设为 ${v.accelerator}（若已被其它程序占用，会弹气泡提示并自动重试）` };
+  } finally {
+    shortcutBusy.value = false;
+  }
+}
+
+/** 清空 = 不启用快捷键 */
+async function clearShortcut() {
+  shortcutBusy.value = true;
+  try {
+    app.config.schedule.shortcutToggle = "";
+    await app.save();
+    shortcutDraft.value = "";
+    shortcutMsg.value = { ok: true, text: "已关闭快捷键" };
+  } finally {
+    shortcutBusy.value = false;
+  }
+}
+
 // 主进程推送的更新状态变化（下载进度等实时回流）
 let offUpdate: (() => void) | undefined;
 onMounted(() => {
+  // 快捷键输入框初值 = 当前配置（用户直接看到现在生效的是哪个键）
+  shortcutDraft.value = app.config.schedule.shortcutToggle || "";
   offUpdate = api.onUpdateEvent((e) => {
     const { event, ...state } = e as UpdateEvent;
     if (event === "focus-update") return; // 跳转信号由 App.vue 统一处理
@@ -501,6 +588,29 @@ onUnmounted(() => {
           :aria-checked="!!app.config.schedule.minimizeToTray"
           @click="app.config.schedule.minimizeToTray = !app.config.schedule.minimizeToTray; toggleAppBehavior()"
         ></div>
+      </div>
+      <!-- 全局快捷键：桌面专属（Web/容器端无全局快捷键概念） -->
+      <div v-if="isDesktop" class="set-row">
+        <div class="set-info">
+          <div class="set-name">全局快捷键（唤起 / 收起界面）</div>
+          <div class="set-desc">
+            应用在后台或托盘时也能用。按下时：界面可见则收起，不可见则唤回。<br />
+            必须是「功能键 + 字符键」，如 <code>Alt+`</code>、<code>Ctrl+Shift+K</code>；留空表示不启用。<br />
+            <b>注意</b>：不要用 <code>~</code> —— 它需要 Shift，实际会变成三键（<code>Alt+Shift+`</code>）；填 <code>Alt+~</code> 会自动按 <code>Alt+`</code> 处理。
+          </div>
+          <div v-if="shortcutMsg" class="set-desc" :class="shortcutMsg.ok ? 'sc-ok' : 'sc-err'">{{ shortcutMsg.text }}</div>
+        </div>
+        <div class="sc-edit">
+          <el-input
+            v-model="shortcutDraft"
+            class="sc-input"
+            size="small"
+            :placeholder="app.config.schedule.shortcutToggle || '未启用'"
+            @keyup.enter="saveShortcut"
+          />
+          <el-button size="small" type="primary" :loading="shortcutBusy" @click="saveShortcut">保存</el-button>
+          <el-button size="small" :disabled="shortcutBusy || !app.config.schedule.shortcutToggle" @click="clearShortcut">清除</el-button>
+        </div>
       </div>
     </div>
 
@@ -660,6 +770,31 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+}
+/* 快捷键的编辑区：输入框 + 按钮横排，靠右不换行 */
+.sc-edit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.sc-input {
+  width: 168px;
+}
+/* 校验反馈：成功绿、失败红（与全局语义色一致） */
+.sc-ok {
+  color: var(--ok, #3ecf8e);
+}
+.sc-err {
+  color: var(--danger, #f56c6c);
+}
+/* 描述里的按键示例：等宽、淡底，与正文区分 */
+.set-desc code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--code-bg);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.94em;
 }
 /* 更新按钮组的红点定位由 .dot-host 承载（global.css 的 .dot-ping/.dot-host），
    避免按钮自身的溢出裁剪把红点角裁掉 */
