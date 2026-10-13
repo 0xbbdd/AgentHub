@@ -623,12 +623,18 @@ function poolView(opts) {
   const health = server.channelHealthSnapshot(); // 渠道降级快照一次取全（循环内逐渠道取是全表快照 ×5）
   const channelEnabled = settings().channelEnabled || {};
   const checkinRules = settings().checkinAutoRules || {};
+  const now = Date.now();
+  // 逐包一次全量读出再分桶：每账号一次查是 N+1（实测 200 账号 17ms）。store.cjs 的
+  // listKeys() 统计每把 Key 的今日用量走的也是「一次全量 + Map join」同一形态
+  const packagesByAccount = store.listAllCreditPackages();
   return store.CHANNELS.filter((c) => all || channelOn(c.id)).map((c) => {
     const summary = pool.poolSummary(c.id);
     const localUid = String((localLogins[c.id] && localLogins[c.id].uid) || "");
     const accounts = pool.poolAccounts(c.id).map((a) => ({
       ...a,
       modelCool: pool.accountModelCool(a.id),
+      // 逐包明细：时间态（expired/expiringSoon）每次出视图重算，不落库
+      packages: pool.decoratePackageStates(packagesByAccount.get(a.id) || [], now),
       // 当前电脑上的 agent 客户端登录的就是这个账号（按本机登录态 uid 比对）
       liveHere: !!(localUid && a.uid && String(a.uid) === localUid),
     }));
