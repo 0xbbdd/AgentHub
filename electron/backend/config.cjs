@@ -184,6 +184,9 @@ function defaultConfig() {
       rateLimitPerMin: 120,     // 单 Key 令牌桶限速（次/分钟，Key 可单独覆盖）
       concurrency: 8,           // 上游并发上限
       creditsRefreshMin: 30,    // 额度自动刷新周期（分钟）
+      expiringSoonDays: 1,      // 积分包「即将到期」预警阈值（天，0~3650，0=关闭预警）：
+                                // 号池到期徽标与逐包明细的 expiringSoon 共用这一个值
+                                // （默认 1 = 该阈值此前在 pool.cjs 里硬编码的那个数）
       poolsyncSchedule: {       // 号池定时同步（issue #89/#92）：全关 = 仅手动；API Key 与
                                 // 模型映射随号池同步走，自动同步让新设备开箱即得
         hourly: false,          // 每小时档自动同步

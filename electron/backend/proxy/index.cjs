@@ -624,8 +624,11 @@ function poolView(opts) {
   const channelEnabled = settings().channelEnabled || {};
   const checkinRules = settings().checkinAutoRules || {};
   const now = Date.now();
-  // 逐包一次全量读出再分桶：每账号一次查是 N+1（实测 200 账号 17ms）。store.cjs 的
-  // listKeys() 统计每把 Key 的今日用量走的也是「一次全量 + Map join」同一形态
+  // 阈值随设置热生效（无需重启网关）：每次出号池视图前对齐一次（廉价的模块级 setter）。
+  // poolSummary 的账号级 expiringSoon 与逐包用的是同一个值，改设置两处一起变。
+  pool.setExpiringSoonDays(settings().expiringSoonDays);
+  // 逐包一次全量读出再分桶：每账号一次查是 N+1（200 账号实测 15ms 上下，方差大）。
+  // store.cjs 的 listKeys() 统计每把 Key 的今日用量走的也是「一次全量 + Map join」同一形态
   const packagesByAccount = store.listAllCreditPackages();
   return store.CHANNELS.filter((c) => all || channelOn(c.id)).map((c) => {
     const summary = pool.poolSummary(c.id);

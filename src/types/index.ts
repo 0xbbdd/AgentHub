@@ -289,6 +289,9 @@ export interface ProxyConfig {
   rateLimitPerMin: number;
   concurrency: number;
   creditsRefreshMin: number;
+  /** 积分包「即将到期」预警阈值（天，0~3650，0=关闭预警）。号池到期徽标与逐包明细共用这一个值，
+   *  默认 1 = 该阈值此前在 pool.cjs 里硬编码的那个数 */
+  expiringSoonDays: number;
   /** 号池定时同步（poolsyncSchedule）：hourly 每小时档 / daily 每天固定时刻，全关 = 仅手动；
    *  API Keys 与模型映射随号池同步走，自动同步让新设备开箱即得 */
   poolsyncSchedule: { hourly: boolean; hourlyInterval: number; daily: boolean; dailyTime: string };

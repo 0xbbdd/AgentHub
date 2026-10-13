@@ -93,6 +93,9 @@ async function save() {
     app.config.proxy.rateLimitPerMin = Math.max(0, Math.round(Number(app.config.proxy.rateLimitPerMin) || 0));
     app.config.proxy.concurrency = Math.max(1, Math.round(Number(app.config.proxy.concurrency) || 1));
     app.config.proxy.channelFailoverMax = Math.min(10, Math.max(1, Math.round(Number(app.config.proxy.channelFailoverMax) || 3)));
+    // 判数用 Number.isFinite 而不是 ||：合法的 0（= 关闭预警）会被 || 当 falsy 跳回默认值
+    const esd = Number(app.config.proxy.expiringSoonDays);
+    app.config.proxy.expiringSoonDays = Math.min(3650, Math.max(0, Math.round(Number.isFinite(esd) ? esd : 1)));
     app.config.proxy.channelCooldownMs = Math.max(10000, Math.round(Number(app.config.proxy.channelCooldownMs) || 120000));
     app.config.proxy.channelCooldownCapMs = Math.max(app.config.proxy.channelCooldownMs, Math.round(Number(app.config.proxy.channelCooldownCapMs) || 900000));
     const r = await app.save();
@@ -289,6 +292,14 @@ function openDataDir() {
             <div class="set-desc">{{ proxyTimingSummary }} · 统一在「设置 · 同步时间」管理</div>
           </div>
           <button class="btn btn-ghost" @click="gotoTiming">去修改 →</button>
+        </div>
+        <div class="set-row">
+          <div class="set-info">
+            <div class="set-name">「即将到期」预警阈值</div>
+            <div class="set-desc">号池到期徽标与逐包明细共用这一个值；填 0 关闭预警。范围 0~3650，超出按边界保存</div>
+          </div>
+          <input v-model.number="app.config.proxy.expiringSoonDays" class="input mono" style="width: 90px" type="number" min="0" max="3650" />
+          <span style="font-size: 11px; color: var(--text-3)">天</span>
         </div>
         <div class="set-row">
           <div class="set-info"><div class="set-name">余额历史 / 请求流水保留</div></div>
