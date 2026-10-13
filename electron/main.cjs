@@ -150,7 +150,9 @@ function persistWindowBounds() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   try {
     const maximized = mainWindow.isMaximized();
-    const bounds = maximized ? mainWindow.getNormalBounds() : mainWindow.getBounds();
+    // Windows 最小化时 getBounds 给 -32000 系异常值，写进盘会把用户原位置顶掉；
+    // getNormalBounds 对最大化/最小化都返回「恢复为普通窗口时」的 bounds，两种非常态都兜住
+    const bounds = maximized || mainWindow.isMinimized() ? mainWindow.getNormalBounds() : mainWindow.getBounds();
     windowState.save(config.dataDir(), windowState.pickState({ bounds, maximized }));
   } catch {
     /* 记不住位置不该影响任何主流程 */
@@ -287,8 +289,7 @@ function showWindow() {
 //   窗口可见   → 隐藏（hide）
 //   窗口不可见 → 显示并聚焦（没有窗口时重建）
 //
-// 与本仓其它特性的关系：本实现只做 hide/show，不假设窗口是否可销毁 ——
-// 若上游另有会销毁窗口的特性（如"关窗释放界面"），按下时的"释放"路径可在那时一并调整。
+// 收起动作按「轻量模式」开关分派（见 collapseMainWindow）：开启走释放，关闭仅 hide。
 let shortcutRegistrar = null;
 
 /** 按当前配置注册快捷键；配置变更后由 ipc 的 onConfigSaved 钩子再次调用 */
@@ -310,21 +311,11 @@ function setupShortcut() {
 }
 
 /** 收起主界面：按「轻量模式」开关决定是隐藏还是释放渲染进程。
- *
- *  为什么需要它：本 PR 只加了快捷键（收起=hide）。而轻量模式 PR（#101）引入的是
- *  「关窗销毁窗口释放渲染进程」—— 两者合到一起时，快捷键若恒为 hide，用户开了轻量模式
- *  却没省到内存；反之若恒为 destroy，用户没开轻量模式却每次唤回都重建整页 → 闪黑 ✗。
- *  故此处**按开关分派**，行为随开关走。
- *
- *  为什么用 typeof 探测 releaseWindowNow：本 PR 独立存在时没有该函数（它来自 #101），
- *  直接引用会 ReferenceError ✗。`typeof` 对未声明标识符安全 ✓ —— 于是：
- *    · 只合本 PR      → lightOn 恒为 false（配置里也没这个开关），行为与改动前一致 ✓
- *    · 与 #101 一起合 → 用户开了轻量模式即走 destroy 释放内存 ✓，否则 hide ✓
- *  合并顺序无关，两边单独看都自洽。 */
+ *  恒为 hide → 用户开了轻量模式却省不到内存；恒为 destroy → 没开轻量也每次唤回闪黑重建。 */
 function collapseMainWindow(reason) {
   const cfg = config.loadConfig();
   const lightOn = !!(cfg.schedule && cfg.schedule.lightweightMode);
-  if (lightOn && typeof releaseWindowNow === "function") {
+  if (lightOn) {
     releaseWindowNow(reason);
     return;
   }
@@ -583,6 +574,14 @@ function toggleLightweightMode(next) {
     cfg.schedule = cfg.schedule || {};
     cfg.schedule.lightweightMode = !!next;
     config.saveConfig(cfg);
+    // 托盘直写不经 save_config：ipc 的内存快照与渲染层快照都不会自己更新。
+    // 只作废后端缓存还不够，渲染层旧快照在下次设置页整份保存时会把这里的改动冲掉
+    // （saveConfigFromUI 不保护 schedule 字段），故广播一次让渲染层重拉。
+    ipc.refreshConfigCache();
+    try {
+      const w = mainWindow;
+      if (w && !w.isDestroyed()) w.webContents.send("app:event", { event: "config-changed" });
+    } catch { /* 渲染层不在（界面已释放）时忽略：下次唤回 load() 会读到新值 */ }
     __crashLog("lightweight-toggle", `lightweightMode=${cfg.schedule.lightweightMode}（来自托盘）`);
   } catch (e) {
     __crashLog("lightweight-toggle-failed", String((e && e.message) || e));

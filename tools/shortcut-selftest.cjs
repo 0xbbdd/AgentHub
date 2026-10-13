@@ -283,13 +283,16 @@ T("S24 onShortcutToggle 走 collapseMainWindow（不得直接 hide，否则与�
   if (!/collapseMainWindow\(/.test(fn)) throw new Error("快捷键收起没有走 collapseMainWindow ✗");
 });
 
-T("S25 未声明标识符安全探测：本分支没有 releaseWindowNow 时也不得 ReferenceError", () => {
-  // #101（轻量模式）引入 releaseWindowNow；本 PR 独立存在时它不存在 ✗。
-  // 故必须用 typeof 探测（对未声明标识符安全 ✓），不能直接 if (releaseWindowNow)。
+T("S25 轻量分支直调 releaseWindowNow（#101 已合并，typeof 探测已移除）", () => {
+  // 合并前用 typeof 探测保跨 PR 兼容；合并后 releaseWindowNow 恒存在（函数声明提升），
+  // 探测失去意义——按 KISS 直调，且不得残留过时的 typeof 写法。
   const body = mainSrc.slice(mainSrc.indexOf("function collapseMainWindow("));
   const fn = body.slice(0, body.indexOf("\n}") > 0 ? body.indexOf("\n}") : 900);
-  if (!/typeof releaseWindowNow === "function"/.test(fn)) {
-    throw new Error('必须写成 typeof releaseWindowNow === "function"（否则单独合并时会 ReferenceError）✗');
+  if (/typeof releaseWindowNow/.test(fn)) {
+    throw new Error("typeof 探测已无意义（#101 已合并），应直调 ✗");
+  }
+  if (!/releaseWindowNow\(reason\)/.test(fn)) {
+    throw new Error("轻量分支应直调 releaseWindowNow(reason) ✗");
   }
 });
 

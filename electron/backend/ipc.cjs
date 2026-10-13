@@ -72,6 +72,12 @@ function onConfigSaved(fn) {
   if (typeof fn === "function") configSavedHooks.push(fn);
 }
 
+/** 托盘等 main 侧直写配置后调用：作废内存快照，下一次 load_config 重读磁盘。
+ *  不作废的话 C() 会一直返回旧快照（含托盘刚改过的 schedule 字段）。 */
+function refreshConfigCache() {
+  cfg = null;
+}
+
 /** 应用主题同步到原生窗口框架（标题栏/边框）颜色；主题变化时调用 */
 function applyNativeTheme(nativeTheme, cfgObj) {
   const theme = cfgObj && cfgObj.theme;
@@ -527,4 +533,4 @@ function register(ctx) {
   memory.register(ipcMain);
 }
 
-module.exports = { register, onConfigSaved };
+module.exports = { register, onConfigSaved, refreshConfigCache };

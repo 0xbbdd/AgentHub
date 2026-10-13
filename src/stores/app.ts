@@ -299,6 +299,17 @@ export const useAppStore = defineStore("app", {
     mirrorActivePage() {
       mirrorPage(this.activeModule, this.activePage);
     },
+    /** 重拉配置到内存快照：main 侧托盘等直写配置后经 app:event 广播，渲染层据此刷新。
+     *  与 load() 的区别：不动 activeModule/activePage（重拉不能把用户从当前页拽走）。 */
+    async refreshConfig() {
+      try {
+        const remote = await api.loadConfig();
+        Object.assign(this.config, mergeConfigDeep(structuredClone(defaultConfig), remote));
+      } catch {
+        /* 拉取失败保留当前快照 */
+      }
+      this.applyTheme(this.config.theme);
+    },
     /** 打开全局设置弹窗：tab 缺省保持当前模块；左下角齿轮给 general，跨模块入口给 webdav 等 */
     openSettings(tab?: SettingsTab) {
       if (tab) this.settingsTab = tab;

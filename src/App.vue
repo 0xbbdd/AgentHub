@@ -553,6 +553,11 @@ onMounted(() => {
       memory.onEvent(ev as unknown as Parameters<typeof memory.onEvent>[0]);
       return;
     }
+    // main 侧托盘等直写配置后的广播：重拉内存快照，防设置页旧快照把新值冲掉
+    if ((ev as { event?: string }).event === "config-changed") {
+      app.refreshConfig();
+      return;
+    }
     app.updateAvailable = ev.status === "available" || ev.status === "downloaded";
   });
   // 动效装配：此刻 config 仍是初始默认值（load 异步未回），先按 localStorage 镜像判定
