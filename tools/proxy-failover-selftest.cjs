@@ -1,5 +1,5 @@
 // 反代网关跨渠道故障转移自测（v1.40.0）：503 耗尽 → 渠道降级 → 请求内跳备选 → 降级避让 →
-// 半开回切 → 指数退避翻倍 → failover 开关 → 全渠道耗尽带轨迹报错
+// 半开回切 → 指数退避翻倍 → failover 开关 → 全渠道耗尽带轨迹报错 → 上限归一化/每模型预算边界（T0）
 // 用法：ELECTRON_RUN_AS_NODE=1 electron tools/proxy-failover-selftest.cjs <临时数据目录>
 //
 // 时序语义说明：本脚本用 base=1500ms 的压缩节奏，让「半开探测再失败」落在 noteChannelFail
@@ -31,6 +31,44 @@ async function main() {
   store.open();
   rules.init();
   assert(Object.keys(server.channelHealthSnapshot()).length === 0, "初始渠道健康快照为空");
+
+  // ===== T0 渠道数上限归一化 / 每模型上游尝试预算（纯函数边界；failover 契约的前置） =====
+  assert(
+    typeof server.normalizeChannelFailoverMax === "function" && typeof server.perModelUpstreamBudget === "function",
+    "T0 server 应导出故障转移规模纯函数（自测契约）"
+  );
+  for (const [m, want] of [[1, 6], [2, 6], [3, 6], [4, 6], [5, 6], [6, 7], [7, 8], [8, 9], [9, 10], [10, 11]])
+    assert(
+      server.perModelUpstreamBudget(true, m) === want,
+      `T0 预算 failover=on 上限=${m} 应为 ${want}，实际 ${server.perModelUpstreamBudget(true, m)}`
+    );
+  assert(server.perModelUpstreamBudget(false, 3) === 6 && server.perModelUpstreamBudget(false, 10) === 6, "T0 failover 关：预算恒 6");
+  assert(
+    server.normalizeChannelFailoverMax(100) === 10 && server.perModelUpstreamBudget(true, 100) === 11,
+    "T0 手改 100 → 上限钳 10、预算 11"
+  );
+  assert(
+    [0, -5, NaN, "abc", 2.5].every((v) => server.perModelUpstreamBudget(true, v) === 6),
+    "T0 脏值（0/负数/NaN/字母/小数）一律回存量预算 6"
+  );
+  assert(
+    server.normalizeChannelFailoverMax(0) === 3 && server.normalizeChannelFailoverMax("") === 3 &&
+      server.normalizeChannelFailoverMax(NaN) === 3 && server.normalizeChannelFailoverMax(null) === 3 &&
+      server.normalizeChannelFailoverMax(-5) === 1,
+    "T0 脏值落点与旧运行时逐值一致（0/空/NaN/null → 3，负数 → 1）"
+  );
+  assert([1, 2, 3, 4, 5].every((m) => server.normalizeChannelFailoverMax(m) === m), "T0 存量档 1~5 归一化逐值不变");
+  // 源码契约（防「导出了但没接线」；先例：modelscope 自测读源文本断言）：maxTries 与队列截断必须消费上述纯函数。
+  // 空白折叠后再匹配（正向正则另容错括号内侧空白）：换行/缩进调整不应误伤契约断言
+  const srvFlat = fs
+    .readFileSync(path.join(__dirname, "..", "electron", "backend", "proxy", "server.cjs"), "utf8")
+    .replace(/\s+/g, " ");
+  assert(
+    /const maxTries = perModelUpstreamBudget\(\s*settings\.channelFailover,\s*settings\.channelFailoverMax\s*\)/.test(srvFlat),
+    "T0 maxTries 必须消费 perModelUpstreamBudget"
+  );
+  assert(!/maxTries = 6 \* modelChain\.length/.test(srvFlat), "T0 预算算式不得回潮为 6 * modelChain.length 硬编码");
+  assert(/normalizeChannelFailoverMax\(\s*settings\.channelFailoverMax\s*\)/.test(srvFlat), "T0 队列截断必须消费 normalizeChannelFailoverMax");
 
   // ===== 假上游：trae / workbuddy_ai 两个渠道的 chatUrl 都指过来，mode 可切换 boom/ok =====
   const http = require("node:http");
@@ -392,7 +430,7 @@ async function main() {
   store.deleteKey(k.id);
   store.removeAccount(t1);
   store.removeAccount(w1);
-  console.log("FAILOVER SELFTEST OK（跨渠道跳转 / 降级避让 / fixed 跳备选 / 半开翻倍 / 成功回切清零 / 开关 / 全渠道轨迹 / 渠道身份拒绝自救不罚号 / 真参数 400 不放宽 / 反向映射不收窄备选）");
+  console.log("FAILOVER SELFTEST OK（跨渠道跳转 / 降级避让 / fixed 跳备选 / 半开翻倍 / 成功回切清零 / 开关 / 全渠道轨迹 / 渠道身份拒绝自救不罚号 / 真参数 400 不放宽 / 反向映射不收窄备选 / 上限归一化与预算边界 T0）");
 }
 
 main()

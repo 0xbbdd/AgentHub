@@ -203,7 +203,7 @@ function defaultConfig() {
       fallbackModel: "",        // 全局统一回退模型（模型未知/号池耗尽时自动切换）
       channelFailover: true,    // 跨渠道故障转移：渠道耗尽/降级时请求内自动跳其他渠道（默认开）；
                                 // 只作用于渠道间跳转，「不可用时自动切换模型」的回退链不受此开关影响
-      channelFailoverMax: 3,    // 单请求最多尝试渠道数（含主渠道，每模型 6 次上游尝试预算）
+      channelFailoverMax: 3,    // 单请求最多尝试渠道数（含主渠道；范围 1~10、超出按 10；上游尝试预算随上限放大：每模型 max(6, 本值+1) 次，failover 关闭恒 6）
       channelCooldownMs: 120000,     // 渠道降级基础时长（毫秒），失败翻倍（防半开震荡）
       channelCooldownCapMs: 900000,  // 渠道降级指数退避封顶（15 分钟）
       checkinAutoRules: {},     // 按渠道自动签到：{ [渠道 id]: { enabled, time:"HH:mm", jitterMin } }，

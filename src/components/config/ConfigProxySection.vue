@@ -92,7 +92,7 @@ async function save() {
     app.config.proxy.port = port;
     app.config.proxy.rateLimitPerMin = Math.max(0, Math.round(Number(app.config.proxy.rateLimitPerMin) || 0));
     app.config.proxy.concurrency = Math.max(1, Math.round(Number(app.config.proxy.concurrency) || 1));
-    app.config.proxy.channelFailoverMax = Math.min(5, Math.max(1, Math.round(Number(app.config.proxy.channelFailoverMax) || 3)));
+    app.config.proxy.channelFailoverMax = Math.min(10, Math.max(1, Math.round(Number(app.config.proxy.channelFailoverMax) || 3)));
     app.config.proxy.channelCooldownMs = Math.max(10000, Math.round(Number(app.config.proxy.channelCooldownMs) || 120000));
     app.config.proxy.channelCooldownCapMs = Math.max(app.config.proxy.channelCooldownMs, Math.round(Number(app.config.proxy.channelCooldownCapMs) || 900000));
     const r = await app.save();
@@ -241,9 +241,9 @@ function openDataDir() {
           <div class="set-row">
             <div class="set-info">
               <div class="set-name">单请求最多尝试渠道数</div>
-              <div class="set-desc">范围 1~5；超出上限按 5 保存（与每模型 6 次上游尝试预算配套）</div>
+              <div class="set-desc">范围 1~10；超出上限按 10 保存（上游尝试预算随上限放大：每模型 上限+1 次、最低 6 次）</div>
             </div>
-            <input v-model.number="app.config.proxy.channelFailoverMax" class="input mono" style="width: 90px" type="number" min="1" max="5" />
+            <input v-model.number="app.config.proxy.channelFailoverMax" class="input mono" style="width: 90px" type="number" min="1" max="10" />
             <span style="font-size: 11px; color: var(--text-3)">个（含主渠道）</span>
           </div>
           <div class="set-row">

@@ -178,6 +178,26 @@ function routeOrderOf(key, settings) {
   return key.routeOrder || settings.routeOrder || "score";
 }
 
+// ===== 跨渠道故障转移规模（纯函数；每模型尝试预算与候选队列上限共用同一口径，导出供自测断言）=====
+const CHANNEL_FAILOVER_MAX_CAP = 10; // 单请求最多尝试渠道数上限（与配置页输入框 max=10 同步）
+const UPSTREAM_TRIES_FLOOR = 6;      // 存量固定预算：1~5 档与关闭 failover 一律回到它（零行为变化）
+
+/** 渠道数上限归一化：与旧运行时 Math.max(1, Number(v) || 3) 逐值一致（0/空/NaN → 3），
+ *  另收敛两处旧代码缺失：Math.round 整数化（旧代码把小数赋给 queue.length 会抛 RangeError）
+ *  与服务端上界（config.json 可手改/被同步写入，上限无界会把下游每模型预算一起无界放大） */
+function normalizeChannelFailoverMax(v) {
+  const n = Number(v) || 3;
+  return Math.min(CHANNEL_FAILOVER_MAX_CAP, Math.max(1, Math.round(n)));
+}
+
+/** 每模型上游尝试预算：failover 关 → 固定 6；否则 max(6, 上限 + 1)。
+ *  +1 沿用旧配比（5 渠道 + 1 = 6）：预算恰等于候选数时，末个渠道会被预算收尾排除在轨迹外，
+ *  报错条数将比设置值少 1——用户会再次怀疑「设置没生效」 */
+function perModelUpstreamBudget(failoverEnabled, failoverMax) {
+  if (failoverEnabled === false) return UPSTREAM_TRIES_FLOOR;
+  return Math.max(UPSTREAM_TRIES_FLOOR, normalizeChannelFailoverMax(failoverMax) + 1);
+}
+
 /** 按生效档取最优渠道（resolveChannel 智能分支）；sort 稳定，同分保持 modelOwners 返回序 */
 function pickByOrder(order, candidates, groups) {
   return [...candidates].sort(cmpByOrder(order, groups))[0];
@@ -706,8 +726,10 @@ async function handleChat(req, res, settings) {
     // 同口径，否则「成功清负缓存」与「失败落冷却」会键不一致、负缓存残留
     let usedForwardModel = "";
     // 跨渠道故障转移的请求级状态：全局上游尝试预算 / 渠道轨迹 / failover 归因
-    const maxTries = 6 * modelChain.length; // 每个模型 6 次上游尝试（跨渠道共享；429 就地重试、
-    // 401 刷新重试各计 1）。按模型链长度放大：预算按请求计但逐模型消耗，避免主模型耗尽预算后饿死回退模型
+    const maxTries = perModelUpstreamBudget(settings.channelFailover, settings.channelFailoverMax) * modelChain.length;
+    // 每模型上游尝试预算（跨渠道共享；429 就地重试、401 刷新重试各计 1）：上限 ≤5 时恒为 6（与旧实现逐字节一致）；
+    // 上限 6~10 时抬到「上限+1」——预算不随上限放大，设 10 也只有前 6 个渠道真被打到，新上限形同虚设。
+    // 按模型链长度放大：预算按请求计但逐模型消耗，避免主模型耗尽预算后饿死回退模型
     let upstreamTries = 0;
     const triedChannels = []; // 本请求跳过或耗尽的渠道轨迹（最终错误消息用）：{ chan, accounts: string[], note?: string }
     // 轨迹同时记「渠道名」与该渠道实际用过的「账号名」（渲染时脱敏）。只报渠道名会让用户
@@ -739,7 +761,7 @@ async function handleChat(req, res, settings) {
       const queue = [resolved.channel, ...owners];
       queue.length = Math.min(
         queue.length,
-        settings.channelFailover === false ? 1 : Math.max(1, Number(settings.channelFailoverMax) || 3)
+        settings.channelFailover === false ? 1 : normalizeChannelFailoverMax(settings.channelFailoverMax)
       );
       const primaryChannel = queue[0];
       for (const chan of queue) {
@@ -1204,4 +1226,6 @@ function status() {
 
 module.exports = { start, stop, stopAsync, status, channelHealthSnapshot, classifyUpstream,
   // 成本感知路由纯函数（tools/proxy-cost-route-selftest.cjs / proxy-empty-pool-route-selftest.cjs 行为断言用）
-  channelScore, costFirstScore, tierGroups, cmpByOrder, routeOrderOf, pickByOrder, routeUsable };
+  channelScore, costFirstScore, tierGroups, cmpByOrder, routeOrderOf, pickByOrder, routeUsable,
+  // 故障转移规模纯函数（tools/proxy-failover-selftest.cjs 边界断言用）
+  normalizeChannelFailoverMax, perModelUpstreamBudget };

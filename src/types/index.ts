@@ -313,7 +313,7 @@ export interface ProxyConfig {
   fallbackModel: string;
   /** 跨渠道故障转移：渠道降级/耗尽时请求内自动跳其他渠道（默认开） */
   channelFailover: boolean;
-  /** 单请求最多尝试渠道数（含主渠道；上游尝试预算按模型链放大，每模型 6 次、渠道间共享） */
+  /** 单请求最多尝试渠道数（含主渠道；范围 1~10、超出按 10；上游尝试预算随上限放大：每模型 max(6, 本值+1) 次、渠道间共享，failover 关闭恒 6） */
   channelFailoverMax: number;
   /** 渠道降级基础时长（毫秒），失败翻倍防半开震荡 */
   channelCooldownMs: number;
