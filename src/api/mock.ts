@@ -1136,6 +1136,7 @@ export const mock = {
         return { id: "k-new", name: String(args?.name || "新 Key"), mask: "sk-demo···0000", route: args?.route || "auto", routeOrder: args?.routeOrder || "", dailyQuota: args?.dailyQuota || 0, rateLimit: 0, enabled: true, createdAt: NOW, todayReq: 0, todayTokens: 0, secret: "sk-demo0000000000000000000000000000000000000000000000" };
       case "proxy_key_update":
       case "proxy_key_delete":
+      case "proxy_keys_delete":
       case "proxy_pool_strategy":
       case "proxy_pool_tier":
       case "proxy_account_remove":

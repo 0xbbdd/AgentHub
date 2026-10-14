@@ -118,6 +118,7 @@ const ALLOWED_COMMANDS = new Set([
   "proxy_key_create",
   "proxy_key_update",
   "proxy_key_delete",
+  "proxy_keys_delete",
   "proxy_pool",
   "proxy_channel_list",
   "proxy_channel_toggle",

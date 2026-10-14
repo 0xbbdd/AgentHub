@@ -750,6 +750,20 @@ function register(ipcMain) {
     oplog.log("info", "API Key", `删除 Key ${id}`, { target: id });
     return ok({});
   }));
+  // 批量删除（Key 列表多选）：逐个走与单删相同的链路（墓碑先行 + WebDAV 传播），oplog 只记汇总一条
+  ipcMain.handle("proxy_keys_delete", handle(({ ids }) => {
+    const list = Array.isArray(ids) ? ids.map(String).filter(Boolean) : [];
+    if (!list.length) return fail("未选择 Key");
+    let removed = 0;
+    let missing = 0;
+    for (const id of list) {
+      if (!store.deleteKey(id)) { missing++; continue; }
+      try { poolsync.noteKeyRemoved(id); } catch { /* 同上：墓碑记失败不阻塞本地删除 */ }
+      removed++;
+    }
+    if (removed) oplog.log("info", "API Key", `批量删除 ${removed} 个 Key（选择 ${list.length} 个${missing ? `，${missing} 个已不存在` : ""}）`, {});
+    return ok({ removed, missing });
+  }));
 
   // ===== 号池 =====
   ipcMain.handle("proxy_pool", handle(() => poolView()));

@@ -241,6 +241,9 @@ export const proxyKeyCreate = (opts: { name: string; route: ProxyRoute; routeOrd
 export const proxyKeyUpdate = (id: string, patch: Partial<Pick<ProxyKeyRow, "name" | "route" | "routeOrder" | "dailyQuota" | "rateLimit" | "enabled">>) =>
   call<{ ok: boolean; message?: string }>("proxy_key_update", { id, ...patch });
 export const proxyKeyDelete = (id: string) => call<{ ok: boolean; message?: string }>("proxy_key_delete", { id });
+/** 批量删除（Key 列表多选）：主进程逐个走单删链路（墓碑先行 + WebDAV 传播），removed = 实删条数 */
+export const proxyKeysDeleteBatch = (ids: string[]) =>
+  call<{ ok: boolean; removed?: number; missing?: number; message?: string }>("proxy_keys_delete", { ids });
 
 // ===== 反代网关：号池 / 凭据接入 =====
 export const proxyPool = () => call<ProxyChannelView[]>("proxy_pool");
