@@ -174,6 +174,11 @@ function normalizeReasoningEffort(obj, reasoningMeta) {
   if (!supported.length || !obj) return;
   const cur = typeof obj.reasoning_effort === "string" ? obj.reasoning_effort : "";
   if (!cur || EFFORT_RANK[cur] == null) return;
+  // "off" 不是档位，是「关思考」这个开关。目录的支持档通常不含 off（不含 ≠ 不支持关思考），
+  // 走下面「降到 ≤ 请求档的最高支持档」会把它抬成最低档 = 用户在模型目录里明确关了思考，
+  // 却被静默改成继续思考。真不接受 off 的上游由 adapters 侧按 provider 改写
+  // （见 LiteLLM 那段带实测流水的注释），不该在这层用抬档代替改写。
+  if (cur === "off") return;
   const sorted = [...new Set(supported)].sort((a, b) => EFFORT_RANK[a] - EFFORT_RANK[b]);
   if (sorted.includes(cur)) return;
   const curRank = EFFORT_RANK[cur];
