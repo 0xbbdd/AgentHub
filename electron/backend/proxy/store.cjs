@@ -86,6 +86,18 @@ CREATE TABLE IF NOT EXISTS credits_history (
   expires_at INTEGER NOT NULL DEFAULT 0,
   UNIQUE(channel, account_id, day)
 );
+CREATE TABLE IF NOT EXISTS credit_packages (
+  account_id TEXT NOT NULL,
+  channel TEXT NOT NULL DEFAULT '',
+  code TEXT NOT NULL DEFAULT '',
+  name TEXT NOT NULL DEFAULT '',
+  total INTEGER NOT NULL DEFAULT 0,
+  used INTEGER NOT NULL DEFAULT 0,
+  remaining INTEGER NOT NULL DEFAULT 0,
+  expires_at INTEGER NOT NULL DEFAULT 0,
+  ord INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_credit_pkg_acc ON credit_packages(account_id);
 CREATE TABLE IF NOT EXISTS model_cooldowns (
   acc_id TEXT NOT NULL,
   model TEXT NOT NULL,
@@ -791,6 +803,7 @@ function removeAccount(id) {
   open();
   db.prepare("DELETE FROM credits_history WHERE account_id = ?").run(String(id));
   db.prepare("DELETE FROM model_cooldowns WHERE acc_id = ?").run(String(id));
+  db.prepare("DELETE FROM credit_packages WHERE account_id = ?").run(String(id));
   return db.prepare("DELETE FROM accounts WHERE id = ?").run(String(id)).changes > 0;
 }
 
@@ -803,6 +816,82 @@ function snapshotCredits(channel, accountId, credits, expiresAt) {
      ON CONFLICT(channel, account_id, day) DO UPDATE SET credits=excluded.credits, expires_at=excluded.expires_at`
     // 两位小数口径与 updateAccount 一致（Qoder 浮点 Credits；整数渠道不受影响）
   ).run(String(channel), String(accountId), dayStr(), Math.max(0, Math.round((Number(credits) || 0) * 100) / 100), Math.max(0, Number(expiresAt) || 0));
+}
+
+// ===== 积分包明细（按账号整体替换的包集：到期总览与账号级额度的单一事实源） =====
+
+/** 归一单个包对象为落库行：字段宽容、-1 保留为「不限」哨兵、负值归 0 */
+function normPackageRow(p, i) {
+  const n = (v) => {
+    const x = Number(v);
+    if (!Number.isFinite(x)) return 0;
+    return x < -1 ? 0 : Math.round(x);
+  };
+  return {
+    code: String((p && p.code) || "").slice(0, 128),
+    name: String((p && p.name) || "").slice(0, 128),
+    total: n(p && p.total),
+    used: n(p && p.used),
+    remaining: n(p && p.remaining),
+    expiresAt: Math.max(0, Number(p && p.expiresAt) || 0),
+    ord: Number.isFinite(Number(p && p.ord)) ? Math.round(Number(p.ord)) : i,
+  };
+}
+
+/** 整体替换某账号的包集（DELETE + 批量 INSERT，一个事务内原子完成）。
+ *  传空数组 = 清空该账号包集。刷新链路与号池同步合并都走这一个入口，语义唯一。 */
+function setCreditPackages(accountId, channel, packages) {
+  open();
+  const id = String(accountId || "");
+  if (!id) return;
+  const list = Array.isArray(packages) ? packages : [];
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare("DELETE FROM credit_packages WHERE account_id = ?").run(id);
+    const ins = db.prepare(
+      `INSERT INTO credit_packages (account_id, channel, code, name, total, used, remaining, expires_at, ord)
+       VALUES (?,?,?,?,?,?,?,?,?)`
+    );
+    list.forEach((p, i) => {
+      const r = normPackageRow(p, i);
+      ins.run(id, String(channel || ""), r.code, r.name, r.total, r.used, r.remaining, r.expiresAt, r.ord);
+    });
+    db.exec("COMMIT");
+  } catch (e) {
+    try { db.exec("ROLLBACK"); } catch { /* ignore */ }
+    throw e;
+  }
+}
+
+/** credit_packages 行 → 对外包对象（列名 snake_case 收敛在这里，别让每个调用方各翻一遍） */
+function packageView(r) {
+  return { code: r.code, name: r.name, total: r.total, used: r.used, remaining: r.remaining, expiresAt: r.expires_at };
+}
+
+/** 列出某账号的包集（按 ord 升序；展示/派生/导出共用）。
+ *  expired/expiringSoon 是时间派生量，不落库，出视图时现算。 */
+function listCreditPackages(accountId) {
+  open();
+  const rows = db.prepare("SELECT * FROM credit_packages WHERE account_id = ? ORDER BY ord, rowid").all(String(accountId || ""));
+  return rows.map(packageView);
+}
+
+/**
+ * 全池逐包：一次查出所有账号的包并按 accountId 分桶（号池视图用）。
+ * 不给每账号一次 listCreditPackages()——那是 200 账号 17ms 的 N+1；
+ * 本文件 listKeys() 统计每把 Key 的今日用量走的也是「一次全量 + Map join」同一形态。
+ * 只按 ord,rowid 排序：分桶后各桶内部天然有序，跨账号的相对顺序没人看（变异验证过，加 account_id 不承重）。
+ */
+function listAllCreditPackages() {
+  open();
+  const rows = db.prepare("SELECT * FROM credit_packages ORDER BY ord, rowid").all();
+  const byAccount = new Map();
+  for (const r of rows) {
+    const list = byAccount.get(r.account_id);
+    if (list) list.push(packageView(r));
+    else byAccount.set(r.account_id, [packageView(r)]);
+  }
+  return byAccount;
 }
 
 // ===== 请求流水与统计 =====
@@ -956,6 +1045,7 @@ module.exports = {
   createKey, importKey, listKeys, findKeyBySecret, updateKey, deleteKey, keyTodayReq,
   listAgents, setPoolStrategy, setAgentCostTier,
   listAccounts, getAccount, accountSecrets, addAccount, updateAccount, bumpAccountUsage, removeAccount, noteError, clearError, noteCheckin, noteOnboardingGrant, noteAccount,
+  setCreditPackages, listCreditPackages, listAllCreditPackages,
   insertOpLog, listOpLogs, listOpLogOps, exportOpLogRows,
   listModelCooldowns, upsertModelCooldown, deleteModelCooldowns,
   snapshotCredits,

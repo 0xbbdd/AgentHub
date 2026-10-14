@@ -3,6 +3,42 @@
 "use strict";
 const store = require("./store.cjs");
 
+/** 「即将到期」窗口：账号级聚合（poolSummary）与逐包明细共用同一个判据 */
+const EXPIRING_SOON_MS = 86400000;
+
+/**
+ * 由积分包集派生账号级额度（包集是单一事实源时调用；无包则返回 null，调用方保留既有聚合值）。
+ *  - 任一包 remaining = -1（上游「不限」哨兵）→ credits = -1（无限额度）
+ *    ⚠ total = -1 **不**算不限——它表示「上游不给这一包的总额」，与「额度无限」是两回事。
+ *    两者混为一谈时，producer 只要按「不知道总额」的口径写 total:-1，该号余额就会被
+ *    派生成无限并绕开 cost-first 路由，所以这里只认 remaining。
+ *  - 剩余 = Σ未过期包剩余；最近到期 = min(剩余>0 且未过期 的包到期)
+ */
+function deriveAccountCredits(packages, now) {
+  if (!Array.isArray(packages) || !packages.length) return null;
+  now = now || Date.now();
+  const unlimited = packages.some((p) => Number(p.remaining) === -1);
+  const valid = packages.filter((p) => !(Number(p.expiresAt) > 0 && Number(p.expiresAt) <= now));
+  const credits = unlimited ? -1 : valid.reduce((s, p) => s + Math.max(0, Number(p.remaining) || 0), 0);
+  const withRemain = valid.filter((p) => (Number(p.remaining) || 0) > 0 && Number(p.expiresAt) > 0);
+  const expiresAt = withRemain.length ? Math.min(...withRemain.map((p) => Number(p.expiresAt))) : 0;
+  return { credits, expiresAt };
+}
+
+/**
+ * 逐包时间态：给包集附 expired/expiringSoon。
+ * 两个量故意不落库——把"今天"写进库就被刷新时刻冻结了，隔天再看全是旧的；每次出视图重算。
+ * expiresAt = 0 是「长期有效」（normalizeExpiryMs 把远未来脏值归 0），既不算已过期也不算即将到期。
+ */
+function decoratePackageStates(packages, now) {
+  const t = now || Date.now();
+  return (packages || []).map((p) => ({
+    ...p,
+    expired: p.expiresAt > 0 && p.expiresAt <= t,
+    expiringSoon: p.expiresAt > t && p.expiresAt - t < EXPIRING_SOON_MS,
+  }));
+}
+
 /** 派生有效状态：cooling 到期自动回 online；exhausted 到次日 04:00 后给复活机会 */
 function effectiveStatus(acc, now) {
   now = now || Date.now();
@@ -319,7 +355,7 @@ function poolSummary(channel) {
     accountCount: accs.length,
     onlineCount: online.length,
     earliestExpire: expires.length ? Math.min(...expires) : 0,
-    expiringSoon: accs.some((a) => a.expiresAt > 0 && a.expiresAt - now < 86400000),
+    expiringSoon: accs.some((a) => a.expiresAt > 0 && a.expiresAt - now < EXPIRING_SOON_MS),
     todayReq: accs.reduce((s, a) => s + a.todayReq, 0),
     todayTokens: accs.reduce((s, a) => s + a.todayTokens, 0),
     lastCreditsAt: accs.reduce((m, a) => Math.max(m, a.creditsAt || 0), 0),
@@ -327,7 +363,7 @@ function poolSummary(channel) {
 }
 
 module.exports = {
-  effectiveStatus, poolAccounts, pickAccount, coolAccount, coolAccountMs,
+  effectiveStatus, deriveAccountCredits, decoratePackageStates, poolAccounts, pickAccount, coolAccount, coolAccountMs,
   coolAccountModel, isModelCooled, accountModelCool, poolSummary, nextDay4AM,
   acquireAccount, releaseAccount, inFlightCount, softBackoffMs, noteSessionDead, noteServerError, noteSuccess,
   releaseCool, zeroBalanceUsable,
