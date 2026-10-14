@@ -12,6 +12,7 @@ const crypto = require("node:crypto");
 const store = require("./store.cjs");
 const pool = require("./pool.cjs");
 const adapters = require("./adapters.cjs");
+const provider = require("./provider.cjs");
 const util = require("./util.cjs");
 const openaiOut = require("./protocols/openai-out.cjs");
 const anthropicIn = require("./protocols/anthropic-in.cjs");
@@ -82,10 +83,14 @@ function emitRequestThrottled() {
   }, 2000);
 }
 
-/** 渠道选择（方案 §6.2）：单源强制 → per-model 覆盖 → 打分（健康度×余额）/ 指定渠道优先。
+/** 渠道选择（方案 §6.2）：提供商前缀直达 → 单源强制 → per-model 覆盖 → 打分（健康度×余额）/ 指定渠道优先。
  *  关闭的渠道（上游启闭）不参与：modelOwners 已过滤（单源 → 空 → 400），
  *  key.route 指到关闭渠道按 auto 走（钉死的渠道被关后不能把请求带进死胡同） */
 function resolveChannel(key, model, settings) {
+  // `slug/model` 前缀直达提供商。这里只交出渠道，不改模型名——上游真名由适配器的 upstreamFor
+  // 剥前缀再映射，与内置适配器「收到客户端模型名、自己改写」的契约一致，调度层不需要第二套命名口径。
+  const slug = provider.parseModelRef(model);
+  if (slug) return { channel: slug };
   const owners = adapters.modelOwners(model, settings);
   if (owners.length === 1) return { channel: owners[0] }; // 模型仅存在于单渠道目录 → 强制
   if (key.route !== "auto" && adapters.channelOn(key.route, settings)) {
@@ -106,6 +111,11 @@ function resolveChannel(key, model, settings) {
     if (adapters.channelOn(settings.fixedChannel, settings)) return { channel: settings.fixedChannel };
     return { channel: null, disabledChannel: settings.fixedChannel };
   }
+  // 裸名兜底（提供商通路的可选项）：没有任何内置渠道拥有该模型时，才允许它唯一命中某个提供商，
+  // 两个提供商都有 gpt-4o 时不猜（见 provider.findUniqueByBareModel）。开关关掉即回到
+  // 「提供商的模型必须写 slug/model」这一种形态；默认放开，因为多数客户端的配置里不带前缀。
+  const sole = settings.allowBareProviderModel === false ? null : provider.findUniqueByBareModel(model);
+  if (sole) return { channel: sole };
   return { channel: null, unknownModel: true };
 }
 

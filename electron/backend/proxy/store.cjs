@@ -738,6 +738,15 @@ function listAccounts(channel) {
   return rows.map(accountView);
 }
 
+/** 渠道的原始行（含 token_enc 密文信封）：提供商的 Key 去重与「拿一把已有 Key 去探测」需要
+ *  解密的原料，而 listAccounts 给的是脱敏视图。与 listAccounts 同一排序，只在「要不要解密」上分家。 */
+function accountRows(channel) {
+  open();
+  return channel
+    ? db.prepare("SELECT * FROM accounts WHERE channel = ? ORDER BY created_at").all(String(channel))
+    : db.prepare("SELECT * FROM accounts ORDER BY channel, created_at").all();
+}
+
 function getAccount(id) {
   open();
   const r = db.prepare("SELECT * FROM accounts WHERE id = ?").get(String(id));
@@ -1284,7 +1293,7 @@ module.exports = {
   isBuiltinChannel,
   channelList, invalidateChannels,
   channelDisplay,
-  listProviders, getProvider, saveProvider, deleteProvider,
+  listProviders, getProvider, saveProvider, deleteProvider, accountRows,
   createKey, importKey, listKeys, findKeyBySecret, updateKey, deleteKey, keyTodayReq,
   listAgents, setPoolStrategy, setAgentCostTier,
   listAccounts, getAccount, accountSecrets, addAccount, updateAccount, bumpAccountUsage, removeAccount, noteError, clearError, noteCheckin, noteOnboardingGrant, noteAccount,

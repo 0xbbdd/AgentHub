@@ -164,6 +164,9 @@ function injectThinking(obj, defaultEffort) {
 }
 
 const EFFORT_RANK = { off: 0, minimal: 1, low: 2, medium: 3, high: 4, xhigh: 5, max: 6 };
+// 档位词表的唯一出处：自定义提供商那条路要校验用户填的支持档，必须用同一份而不是
+// 再抄一个字面量数组——抄第二份的结果是「界面能填、请求期被判非法」这类静默分叉。
+const EFFORT_LEVELS = Object.keys(EFFORT_RANK);
 
 /** reasoning_effort 档位降级（参考项目 normalizeReasoningEffort）：模型目录声明 supportedEfforts
  *  时按其收敛——请求档不在支持集则降到 ≤ 请求档的最高支持档；支持档全高于请求档取最低档。 */
@@ -461,6 +464,6 @@ function estimateTokens(text) {
 module.exports = {
   uuid, traceId, jwtDecode, dig, toMs, normalizeExpiryMs,
   isCompleteJson, parseRetryAfterHeaders, stableConvId, promptCacheKey,
-  isDeepSeekModel, injectThinking, normalizeReasoningEffort, backfillReasoningContent,
+  isDeepSeekModel, injectThinking, normalizeReasoningEffort, backfillReasoningContent, EFFORT_RANK, EFFORT_LEVELS,
   SseScanner, stripEmptyDelta, hasConsumableDelta, chunk, DONE, Aggregator, openaiError, validateChatBody, normalizeRoles, estimateTokens,
 };
