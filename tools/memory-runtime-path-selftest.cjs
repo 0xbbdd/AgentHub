@@ -146,7 +146,15 @@ function main() {
         check("桥找到 runtime 并握手成功", res.ok && res.isError === false && res.text === "stub-ok", JSON.stringify({ ok: res.ok, isError: res.isError, text: res.text }));
         check("假本地服务收到带正确 token 的调用", calls.length === 1 && calls[0].auth === `Bearer ${TOKEN}` && calls[0].tool === "memory_status", JSON.stringify(calls));
         const used = path.join(c.dir, "memory-runtime.json");
-        check("stderr 记下实际采用的 runtime 文件", res.stderr.includes(used), res.stderr.trim().split("\n")[0] || "(stderr 为空)");
+        // 桥报的是「命中的候选路径」，而候选表里大小写两种写法都在。Windows / macOS 的文件
+        // 系统大小写不敏感，大小写不同的两个候选指向同一个文件——此时桥会报排在前面那个
+        // （小写），与用例写入时用的大写目录字面不同却完全正确。所以比 realpath，不比字面量。
+        const logged = (res.stderr.match(/已采用 runtime：(.+?)（port /) || [])[1] || "";
+        // realpathSync.native 才走系统调用拿磁盘上的真实大小写（非 native 版只做字面归一）
+        const real = (p) => (fs.realpathSync.native || fs.realpathSync)(p);
+        let sameFile = false;
+        try { sameFile = !!logged && real(logged) === real(used); } catch { sameFile = false; }
+        check("stderr 记下实际采用的 runtime 文件", sameFile, `桥报的是 ${logged || "(无)"}，用例写的是 ${used}`);
       } else {
         check("无 runtime 时返回未运行而非崩溃", res.ok && res.isError === true && res.text.includes(OFFLINE_HINT), JSON.stringify({ ok: res.ok, isError: res.isError, text: res.text }));
         check("stderr 点名查找过的候选路径", res.stderr.includes(path.join(".config", "agenthub", "memory-runtime.json")) && res.stderr.includes("AgentHub"), res.stderr.trim().split("\n").slice(-1)[0] || "(stderr 为空)");

@@ -131,6 +131,18 @@ console.log("\n③ tools 与档位:");
   ok(r.body.reasoning_effort === "high", "③ reasoning.effort 归一小写后走既有档位降级", r.body.reasoning_effort);
   ok(r.notes.some((n) => /reasoning\.summary/.test(n)), "③ reasoning 的其余键留痕（只有 effort 有对应位置）", r.notes);
 
+  // effort:"none" 是 Responses 的「不推理」档（gpt-5.1 起的正式取值，Codex 的
+  // model_reasoning_effort = "none" 走的就是它），本仓内部用 "off" 表示同一个意思。
+  // 不归一的话 "none" 不是已知档位，会被原样透到上游；落到按家族改写的渠道（GLM 那条
+  // 认不出就按「未知值 = 开思考」）反而抬成 high——用户关掉推理却拿到最耗的档。
+  const none = rin.toInternal({ model: "m", input: "hi", reasoning: { effort: "none" } });
+  ok(none.body.reasoning_effort === "off", "③ effort:none（不推理）归一到内部开关值 off", none.body.reasoning_effort);
+  ok(none.notes.some((n) => /none/.test(n) && /off/.test(n)), "③ none→off 的归一留痕（可追溯）", none.notes);
+  const noneUpper = rin.toInternal({ model: "m", input: "hi", reasoning: { effort: "NONE" } });
+  ok(noneUpper.body.reasoning_effort === "off", "③ 大小写混用同样归一（NONE → off）", noneUpper.body.reasoning_effort);
+  ok(rin.toInternal({ model: "m", input: "hi", reasoning: { effort: "minimal" } }).body.reasoning_effort === "minimal",
+    "③ 真实档位不受影响（minimal 原样）");
+
   ok(rin.toInternal({ model: "m", input: "hi", tool_choice: "required" }).body.tool_choice === "required", "③ tool_choice 字符串 required 原样");
   ok(rin.toInternal({ model: "m", input: "hi", tool_choice: "none" }).body.tool_choice === "none", "③ tool_choice 字符串 none 原样");
   const hc = rin.toInternal({ model: "m", input: "hi", tool_choice: { type: "hosted_tool" } });

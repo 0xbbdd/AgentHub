@@ -83,6 +83,22 @@ console.log("① 入站归一（纯函数）:");
   ok(r.body.messages[2].role === "user" && r.body.messages[2].content === "顺带一句",
     "① tool_result 与 text 混排时文本另起一条 user 消息，不丢", r.body.messages[2]);
 
+  // 同一条消息里 tool_result 与图片并存：图片既不在任何 tool_result 的 content 里，也走不到
+  // 下面那条普通消息分支（tool_result 分支已经 continue）——不专门带上就是无声丢图
+  r = ain.toInternal({
+    model: "m", max_tokens: 100,
+    messages: [{ role: "user", content: [
+      { type: "tool_result", tool_use_id: "b1", content: "结果" },
+      { type: "text", text: "看这张" },
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "QUJD" } },
+    ] }],
+  });
+  const mLast = r.body.messages[r.body.messages.length - 1];
+  ok(mLast.role === "user" && Array.isArray(mLast.content) && mLast.content[1] && mLast.content[1].image_url.url === "data:image/png;base64,QUJD",
+    "① tool_result 与图片混排时图片不丢（挂在文本那条 user 消息上）", r.body.messages);
+  ok(r.body.messages[0].role === "tool" && r.body.messages[0].tool_call_id === "b1",
+    "① 混排时 tool_result 照常展开成 role:tool", r.body.messages[0]);
+
   r = ain.toInternal({
     model: "m", max_tokens: 100,
     messages: [
@@ -126,6 +142,10 @@ console.log("\n② thinking 预算换算:");
     [{ type: "enabled", budget_tokens: -1 }, undefined],
     [{ type: "enabled" }, undefined],
     [{ type: "enabled", budget_tokens: "abc" }, undefined],
+    // 「没给预算」≠「预算为 0」：Number(null) 与 Number("") 都是 0，先转数会把客户端
+    // 只是没填这个字段当成「显式关掉思考」，把用户的思考静默关掉
+    [{ type: "enabled", budget_tokens: null }, undefined],
+    [{ type: "enabled", budget_tokens: "" }, undefined],
     [null, undefined],
   ];
   for (const [thinking, want] of T) {

@@ -125,7 +125,17 @@ ZCode、商汤小浣熊、Xiaomi MiMo、Codex、DeepSeek Harness、WorkBuddy、W
 
 ## 板块三：反代网关
 
-> 这是本项目最核心的板块。它把你**本机已经登录**的订阅额度，包装成一个标准的 **OpenAI Chat Completions API**，任何支持「自定义 OpenAI 接口」的客户端都能直接调用。
+> 这是本项目最核心的板块。它把你**本机已经登录**的订阅额度，包装成标准的 API 接口，任何支持「自定义接口」的客户端都能直接调用。
+>
+> 入站协议面共三条，**同一个地址、同一把 Key**，按客户端讲的是哪种协议自动分流：
+>
+> | 端点 | 协议 | 谁会用 |
+> | --- | --- | --- |
+> | `POST /v1/chat/completions` | OpenAI Chat Completions | Cherry Studio / ChatBox / NextChat / Cline / Roo Code 等「OpenAI 兼容」客户端 |
+> | `POST /v1/messages`（另有 `POST /v1/messages/count_tokens`） | Anthropic Messages | Claude Code / Anthropic SDK |
+> | `POST /v1/responses` | OpenAI Responses | Codex CLI |
+>
+> 三条面共用同一套调度：鉴权、模型别名、模型禁用、回退链、号池换号、冷却决策与记账完全一致，区别只在「怎么读网关 Key」与「写成什么字节」。所以 **Claude Code 与 Codex 现在可以直接把网关地址填进去，用到全部渠道**，不再必须经 CC Switch 做协议翻译。
 
 ### 支持的渠道
 
@@ -169,7 +179,7 @@ ZCode、商汤小浣熊、Xiaomi MiMo、Codex、DeepSeek Harness、WorkBuddy、W
 | 模型目录 | 全渠道模型合并视图，逐模型启停、指定渠道、设置倍率与别名；各渠道官方目录可一键从云端拉取 |
 | 用量统计 | 网关自身的请求流水：总览 / 趋势 / TOP（渠道、模型、Key、账号）/ 明细分页，保留 90 天 |
 | 号池同步 | 多台电脑共享号池：账号与凭据打包经 WebDAV 同步，可选只同步某一个渠道 |
-| 生态接入 | 一键把网关注册进 CC Switch，给 Claude Code / Codex / Claude Desktop 用 |
+| 生态接入 | 一键把网关注册进 CC Switch，给 Claude Code / Codex / Claude Desktop 用（这三家也能直接填网关地址，见上方三条入站协议面） |
 
 ### 上手教程
 
@@ -228,15 +238,23 @@ http://127.0.0.1:9527/v1
 
 保存后发一句话测试，回到「总览」看到实时请求流里出现记录，就说明链路通了。
 
-> **给 Claude Code / Codex / Claude Desktop 用？** 它们说的是自家协议（Anthropic Messages / Responses），不能直连。按下面第 5 步走「生态接入」。
+> **给 Claude Code / Codex / Claude Desktop 用？** 网关听得懂它们的原生协议，可以直接把网关地址填进去（见本节开头的三条入站协议面）。想让 CC Switch 在一个地方统管多套 provider 配置，走下面第 5 步「生态接入」。
 
 #### 第 5 步（可选）：接入 Claude Code / Codex
+
+**方式 A：直连（推荐，不用额外装东西）**
+
+- **Claude Code / Anthropic SDK**：`ANTHROPIC_BASE_URL` 填 `http://127.0.0.1:9527`（不要带 `/v1`），`ANTHROPIC_AUTH_TOKEN` 填第 3 步生成的 Key
+- **Codex CLI**：`~/.codex/config.toml` 里把 provider 的 `base_url` 填 `http://127.0.0.1:9527/v1`、`wire_api = "responses"`（Codex 已移除对 `chat` 的支持，写 `chat` 会直接报错）
+- 模型名从「模型目录」页里挑一个可用的填上即可
+
+**方式 B：经 CC Switch 托管**（想在一个地方统管多套 provider 配置时）
 
 1. 先装好 [CC Switch](https://github.com/farion1231/cc-switch)
 2. 进入「反代网关 · 生态接入」，选择要接入的应用（Claude Code / Codex / Claude Desktop），选定一个 API Key 和默认模型，点注册
    - 注册前会自动备份 CC Switch 数据库，且只会写入自己那一条固定条目，不动你的其它 provider
-   - Claude 侧只写 `ANTHROPIC_AUTH_TOKEN`（网关只认 `Authorization: Bearer`），避免和 `x-api-key` 同时出现触发鉴权告警
-3. 注册完成后，到 CC Switch 里**打开「代理接管」**再启动对应客户端——CC Switch 要靠它做协议翻译，直连网关必 404
+   - Claude 侧只写 `ANTHROPIC_AUTH_TOKEN`。网关的 Messages 面同时认 `x-api-key` 与 `Authorization: Bearer`，但两个头都带且不是同一把 Key 时会被判成配置错误（拒绝而不是猜一把），所以只写一个
+3. 注册完成后，到 CC Switch 里**打开「代理接管」**再启动对应客户端
 4. Codex 的 `wire_api` 语义上必须是 `responses`，CC Switch 会依据条目里的 `apiFormat` 判定需要转换，不用手动改
 
 ### 号池与自动切换
@@ -355,6 +373,14 @@ npm run electron:build   # 打包安装版与便携版到 release/
 ELECTRON_RUN_AS_NODE=1 node_modules/electron/dist/electron.exe tools/proxy-smoke.cjs
 ```
 
+三条入站协议面各自的回归闸（真实 HTTP 打进真调度核心，只桩上游与号池；纯 Node，不需要 Electron）：
+
+```bash
+node scripts/dev-sink-golden.cjs         # OpenAI 通路：16 场景的响应字节 / 冷却决策 / 选号顺序 / 流水与基线逐字相等（动调度核心前后必跑）
+node scripts/dev-anthropic-in-test.cjs   # /v1/messages：归一 + 事件序 + 错误外壳 + 止血开关
+node scripts/dev-responses-in-test.cjs   # /v1/responses：归一 + 事件序 + Codex 三条硬约束 + 止血开关
+```
+
 Qoder 渠道专项自测（离线，默认不联网、不消耗额度；凭据与签名器相关断言需要本机装有 Qoder 客户端）：
 
 ```bash
@@ -383,6 +409,7 @@ electron/            主进程
   backend/
     adapter-*.cjs    各用量数据源适配器
     proxy/           反代网关（存储 / 适配器 / 号池 / 网关服务 / 规则热加载 / IDE 切换）
+      protocols/     入站与出线协议面（openai-out / anthropic-in+out / responses-in+out）
     memory/          记忆中枢（存储 / 索引 / 检索 / 接入 / 自动化 / 导入）
   main.cjs           应用入口（窗口 / 托盘 / 更新）
 src/                 渲染层（Vue 3）

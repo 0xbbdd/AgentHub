@@ -24,11 +24,15 @@ const THINKING_BUDGET_THRESHOLDS = [
 /** thinking → 派生 effort。返回：
  *  · "off"        —— type=disabled 或 budget=0（关思考是个开关，不是一个档位）
  *  · "low/medium/high/max" —— 按预算落桶
- *  · undefined    —— 无 thinking / 非法（负数、NaN）：当 enabled 无档，不派生 */
+ *  · undefined    —— 无 thinking / 没给预算 / 非法（负数、NaN）：当 enabled 无档，不派生 */
 function budgetToEffort(thinking) {
   if (!thinking || typeof thinking !== "object") return undefined;
   if (String(thinking.type || "").trim().toLowerCase() === "disabled") return "off";
-  const budget = Number(thinking.budget_tokens);
+  const raw = thinking.budget_tokens;
+  // 「没给预算」与「预算为 0」不是一回事，必须先分清楚再转数：Number(null) 与 Number("")
+  // 都是 0，先转数会把 null/空串当成「显式关掉思考」，而客户端只是没填这个字段
+  if (raw == null || raw === "") return undefined;
+  const budget = Number(raw);
   if (budget === 0) return "off";
   if (!Number.isFinite(budget) || budget < 0) return undefined; // 非法/负 → enabled 无档，不派生
   for (const t of THINKING_BUDGET_THRESHOLDS) if (budget <= t.max) return t.effort;
@@ -151,9 +155,13 @@ function toInternal(raw) {
 
     if (toolResults.length) {
       for (const tr of toolResults) messages.push(tr);
-      // tool_result 与 text 混排时（Claude Code 会这么发），文本另起一条 user 消息，别丢
+      // tool_result 与 text 混排时（Claude Code 会这么发），文本另起一条 user 消息，别丢。
+      // 同一条消息里收集到的图片也挂在它上面：图片既不在任何 tool_result 的 content 里
+      // （那里的图由 flattenToolResult 处理），走不到下面那条 msg 分支，不带上就是无声丢图
       const extra = textParts.join("");
-      if (extra) messages.push({ role: "user", content: extra });
+      if (extra && images.length) messages.push({ role: "user", content: [{ type: "text", text: extra }, ...images] });
+      else if (extra) messages.push({ role: "user", content: extra });
+      else if (images.length) messages.push({ role: "user", content: images });
       continue;
     }
     const msg = { role, content: textParts.join("") };

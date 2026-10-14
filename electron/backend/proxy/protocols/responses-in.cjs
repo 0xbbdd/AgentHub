@@ -54,9 +54,20 @@ function toInternal(raw) {
     const tc = mapToolChoice(raw.tool_choice, notes);
     if (tc) body.tool_choice = tc;
   }
-  // effort 交给下游同一套档位降级（util.normalizeReasoningEffort 认 reasoning_effort）
+  // effort 交给下游同一套档位降级（util.normalizeReasoningEffort 认 reasoning_effort）。
+  // 但 "none" 要先归一成内部规范形的 "off"：Responses 用 none 表示「不推理」（gpt-5.1 起
+  // 的正式取值，Codex 的 model_reasoning_effort = "none" 走的就是它），而本仓内部把「关思考」
+  // 建模成一个开关值 "off"（见 issue #128）。不归一的话 "none" 不是已知档位，会被
+  // util.normalizeReasoningEffort 原样放过，再落到按家族改写的渠道手里——GLM 那条分支
+  // 认不出它就按「未知值 = 开思考」抬成 high，用户关掉推理反而拿到最耗的档。
   if (raw.reasoning && typeof raw.reasoning === "object" && raw.reasoning.effort) {
-    body.reasoning_effort = String(raw.reasoning.effort).toLowerCase();
+    const eff = String(raw.reasoning.effort).toLowerCase();
+    if (eff === "none") {
+      body.reasoning_effort = "off";
+      notes.push('reasoning.effort="none"（不推理）已归一到内部开关值 "off"');
+    } else {
+      body.reasoning_effort = eff;
+    }
   }
   const tools = mapTools(raw.tools, notes);
   if (tools) body.tools = tools;

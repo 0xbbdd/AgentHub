@@ -585,14 +585,18 @@ function saveConfig(cfg, opts = {}) {
   return { ok: true, message: "设置保存成功" };
 }
 
-/** 由「独立 IPC 直接写盘」的 proxy 字段 —— 设置页表单不拥有它们，
+/** 由「独立 IPC 直接写盘」或「只手工编辑 config.json」的 proxy 字段 —— 设置页表单不拥有它们，
  *  渲染层的 config 快照可能过期，整份保存会把它们冲掉（issue #90）。
  *  · channelEnabled   ← proxy_channel_toggle（上游启闭）
  *  · checkinAutoRules ← proxy_checkin_auto_set（按渠道自动签到）
+ *  · enableAnthropic / enableResponses ← 新增协议面的紧急止血开关。界面不提供入口，
+ *    用户按注释提示手工改 config.json；而「手工改完要重启才进内存快照」这件事不能当约束——
+ *    应用在跑的时候改盘，之后任何一次无关的整份保存（切主题、拖模块顺序）都会把这个
+ *    刚写下的 false 抹掉，等于止血开关自己会弹回来。故与上面两个字段同列，以磁盘为准。
  *  注意：只应在这两个字段**各自的写入 IPC** 里绕过本名单；它们调的是 saveConfig。
  *  restoreOnLaunch 刻意不进名单：设置页「记住网关开关」就是经整份保存写盘的，
  *  磁盘优先会架空那个开关；渲染层快照由总览页每次启停同步（ProxyHomeView），不会过期。 */
-const OUT_OF_BAND_PROXY_FIELDS = ["channelEnabled", "checkinAutoRules"];
+const OUT_OF_BAND_PROXY_FIELDS = ["channelEnabled", "checkinAutoRules", "enableAnthropic", "enableResponses"];
 
 /** 设置页保存路径专用：先把 out-of-band 字段以**磁盘值**为准，再落盘。
  *
