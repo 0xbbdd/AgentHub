@@ -193,6 +193,11 @@ const CHANNELS = [
   ...(AUTOCLAW_INTL_ENABLED ? [{ id: "autoclaw_intl", display: "AutoClaw 国际版", domain: "autoglm-api.autoglm.ai" }] : []),
 ];
 
+// 内置渠道 id 的只读名单：凡是「这一行是不是提供商」的判定都走它，而不是看 kind 列——
+// 老库里那几行由 ALTER 的 DEFAULT 补成 'builtin'，但一条被手改脏的内置行若只按 kind 判，
+// 会同时出现在渠道列表与提供商列表里（见 listProviders 的第二道挡）。
+const BUILTIN_IDS = new Set(CHANNELS.map((c) => c.id));
+
 /** 打开数据库（幂等）；建表 + WAL + 三渠道种子 + 90 天流水 GC */
 function open() {
   if (db) return db;
@@ -242,6 +247,8 @@ function open() {
   try {
     db.exec("ALTER TABLE agents ADD COLUMN cost_tier TEXT NOT NULL DEFAULT ''");
   } catch { /* 已存在 */ }
+  // 在线迁移：自定义提供商（同一张 agents 表扩列成「渠道表」，详见 migrateProviders 的注释）
+  migrateProviders(db);
   const ins = db.prepare("INSERT OR IGNORE INTO agents (id, display, domain, pool_strategy, cost_tier, updated_at) VALUES (?,?,?,?,?,?)");
   const updDisplay = db.prepare("UPDATE agents SET display = ? WHERE id = ?");
   // 存量行成本档回填：INSERT OR IGNORE 不触碰已存在的行，这里只给「从未标注过」的行补种子默认
@@ -254,6 +261,24 @@ function open() {
   }
   gc();
   return db;
+}
+
+/** 自定义提供商落库：不建新表，agents 表扩列即成为「渠道表」。
+ *  为什么扩列而不建新表：pool_strategy 已在此表、accounts.channel 已以它为键，
+ *  于是号池的轮转 / 冷却 / 租约 / 模型级负缓存 / 用量统计 / 号池页全部零改动生效。
+ *  单独包一个函数（而不是摊进 open()）是为了让 open() 只多一行。 */
+function migrateProviders(d) {
+  const cols = [
+    "kind TEXT NOT NULL DEFAULT 'builtin'",
+    "base_url TEXT NOT NULL DEFAULT ''",
+    "models_json TEXT NOT NULL DEFAULT '[]'",
+    "extra_headers TEXT NOT NULL DEFAULT '{}'",
+    "extra_body TEXT NOT NULL DEFAULT '{}'",
+    "enabled INTEGER NOT NULL DEFAULT 1",
+  ];
+  for (const c of cols) {
+    try { d.exec(`ALTER TABLE agents ADD COLUMN ${c}`); } catch { /* 已存在 */ }
+  }
 }
 
 /** 流水保留期（天）：设置页 proxy.usageRetentionDays 可调，启动 GC 与统计页「清理」共用。
@@ -466,7 +491,10 @@ function keyTodayReq(keyId) {
 function listAgents() {
   open();
   return db.prepare("SELECT * FROM agents ORDER BY rowid").all().map((r) => ({
-    id: r.id, display: r.display, domain: r.domain, poolStrategy: r.pool_strategy, costTier: r.cost_tier || "",
+    id: r.id, display: r.display, domain: r.domain, poolStrategy: r.pool_strategy,
+    costTier: r.cost_tier || "",
+    kind: BUILTIN_IDS.has(r.id) ? "builtin" : r.kind,
+    enabled: !!r.enabled,
   }));
 }
 
@@ -474,6 +502,7 @@ function setPoolStrategy(channel, strategy) {
   open();
   if (!["expire_first", "credit_first", "round_robin"].includes(strategy)) return false;
   db.prepare("UPDATE agents SET pool_strategy=?, updated_at=? WHERE id=?").run(strategy, Date.now(), String(channel));
+  invalidateChannels();
   return true;
 }
 
@@ -483,6 +512,136 @@ function setAgentCostTier(channel, tier) {
   if (!["free", "low", "normal"].includes(tier)) return false;
   db.prepare("UPDATE agents SET cost_tier=?, updated_at=? WHERE id=?").run(tier, Date.now(), String(channel));
   return true;
+}
+
+// ===== 渠道（agents 表 = 内置渠道 + 用户自建提供商；这张表就是「渠道」的唯一真相源） =====
+
+/** 渠道的**路由视图**：内置各家在前、启用中的自建提供商在后。所有「这个渠道存在吗 / 它叫什么 /
+ *  它有哪些号」的判定都走这里，不再各自读常量。
+ *  内置行的 display/domain 以 CHANNELS 代码常量为准（库里那行只承载 pool_strategy），
+ *  这样改内置渠道的展示名不需要迁移已建库。
+ *  memo 的生命周期只覆盖一次配置读取：提供商写路径（saveProvider/deleteProvider）显式失效。 */
+let channelsMemo = null;
+function invalidateChannels() { channelsMemo = null; }
+
+function channelList() {
+  if (channelsMemo) return channelsMemo;
+  open();
+  const out = CHANNELS.map((c) => ({ id: c.id, display: c.display, domain: c.domain, kind: "builtin", enabled: true }));
+  for (const r of db.prepare("SELECT * FROM agents ORDER BY rowid").all()) {
+    if (BUILTIN_IDS.has(r.id) || r.kind === "builtin" || !r.enabled) continue;
+    out.push(providerChannelView(r));
+  }
+  channelsMemo = out;
+  return out;
+}
+
+/** 渠道展示名。已停用的提供商也要能解析出来：统计页 / TOP 榜列的是历史流水里的 channel 值，
+ *  那条流水产生时它还在启用，今天停用它不代表历史该退化成裸 slug。 */
+function channelDisplay(id) {
+  const k = String(id);
+  const hit = channelList().find((c) => c.id === k);
+  if (hit) return hit.display || k;
+  const p = getProvider(k);
+  return (p && p.display) || k;
+}
+
+function providerChannelView(r) {
+  return {
+    id: r.id,
+    display: r.display || r.id,
+    domain: r.domain || "",
+    kind: r.kind,
+    enabled: !!r.enabled,
+    baseUrl: r.base_url || "",
+    models: parseModelsJson(r.models_json),
+    extraHeaders: parseJsonMap(r.extra_headers, r.id, "extra_headers"),
+    extraBody: parseJsonMap(r.extra_body, r.id, "extra_body"),
+    updatedAt: r.updated_at || 0,
+  };
+}
+
+function parseModelsJson(raw) {
+  try {
+    const a = JSON.parse(raw || "[]");
+    return Array.isArray(a) ? a : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 坏 JSON 只可能是用户手改库或上一版写入异常：按空对象继续服务，
+ *  但绝不静默——让它在这里留下痕迹，否则 extraHeaders 消失会让上游 401 而看不出原因 */
+function parseJsonMap(raw, id, col) {
+  if (!raw) return {};
+  try {
+    const o = JSON.parse(raw);
+    return o && typeof o === "object" && !Array.isArray(o) ? o : {};
+  } catch {
+    console.warn(`[proxy.store] agents.${col} 不是合法 JSON 对象（渠道 ${id}），按空处理`);
+    return {};
+  }
+}
+
+/** 管理面视图：含**已停用**的条目（channelList() 只给启用中的，停用条目总得能列出来再打开）。
+ *  内置行按 id 再挡一道：老库里那几行的 kind 由 ALTER 的 DEFAULT 补成 'builtin'，
+ *  但 id 命中内置名单的一律不当提供商处理，免得一条被改脏的行同时出现在两个视图里。 */
+function listProviders() {
+  open();
+  return db
+    .prepare("SELECT * FROM agents WHERE kind != 'builtin' ORDER BY rowid")
+    .all()
+    .filter((r) => !BUILTIN_IDS.has(r.id))
+    .map(providerChannelView);
+}
+
+function getProvider(id) {
+  open();
+  const r = db.prepare("SELECT * FROM agents WHERE id = ?").get(String(id));
+  if (!r || BUILTIN_IDS.has(r.id) || r.kind === "builtin") return null;
+  return providerChannelView(r);
+}
+
+function isBuiltinChannel(id) { return BUILTIN_IDS.has(String(id)); }
+
+/** 新增或整体覆盖一个提供商行。updated_at 一并前进，adapters 的动态适配器实例缓存以它为键，
+ *  所以改完配置不必重启网关。 */
+function saveProvider(p) {
+  open();
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO agents (id, display, domain, pool_strategy, updated_at, kind, base_url, models_json, extra_headers, extra_body, enabled)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?)
+     ON CONFLICT(id) DO UPDATE SET display=excluded.display, domain=excluded.domain,
+       pool_strategy=excluded.pool_strategy, updated_at=excluded.updated_at, kind=excluded.kind,
+       base_url=excluded.base_url, models_json=excluded.models_json,
+       extra_headers=excluded.extra_headers, extra_body=excluded.extra_body, enabled=excluded.enabled`
+  ).run(
+    String(p.id),
+    String(p.display || p.id).slice(0, 64),
+    String(p.domain || ""),
+    ["expire_first", "credit_first", "round_robin"].includes(p.poolStrategy) ? p.poolStrategy : "round_robin",
+    now,
+    String(p.kind),
+    String(p.baseUrl || ""),
+    JSON.stringify(Array.isArray(p.models) ? p.models : []),
+    JSON.stringify(p.extraHeaders && typeof p.extraHeaders === "object" ? p.extraHeaders : {}),
+    JSON.stringify(p.extraBody && typeof p.extraBody === "object" ? p.extraBody : {}),
+    p.enabled === false ? 0 : 1
+  );
+  invalidateChannels();
+  return getProvider(p.id);
+}
+
+/** 删除提供商连带它的 Key：removeAccount 负责清 credits_history 与 model_cooldowns，
+ *  不先逐个删就直接 DELETE agents 会留下两处孤儿行。 */
+function deleteProvider(id) {
+  open();
+  if (!getProvider(id)) return false;
+  for (const acc of db.prepare("SELECT id FROM accounts WHERE channel = ?").all(String(id))) removeAccount(acc.id);
+  const n = db.prepare("DELETE FROM agents WHERE id = ?").run(String(id)).changes;
+  invalidateChannels();
+  return n > 0;
 }
 
 // ===== 号池账号 =====
@@ -1122,7 +1281,10 @@ module.exports = {
   CHANNELS,
   QODER_INTL_ENABLED,
   AUTOCLAW_INTL_ENABLED,
-  channelDisplay: (id) => (CHANNELS.find((c) => c.id === id) || {}).display || String(id),
+  isBuiltinChannel,
+  channelList, invalidateChannels,
+  channelDisplay,
+  listProviders, getProvider, saveProvider, deleteProvider,
   createKey, importKey, listKeys, findKeyBySecret, updateKey, deleteKey, keyTodayReq,
   listAgents, setPoolStrategy, setAgentCostTier,
   listAccounts, getAccount, accountSecrets, addAccount, updateAccount, bumpAccountUsage, removeAccount, noteError, clearError, noteCheckin, noteOnboardingGrant, noteAccount,
