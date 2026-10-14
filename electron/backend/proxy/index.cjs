@@ -11,6 +11,7 @@ const store = require("./store.cjs");
 const rules = require("./rules.cjs");
 const pool = require("./pool.cjs");
 const adapters = require("./adapters.cjs");
+const provider = require("./provider.cjs");
 const discovery = require("./discovery.cjs");
 const credits = require("./credits.cjs");
 const server = require("./server.cjs");
@@ -1126,6 +1127,31 @@ function register(ipcMain) {
     oplog.log("info", "模型目录", `${store.channelDisplay(ch)} 模型目录已同步（${r.models.length} 个模型）`, { channel: ch });
     return ok({ channel: ch, count: r.models.length, withRate });
   }));
+
+  // ===== 自定义提供商（中转站 / 自建 OpenAI 兼容端点） =====
+  // 校验与规矩都在 provider.cjs；这里只做参数搬运与 ok/fail 形状包装，出错一律 {ok:false,message}
+  // 由前端直接展示（validate 的 message 已带用户可行动的说明，不再另造错误码）。
+  ipcMain.handle("proxy_provider_list", handle(() => ok({ providers: provider.list() })));
+  ipcMain.handle("proxy_provider_create", handle(({ keys, ...input }) => {
+    const r = provider.create(input);
+    if (!r.ok) return r;
+    // 建提供商时顺带把手里几把 Key 一起存：表单一次填完比"先建再逐个加"少三 step。
+    // 逐个走 addKey 是为了让去重与校验规则只有一份。
+    const added = [];
+    for (const k of Array.isArray(keys) ? keys : []) {
+      const a = provider.addKey(r.provider.id, typeof k === "string" ? { key: k } : k);
+      if (a.ok) added.push(a.id);
+    }
+    return ok({ provider: r.provider, keyIds: added });
+  }));
+  ipcMain.handle("proxy_provider_update", handle((input) => provider.update(input.id, input)));
+  ipcMain.handle("proxy_provider_delete", handle(({ id }) => provider.remove(id)));
+  ipcMain.handle("proxy_provider_add_key", handle(({ id, name, key }) => provider.addKey(id, { name, key })));
+  ipcMain.handle("proxy_provider_remove_key", handle(({ accountId }) => provider.removeKey(accountId)));
+  // 探测用「表单里当场填的 Key + 地址」，未保存的配置也能试；编辑态不重填时改传 accountId，
+  // 由主进程解密——两条都不动号池（不 pickAccount、不写流水、不进冷却），探完好 Key 还是好的
+  ipcMain.handle("proxy_provider_test", handle((input) => provider.probe(input)));
+  ipcMain.handle("proxy_provider_fetch_models", handle(({ id }) => provider.fetchModels(id)));
 
   // ===== 生态接入：CC Switch =====
   ipcMain.handle("proxy_ccswitch_status", handle(() => ccswitch.status()));

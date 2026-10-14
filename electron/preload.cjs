@@ -149,6 +149,16 @@ const ALLOWED_COMMANDS = new Set([
   "proxy_account_import_file",
   "proxy_models",
   "proxy_models_sync",
+  // 自定义提供商（中转站 / 自建 OpenAI 兼容端点）：命令名必须与 backend/proxy/index.cjs 的
+  // handle() 注册面一一对应，漏登记的表现是渲染层收到「未授权的 IPC 命令」并卡在假死态
+  "proxy_provider_list",
+  "proxy_provider_create",
+  "proxy_provider_update",
+  "proxy_provider_delete",
+  "proxy_provider_add_key",
+  "proxy_provider_remove_key",
+  "proxy_provider_test",
+  "proxy_provider_fetch_models",
   "proxy_ide_switch",
   "proxy_ide_status",
   "proxy_zcode_switch_rollback",

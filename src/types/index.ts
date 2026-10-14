@@ -516,6 +516,76 @@ export interface ProxyChannelView {
   enabled?: boolean;
 }
 
+// ===== 自定义提供商（中转站 / 自建 OpenAI 兼容端点） =====
+
+/** 提供商的上游协议形态。值集合与后端 provider.cjs 的 KINDS 同源，漂移由
+ *  scripts/test-provider-ui.cjs 断言守住。这一版只做 OpenAI Chat 一种：另两种形态需要
+ *  入站协议面与出站互转模块，随后续 PR 进来。 */
+export type ProxyProviderKind = "openai_compat";
+/** 渠道 kind：内置生态渠道（builtin）或自建提供商的协议形态 */
+export type ProxyChannelKind = "builtin" | ProxyProviderKind;
+
+/** models 条目：字符串 = 裸名且上游同名；对象 = 可带「客户端名 → 上游真名」映射与目录元数据 */
+export type ProxyProviderModel = string | {
+  model: string;
+  /** 上游真实模型名，缺省 = model。`slug/model` 路由时发给上游的是这个 */
+  upstream?: string;
+  /** 额外的可请求名：原名与别名都命中同一上游模型，但别名不出现在 /v1/models */
+  aliases?: string[];
+  /** 思考档位声明：supportedEfforts 决定客户端要的档位能否原样透传，不支持时按此降级 */
+  reasoning?: { supportedEfforts?: string[]; defaultEffort?: string };
+  name?: string;
+  rate?: number;
+  capabilities?: Record<string, boolean | string | number>;
+  contextLength?: number;
+  maxOutputTokens?: number;
+};
+
+/** 提供商条目（管理页的模型表按对象处理；字符串简写只在读侧兼容，写侧一律展开成对象） */
+export type ProxyProviderModelRow = Exclude<ProxyProviderModel, string>;
+
+/** 「Key 管理」弹窗的运行态视图。刻意不复用 ProxyAccount：它的 channel 是
+ *  ProxyChannelId 那个闭合字面量联合，而提供商的 slug 是运行期数据、编译期无从枚举。 */
+export interface ProxyProviderKey {
+  id: string;
+  name: string;
+  status: ProxyAccountStatus;
+  hasToken: boolean;
+  coolUntil: number;
+  coolReason: string;
+  todayReq: number;
+  lastUsed: number;
+}
+
+export interface ProxyProvider {
+  /** 路由前缀，创建后不可改（accounts.channel 以它为键） */
+  id: string;
+  display: string;
+  domain?: string;
+  kind: ProxyChannelKind;
+  enabled: boolean;
+  baseUrl: string;
+  models: ProxyProviderModel[];
+  extraHeaders: Record<string, string>;
+  extraBody: Record<string, unknown>;
+  updatedAt: number;
+  keyCount?: number;
+  onlineCount?: number;
+  /** Key 管理的数据源：号池视图只按内置渠道迭代、不含提供商，列表顺带把脱敏运行态带回来 */
+  keys?: ProxyProviderKey[];
+}
+
+export interface ProxyProviderTestResult {
+  ok: boolean;
+  message?: string;
+  status?: number;
+  ms?: number;
+  model?: string;
+  sample?: string;
+  finishReason?: string;
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+}
+
 export interface ProxyGatewayStatus {
   running: boolean;
   port: number;
@@ -826,6 +896,7 @@ export const MODULES: ModuleDef[] = [
     name: "反代网关",
     pages: [
       { id: "home", name: "总览" },
+      { id: "providers", name: "自定义提供商" },
       { id: "agents", name: "号池" },
       { id: "expiry", name: "积分日历" },
       { id: "keys", name: "API Keys" },
