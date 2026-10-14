@@ -8,6 +8,7 @@ const store = require("./store.cjs");
 const pool = require("./pool.cjs");
 const adapters = require("./adapters.cjs");
 const util = require("./util.cjs");
+const openaiOut = require("./protocols/openai-out.cjs");
 const events = require("./events.cjs");
 const oplog = require("./oplog.cjs");
 
@@ -582,109 +583,56 @@ async function handleChat(req, res, settings) {
   };
   const rt = runtime; // 捕获引用：stop() 会把 runtime 置 null，后续一律走 rt，finally 里直接碰 runtime 会 TypeError
   let keepAliveTimer = null;
-  let clientGone = false;
-  // 注意：req 的 close 在请求体读完后就可能触发（Node 18+ 语义），不能用来判客户端断连；
-  // res close 才是响应维度的断开——断连后只停写，上游继续消费至 EOF（保 usage 完整，方案 §2.2）
-  res.on("close", () => { clientGone = true; });
-  const write = (text) => {
-    if (clientGone || res.writableEnded) return;
-    res.write(text);
-  };
   let ttftMs = 0;
   let lastUsage = null;
   let finishReason = "stop";
   let sentDelta = false; // 是否已向客户端出过内容（决定流中错误要不要写进 SSE）
   let streamErr = null;  // 流中 error 事件：出过内容时下发作罢；一条内容都没出过时按失败换号
-  // 思考链合批（仅流式）：上游 reasoning_content 按 1~2 字符切片推流（实测 hy3-preview 140 个增量/轮），
-  // 原样透传会让客户端思考链面板碎成几百段刷屏。攒 ≥24 字符或 ≥120ms 或思考结束才下发，正文内容不受影响
-  let reasoningBuf = "";
-  let reasoningLastFlush = 0;
-  const REASON_BATCH_CHARS = 24;
-  const REASON_BATCH_MS = 120;
-  let agg = new util.Aggregator(reqId, requestedModel);
+  // 出线侧（响应头 / SSE 帧 / 聚合器 / 思考链合批）整体交给协议 sink，本函数只留调度状态。
+  // 逐字节等值由 scripts/dev-sink-golden.cjs 的场景表守着（响应字节 / 冷却决策 / 选号顺序 / 流水）
+  const sink = openaiOut.create({ res, reqId, requestedModel, wantStream });
 
   /**
    * 每次真实上游请求前重置「单轮尝试独占」的状态。
    * 这些变量都声明在换号循环与模型回退链之外，不重置就会让上一次尝试的输出混进本次：
-   *  - agg：非流式换号重发时两个账号的正文拼进同一条 content（planLimit 分支曾在 :462
+   *  - agg（在 sink 里）：非流式换号重发时两个账号的正文拼进同一条 content（planLimit 分支曾在
    *    无条件 continue，完全不查出线状态，是最容易触发的一条路）；
-   *  - reasoningBuf：尾段思考链跨尝试残留，客户端看到上一号的半截思考；
+   *  - reasoningBuf（在 sink 里）：尾段思考链跨尝试残留，客户端看到上一号的半截思考；
    *  - sentDelta / ttftMs：残留会让下一次尝试的"是否已出线"判定失真；
    *  - finishReason / lastUsage：残留会让本次以错误的 stop_reason 或上一号的 usage 收尾。
    * 流式已出线时不允许走到重发（见 planLimit 分支的 wantStream && sentDelta 短路），
    * 因为已 write 给客户端的半截正文无法撤回，重置也救不回拼接问题。
    */
   const resetAttemptState = () => {
-    agg = new util.Aggregator(reqId, requestedModel);
+    sink.resetAttempt();
     sentDelta = false;
     streamErr = null;
     finishReason = "stop";
     lastUsage = null;
-    reasoningBuf = "";
     ttftMs = 0;
-  };
-
-  /** 冲刷思考链缓冲（思考结束/出错/收尾时必调，防尾段滞留） */
-  const flushReasoning = () => {
-    if (wantStream && reasoningBuf) {
-      write(util.chunk(reqId, requestedModel, { reasoning_content: reasoningBuf }));
-      reasoningBuf = "";
-    }
   };
 
   const emit = (ev) => {
     if (ev.type === "delta") {
-      const d = ev.delta || {};
-      const rc = d.reasoning_content;
-      // 噪声字段（function_call:null / refusal:"" / tool_calls:[] / extra_fields:null / 重复 role）
-      // 必须在此剔除：它们会让下面的"rest 非空即正文"误判，既提前冲刷思考链缓冲
-      // （合批攒不满 → 思考链碎成一词一条），又把无正文的空帧发给客户端造成逐段换行
-      const rest = util.stripEmptyDelta(d);
-      delete rest.reasoning_content;
-      // "已出线"只认客户端与聚合器真正可消费的三类字段（正文/思考/工具调用），
-      // 不用 rest 非空做判据：rest 可能带上游私有的非空扩展字段（如 extra_fields:{}），
-      // 它既进不了 Aggregator，也不该封死 streamErr 的换号路径、把一次空响应记成 200。
-      // 全空噪声帧同样不得置位——否则流中错误被误判为"已输出不可换号"。
-      // 首字延迟与出线标志在此一并置位：噪声帧若计入 ttftMs，既让统计页 TTFT 虚低，
-      // 又会短路 catch 分支的 `sentDelta || ttftMs` 禁令、废掉换号自救的机会。
-      const substantive = util.hasConsumableDelta(d);
-      if (substantive) {
+      // sink 返回「客户端真正可消费的实质内容有没有出现过」：ttftMs 与 sentDelta 只能由它置位。
+      // 噪声帧不计——既让统计页 TTFT 虚低，又会短路 catch 分支的 `sentDelta || ttftMs` 禁令、
+      // 废掉换号自救的机会（判据在 protocols/openai-out.cjs 的 onDelta 里，与搬家前同一份）
+      if (sink.onDelta(ev.delta)) {
         if (!ttftMs) ttftMs = Date.now() - startedAt;
         sentDelta = true;
       }
-      if (!wantStream) {
-        agg.pushDelta(ev.delta);
-        return;
-      }
-      // 思考链合批：攒批下发；正文/工具调用立即下发前先冲刷思考缓冲（保持先后顺序）
-      if (rc) {
-        reasoningBuf += rc;
-        const now = Date.now();
-        if (reasoningBuf.length >= REASON_BATCH_CHARS || now - reasoningLastFlush >= REASON_BATCH_MS) {
-          flushReasoning();
-          reasoningLastFlush = now;
-        }
-      }
-      if (Object.keys(rest).length) {
-        flushReasoning();
-        write(util.chunk(reqId, requestedModel, rest));
-      }
     } else if (ev.type === "usage") {
       lastUsage = ev.usage;
-      if (!wantStream) agg.usage = ev.usage;
+      sink.onUsage(ev.usage);
     } else if (ev.type === "finish") {
       if (ev.reason) finishReason = ev.reason;
-      if (!wantStream) agg.finishReason = finishReason;
-      flushReasoning(); // 思考结束：尾段全部下发
+      sink.onFinish(finishReason);
     } else if (ev.type === "error") {
       // 流中错误：注入 OpenAI 错误对象后仍发 [DONE]（幂等兜底，方案 §6.3）。
       // 但内容尚未开始时错误不下发——交给换号逻辑，换号成功客户端完全无感（防监测：不暴露多账号切换痕迹）。
       // 无论下没下发都要记账：没出过内容的 error 意味着本次尝试实质失败，不能伪装成 200 空响应
       streamErr = ev;
-      if (wantStream && sentDelta) {
-        flushReasoning();
-        write(`data: ${JSON.stringify(util.openaiError(ev.message, "upstream_error", ev.code || null))}\n\n`);
-      }
+      sink.onStreamError(ev, { sent: sentDelta });
     }
   };
 
@@ -693,21 +641,13 @@ async function handleChat(req, res, settings) {
     // finally 兜底，绝无「抛一次漏一个名额」——旧写法把 += 1 放在 try 之外 109 行处，那段
     // 一旦有人加了会抛的代码，泄漏满上限后网关就会对所有请求恒 429，只能重启
     rt.active += 1;
-    if (wantStream) {
-      res.writeHead(200, {
-        "content-type": "text/event-stream; charset=utf-8",
-        "cache-control": "no-cache",
-        "connection": "keep-alive",
-      });
-      write(util.chunk(reqId, requestedModel, { role: "assistant" }));
-    }
+    sink.writeHead();
     // 15s keep-alive 注释行（防中间层回收，方案 §2.2 联调坑）；有真实输出时静默。
     // 清理放在外层 finally：循环体异常（DB 故障等）直接跳走时定时器也必须清，
     // 不然每 5 秒空转一次还阻止进程退出，随失败请求数累积
     let lastWrite = Date.now();
-    const rawWrite = write;
     keepAliveTimer = setInterval(() => {
-      if (wantStream && Date.now() - lastWrite >= 15000) rawWrite(": keep-alive\n\n");
+      if (wantStream && Date.now() - lastWrite >= 15000) sink.keepAlive();
     }, 5000);
     const emitTimed = (ev) => {
       lastWrite = Date.now();
@@ -751,7 +691,7 @@ async function handleChat(req, res, settings) {
         // 明示模型回退（issue #90）：非流式用响应头；流式头已冲刷，改发 SSE 注释帧
         //（冒号开头，客户端按规范忽略，抓包/代理可见），不再完全静默
         try { res.setHeader("x-agenthub-fallback", `${actualModel} -> ${chainModel}`); } catch { /* 头已发出时忽略 */ }
-        if (wantStream) write(`: fallback ${actualModel} -> ${chainModel}\n\n`);
+        sink.comment(`fallback ${actualModel} -> ${chainModel}`);
       }
       // ===== 渠道候选队列（跨渠道故障转移）：主渠道尊重全部现有路由语义（单源强制 /
       // key.route / per-model 覆盖 / fixed / 生效档排序），备选 = 拥有该模型的其余渠道按
@@ -1000,20 +940,11 @@ async function handleChat(req, res, settings) {
       // 收尾：末 chunk 附 usage + [DONE]；无 done 事件也兜底结束（方案 §6.3）
       const usage = lastUsage || {
         prompt_tokens: util.estimateTokens(JSON.stringify(body.messages)),
-        completion_tokens: util.estimateTokens(agg.content),
+        completion_tokens: util.estimateTokens(sink.aggregated().content),
         total_tokens: 0,
       };
       if (!usage.total_tokens) usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
-      if (wantStream) {
-        flushReasoning(); // 收尾兜底：finish 事件缺失时尾段思考链不滞留
-        write(util.chunk(reqId, requestedModel, {}, finishReason, usage));
-        write(util.DONE);
-        res.end();
-      } else {
-        agg.finishReason = finishReason;
-        agg.usage = usage;
-        res.json(agg.result());
-      }
+      sink.endOk(finishReason, usage);
       // 成功收尾：清软限流 streak / 凭证失效计数 / 该账号该模型的负缓存（键用 targetModel，
       // 与 applyCool/isModelCooled 同键）；渠道侧一并恢复完全体——planLimit 就地收尾（402 半截）
       // 不算真成功，不清渠道降级态（并发场景下会把别人刚熔断的渠道误放回来）
@@ -1092,28 +1023,16 @@ async function handleChat(req, res, settings) {
     // 同时把上游的 code / request_id 落进记账（客户端消息会截断，长标识常被切掉）
     msg = `[ah:${String(reqId).slice(0, 8)}] ${msg}`;
     if (!wantStream || !ttftMs) {
-      // 还没出过内容，可以正常回错误状态
-      if (wantStream && res.headersSent) {
-        write(`data: ${JSON.stringify(util.openaiError(msg, "upstream_error", null))}\n\n`);
-        write(util.DONE);
-        res.end();
-      } else {
-        sendError(res, st === 401 ? 502 : st, msg, st === 402 || st === 429 ? "rate_limit_exceeded" : "server_error");
-      }
+      // 还没出过内容：流式且头已落地时仍要塞错误帧，否则回标准 JSON 错误状态
+      if (wantStream && res.headersSent) sink.endErr(st, msg);
+      else sink.endErr(st === 401 ? 502 : st, msg, st === 402 || st === 429 ? "rate_limit_exceeded" : "server_error");
     } else {
-      write(`data: ${JSON.stringify(util.openaiError(msg, "upstream_error", null))}\n\n`);
-      write(util.DONE);
-      res.end();
+      sink.endErr(st, msg);
     }
     record({ status: st, ttftMs, error: [msg, upstreamRef(lastErr)].filter(Boolean).join(" · ").slice(0, 600) });
   } catch (e) {
     const msg = String((e && e.message) || e);
-    if (!res.headersSent) sendError(res, 502, msg, "server_error");
-    else {
-      write(`data: ${JSON.stringify(util.openaiError(msg, "server_error", null))}\n\n`);
-      write(util.DONE);
-      res.end();
-    }
+    sink.endErr(502, msg, "server_error");
     record({ status: 502, error: msg.slice(0, 200) });
   } finally {
     if (keepAliveTimer) clearInterval(keepAliveTimer);
