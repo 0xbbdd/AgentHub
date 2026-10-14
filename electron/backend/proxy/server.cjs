@@ -516,12 +516,11 @@ async function handleChat(req, res, settings) {
   // raccoon 拒 function），而 400 会触发渠道回退，导致同一条请求能否成功取决于命中
   // 哪个渠道。入口处统一收敛到所有渠道都接受的交集角色，避免逐渠道维护白名单表。
   util.normalizeRoles(body.messages);
-  // 上游并发上限（默认 8）：手配 0/负数/非法值时按默认放行，防止 0>=0 恒真把网关整体锁死
+  // 单渠道在途并发上限（settings.concurrency，默认 8）：只作**选路过滤器**用——满的渠道在
+  // 候选队列里跳过先试备选，绝不在此对请求直接 429。旧实现是「runtime.active 全渠道共享一个
+  // 计数」的全局闸门：渠道 A 打满会连带 429 渠道 B（哪怕 B 刚加、一个请求都没发过），且文案
+  // 写成「上游并发已满」把责任推给上游——issue #106 的全部症状即来源于此，已改为按渠道计数
   const maxConc = Number(settings.concurrency) > 0 ? Math.floor(Number(settings.concurrency)) : 8;
-  if (runtime.active >= maxConc) {
-    record({ status: 429, error: "concurrency limit" });
-    return sendError(res, 429, "上游并发已满，请稍后重试", "rate_limit_exceeded", "concurrency_limited");
-  }
 
   // ===== Dispatch：Key → 渠道（别名解析 → 模型禁用 → 回退链） =====
   const requestedModel = String(body.model);
@@ -581,8 +580,7 @@ async function handleChat(req, res, settings) {
     // 适配器按白名单取用，未列出的头一律不透传
     clientHeaders: req.headers,
   };
-  runtime.active += 1;
-  const rt = runtime; // 捕获引用：stop() 会把 runtime 置 null，finally 里直接碰会 TypeError
+  const rt = runtime; // 捕获引用：stop() 会把 runtime 置 null，后续一律走 rt，finally 里直接碰 runtime 会 TypeError
   let keepAliveTimer = null;
   let clientGone = false;
   // 注意：req 的 close 在请求体读完后就可能触发（Node 18+ 语义），不能用来判客户端断连；
@@ -691,6 +689,10 @@ async function handleChat(req, res, settings) {
   };
 
   try {
+    // 在途计数在 try 内起算（issue #106 加固）：从起算到 finally 扣回之间任何一处抛错都有
+    // finally 兜底，绝无「抛一次漏一个名额」——旧写法把 += 1 放在 try 之外 109 行处，那段
+    // 一旦有人加了会抛的代码，泄漏满上限后网关就会对所有请求恒 429，只能重启
+    rt.active += 1;
     if (wantStream) {
       res.writeHead(200, {
         "content-type": "text/event-stream; charset=utf-8",
@@ -778,6 +780,17 @@ async function handleChat(req, res, settings) {
           triedChannels.push({ chan, accounts: [], note: "渠道降级中" });
           continue;
         }
+        // 单渠道在途已满：跳过先试备选（选路过滤，参考实现 routing::at_concurrency_limit 的语义）。
+        // 全部候选都满时由链尾的 lastErr 汇总成 429 如实上报——绝不能像旧全局闸门那样在进入
+        // 渠道解析之前就把请求 429 掉（issue #106：一个渠道打满连带拒绝所有其它渠道）
+        const chanInflight = rt.activeByChannel.get(chan) || 0;
+        if (chanInflight >= maxConc) {
+          if (!lastErr) {
+            lastErr = Object.assign(new Error(`渠道 ${chan} 在途并发已满（${chanInflight}/${maxConc}），请稍后重试`), { status: 429 });
+          }
+          triedChannels.push({ chan, accounts: [], note: `在途并发已满（${chanInflight}/${maxConc}）` });
+          continue;
+        }
         usageRow.channel = chan;
         // 反向映射：统一请求模型名 → 该渠道的实际模型名。没有可转发目标时跳过该渠道，
         // 绝不能把虚拟统一名原样发给上游（CatPaw 曾因此收到 AgentHub-1.0）。
@@ -824,6 +837,9 @@ async function handleChat(req, res, settings) {
           // 记进「实际用过的账号」会让轨迹失真（用户以为它在跑，实际它在冷却）
           if (!triedAccountNames.includes(acc.name)) triedAccountNames.push(acc.name);
           pool.acquireAccount(acc.id);
+          // 单渠道在途计数：从拿到租约到释放为止（与 finally 的 releaseAccount 同一生命周期，
+          // 泄漏面与租约一致——release 不漏它就不漏）
+          rt.activeByChannel.set(chan, (rt.activeByChannel.get(chan) || 0) + 1);
           upstreamTries++; // 全局上游尝试预算（负缓存跳过不计；429 就地重试走下一轮自然再计）
           realTries++;
           usageRow.accountId = acc.id;
@@ -958,6 +974,7 @@ async function handleChat(req, res, settings) {
             }
           } finally {
             pool.releaseAccount(acc.id);
+            rt.activeByChannel.set(chan, Math.max(0, (rt.activeByChannel.get(chan) || 0) - 1));
           }
         }
         // 渠道尝试结束仍未成功：连续 2 次「真实打过上游仍打光」才降级渠道（后续请求直接走
@@ -1081,7 +1098,7 @@ async function handleChat(req, res, settings) {
         write(util.DONE);
         res.end();
       } else {
-        sendError(res, st === 401 ? 502 : st, msg, st === 402 ? "rate_limit_exceeded" : "server_error");
+        sendError(res, st === 401 ? 502 : st, msg, st === 402 || st === 429 ? "rate_limit_exceeded" : "server_error");
       }
     } else {
       write(`data: ${JSON.stringify(util.openaiError(msg, "upstream_error", null))}\n\n`);
@@ -1100,7 +1117,7 @@ async function handleChat(req, res, settings) {
     record({ status: 502, error: msg.slice(0, 200) });
   } finally {
     if (keepAliveTimer) clearInterval(keepAliveTimer);
-    rt.active -= 1;
+    if (rt) rt.active -= 1; // rt 已随起算移入 try：起算前就抛错（如 stop 竞态）时无事可扣
   }
 }
 
@@ -1181,7 +1198,8 @@ function start(settingsGetter) {
   const app = buildApp(settingsGetter);
   return new Promise((resolve) => {
     const server = app.listen(s.port, s.bind, () => {
-      runtime = { server, startedAt: Date.now(), port: s.port, bind: s.bind, active: 0 };
+      // active：全局在途（状态页展示）；activeByChannel：单渠道在途（issue #106 选路过滤的依据）
+      runtime = { server, startedAt: Date.now(), port: s.port, bind: s.bind, active: 0, activeByChannel: new Map() };
       resolve({ ok: true, port: s.port });
     });
     server.on("error", (e) => {

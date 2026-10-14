@@ -182,7 +182,7 @@ function defaultConfig() {
       routeOrder: "score",      // 渠道成本感知排序：score=按打分（现状）/ cost-first=按成本档升序
                                 // （免费→低成本→普通，组内仍按打分）；Key 可单独覆盖
       rateLimitPerMin: 120,     // 单 Key 令牌桶限速（次/分钟，Key 可单独覆盖）
-      concurrency: 8,           // 上游并发上限
+      concurrency: 8,           // 单渠道在途并发上限（满则跳备选渠道，不做全局 429，issue #106）
       creditsRefreshMin: 30,    // 额度自动刷新周期（分钟）
       expiringSoonDays: 1,      // 积分包「即将到期」预警阈值（天，0~3650，0=关闭预警）：
                                 // 号池到期徽标与逐包明细的 expiringSoon 共用这一个值

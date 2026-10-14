@@ -222,7 +222,10 @@ function openDataDir() {
           <span style="font-size: 11px; color: var(--text-3)">次 / 分钟</span>
         </div>
         <div class="set-row">
-          <div class="set-info"><div class="set-name">上游并发上限</div></div>
+          <div class="set-info">
+            <div class="set-name">单渠道并发上限</div>
+            <div class="set-desc">每个渠道同时打上游的请求数；打满只跳备选渠道，不拒绝请求（旧版按全渠道合计、会误伤空闲渠道）</div>
+          </div>
           <input v-model.number="app.config.proxy.concurrency" class="input mono" style="width: 90px" type="number" min="1" />
           <span style="font-size: 11px; color: var(--text-3)">并发</span>
         </div>
