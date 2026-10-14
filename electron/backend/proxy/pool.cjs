@@ -3,8 +3,20 @@
 "use strict";
 const store = require("./store.cjs");
 
-/** 「即将到期」窗口：账号级聚合（poolSummary）与逐包明细共用同一个判据 */
-const EXPIRING_SOON_MS = 86400000;
+/** 「即将到期」窗口（天）：设置页可调，index.cjs 出号池视图前按 settings().expiringSoonDays 灌入。
+ *  放本模块的模块级变量（仿 store.usageRetentionDays），避免让热路由模块依赖 config。
+ *  默认 1 = 与本改动前 poolSummary 里那个硬编码 86400000 完全等价，不改变任何人的现有观感。
+ *  账号级聚合（poolSummary.expiringSoon）与逐包（decoratePackageStates）共用这一个值。 */
+let expiringSoonDays = 1;
+function setExpiringSoonDays(n) {
+  // 只认「数字」和「非空数字串」。不能写成 Number(n) 一把梭：Number(null) 和 Number("")
+  // 都是合法的 0，会被下面这段当成「用户主动把预警调到 0=关闭」，于是缺字段 / 清空输入框
+  // 会静默关掉预警，而且界面上一点痕迹都没有。
+  const v = typeof n === "number" ? n
+    : (typeof n === "string" && n.trim() !== "" ? Number(n) : NaN);
+  if (Number.isFinite(v) && v >= 0 && v <= 3650) expiringSoonDays = v;
+}
+function expiringSoonMs() { return expiringSoonDays * 86400000; }
 
 /**
  * 由积分包集派生账号级额度（包集是单一事实源时调用；无包则返回 null，调用方保留既有聚合值）。
@@ -32,10 +44,11 @@ function deriveAccountCredits(packages, now) {
  */
 function decoratePackageStates(packages, now) {
   const t = now || Date.now();
+  const soonMs = expiringSoonMs();
   return (packages || []).map((p) => ({
     ...p,
     expired: p.expiresAt > 0 && p.expiresAt <= t,
-    expiringSoon: p.expiresAt > t && p.expiresAt - t < EXPIRING_SOON_MS,
+    expiringSoon: p.expiresAt > t && p.expiresAt - t < soonMs,
   }));
 }
 
@@ -355,7 +368,7 @@ function poolSummary(channel) {
     accountCount: accs.length,
     onlineCount: online.length,
     earliestExpire: expires.length ? Math.min(...expires) : 0,
-    expiringSoon: accs.some((a) => a.expiresAt > 0 && a.expiresAt - now < EXPIRING_SOON_MS),
+    expiringSoon: accs.some((a) => a.expiresAt > 0 && a.expiresAt - now < expiringSoonMs()),
     todayReq: accs.reduce((s, a) => s + a.todayReq, 0),
     todayTokens: accs.reduce((s, a) => s + a.todayTokens, 0),
     lastCreditsAt: accs.reduce((m, a) => Math.max(m, a.creditsAt || 0), 0),
@@ -363,7 +376,7 @@ function poolSummary(channel) {
 }
 
 module.exports = {
-  effectiveStatus, deriveAccountCredits, decoratePackageStates, poolAccounts, pickAccount, coolAccount, coolAccountMs,
+  effectiveStatus, deriveAccountCredits, decoratePackageStates, setExpiringSoonDays, expiringSoonMs, poolAccounts, pickAccount, coolAccount, coolAccountMs,
   coolAccountModel, isModelCooled, accountModelCool, poolSummary, nextDay4AM,
   acquireAccount, releaseAccount, inFlightCount, softBackoffMs, noteSessionDead, noteServerError, noteSuccess,
   releaseCool, zeroBalanceUsable,

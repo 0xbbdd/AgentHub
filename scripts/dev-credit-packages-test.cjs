@@ -7,6 +7,7 @@
 //  ⑥ 端到端一条链：落包 → 全量读 → 时间态 → 派生账号额度
 //  ⑦ 同步往返：exportPool 带包集 + mergeSnapshot 的新增/LWW/旧版本三条分支各就各位
 //  ⑧ 静态接线：建表 / 刷新链路落包并派生 / poolView 附包集 / 导出面齐全
+//  ⑨ 到期阈值可配：默认值等于改动前的硬编码、账号级与逐包共用同一旋钮、非法值忽略
 // 纯 Node、临时沙箱、零副作用（不开真库、不联网）
 // 跑法（store.cjs 用 node:sqlite，系统 node 没有这个内建模块）：
 //   ELECTRON_RUN_AS_NODE=1 node_modules/electron/dist/electron.exe scripts/dev-credit-packages-test.cjs
@@ -301,16 +302,74 @@ const DAY = 86400000;
   assert.ok(/listAllCreditPackages\(\)/.test(idx), "⑧ poolView 必须先做一次全量读，否则分桶 Map 没有来源");
 
   // 导出面：漏一个导出不是构建期错误，是运行期 undefined is not a function
-  for (const fn of ["setCreditPackages", "listCreditPackages", "listAllCreditPackages"])
-    assert.strictEqual(typeof store[fn], "function", `⑧ store 必须导出 ${fn}`);
-  for (const fn of ["deriveAccountCredits", "decoratePackageStates"])
-    assert.strictEqual(typeof pool[fn], "function", `⑧ pool 必须导出 ${fn}`);
-  assert.strictEqual(typeof util.normalizeExpiryMs, "function", "⑧ util 必须导出 normalizeExpiryMs");
-  // 这两个是 ⑦ 的入口；漏导出的话 ⑦ 只会以 TypeError 崩，红得不指向任何一条判据
+  // 判据写成「模块 → 该模块必须露出的函数名」一张表，条数由表自己算——
+  // 手写「N 个导出齐全」这句话在加一行断言后就会说谎，而它说谎时测试照样是绿的
   const psync = require(path.join(ROOT, "electron", "backend", "proxy", "poolsync.cjs"));
-  for (const fn of ["exportPool", "mergeSnapshot"])
-    assert.strictEqual(typeof psync[fn], "function", `⑧ poolsync 必须导出 ${fn}（⑦ 靠它做同步往返）`);
-  pass("⑧ 静态接线：建表 / 刷新链路落包并派生 / packages: 行走全量读+时间态 / 八个导出齐全");
+  const EXPORTS = [
+    ["store", store, ["setCreditPackages", "listCreditPackages", "listAllCreditPackages"]],
+    ["pool", pool, ["deriveAccountCredits", "decoratePackageStates", "setExpiringSoonDays", "expiringSoonMs"]],
+    ["util", util, ["normalizeExpiryMs"]],
+    // 后两个是 ⑦ 的入口；漏导出的话 ⑦ 只会以 TypeError 崩，红得不指向任何一条判据
+    ["poolsync", psync, ["exportPool", "mergeSnapshot"]],
+  ];
+  let exportCount = 0;
+  for (const [mod, obj, names] of EXPORTS)
+    for (const fn of names) {
+      assert.strictEqual(typeof obj[fn], "function", `⑧ ${mod} 必须导出 ${fn}`);
+      exportCount++;
+    }
+  // 阈值这条链的两个接线点，缺一处就是「设置页改了没用」：
+  //  · index.cjs 出视图前必须把设置灌进 pool（否则 expiringSoonDays 永远是模块默认值）
+  //  · 设置页的钳制必须用 Number.isFinite 而不是 ||，否则用户填 0（=关闭预警）会被跳回默认
+  assert.ok(/setExpiringSoonDays\(settings\(\)\.expiringSoonDays\)/.test(idx),
+    "⑧ poolView 必须每次把 settings().expiringSoonDays 灌进 pool（漏了就是改了设置不生效）");
+  const vue = fs.readFileSync(path.join(ROOT, "src", "components", "config", "ConfigProxySection.vue"), "utf8");
+  const clampLine = (vue.match(/^[^\n]*expiringSoonDays = Math\.min[^\n]*/m) || ["(找不到设置页的钳制行)"])[0];
+  assert.ok(/Number\.isFinite/.test(clampLine),
+    `⑧ 设置页对 expiringSoonDays 的钳制必须走 Number.isFinite（实测: ${clampLine.trim().slice(0, 110)}）——用 || 会把合法的 0 跳回默认`);
+
+  pass(`⑧ 静态接线：建表 / 刷新链路落包并派生 / packages: 行走全量读+时间态 / 阈值两处接线 / ${exportCount} 个导出齐全`);
+}
+
+// ===== ⑨ 阈值可配：账号级徽标与逐包共用同一个值，且默认值等于改动前那个硬编码 =====
+{
+  const T = 1700000000000;
+  const soonAt = (days, now) => pool.decoratePackageStates(
+    [{ code: "c", name: "n", total: 10, used: 0, remaining: 10, expiresAt: now + days * DAY }], now)[0].expiringSoon;
+
+  // 默认必须仍是 1 天：本条 PR 不改任何人的现有观感，只是把这个数变成可调
+  assert.strictEqual(pool.expiringSoonMs(), DAY, "⑨ 默认阈值必须等于改动前 poolSummary 里硬编码的 86400000");
+  assert.strictEqual(soonAt(0.5, T), true, "⑨ 默认 1 天：半天内到期 ⇒ 即将到期");
+  assert.strictEqual(soonAt(1.5, T), false, "⑨ 默认 1 天：1.5 天不算（改动前就是这个口径）");
+
+  pool.setExpiringSoonDays(7);
+  assert.strictEqual(pool.expiringSoonMs(), 7 * DAY, "⑨ setter 生效");
+  assert.strictEqual(soonAt(1.5, T), true, "⑨ 调到 7 天后，同一个包翻成即将到期（逐包侧吃到新阈值）");
+
+  // 账号级徽标必须跟同一个旋钮：两处不同值就会出现「号池卡片说不到期、日历说快到期」
+  const acc = store.addAccount({ channel: "trae", uid: "u-thr", name: "阈值账号", token: "tk", refreshToken: "", source: "paste", expiresAt: Date.now() + 3 * DAY });
+  assert.strictEqual(pool.poolSummary("trae").expiringSoon, true,
+    "⑨ 阈值 7 天时，3 天后到期的账号级徽标必须一起亮（两处共用 expiringSoonMs 的证明）");
+  pool.setExpiringSoonDays(1);
+  assert.strictEqual(pool.poolSummary("trae").expiringSoon, false,
+    "⑨ 阈值收回 1 天，账号级徽标同步熄灭——不是只有逐包那侧跟着变");
+
+  // 非法输入：保留现值，不崩、也不写进荒谬值（半天或 9999 年都不会是用户想要的）
+  // null 与 "" 单独点名：Number(null)===Number("")===0，一把梭的 Number() 会把它们
+  // 当成「用户主动关闭预警」，于是缺字段或清空输入框就静默关掉了预警
+  for (const bad of ["abc", NaN, -1, 99999, undefined, null, "", "   ", true, false, {}, []]) {
+    pool.setExpiringSoonDays(bad);
+    assert.strictEqual(pool.expiringSoonMs(), DAY, `⑨ 非法阈值 ${JSON.stringify(bad)} 必须被忽略而不是改写现值`);
+  }
+  pool.setExpiringSoonDays("7");
+  assert.strictEqual(pool.expiringSoonMs(), 7 * DAY, "⑨ 数字串照收（IPC 传字符串的情况）");
+  pool.setExpiringSoonDays(1);
+  pool.setExpiringSoonDays(0);
+  assert.strictEqual(pool.expiringSoonMs(), 0, "⑨ 0 合法：关闭预警");
+  assert.strictEqual(soonAt(0.5, T), false, "⑨ 阈值为 0 时任何包都不算即将到期");
+  pool.setExpiringSoonDays(1); // 复原，别让本节的模块状态泄漏给后面的判据
+  store.removeAccount(acc);
+  pass("⑨ 阈值可配：默认=原硬编码 / 逐包与账号级共用同一旋钮 / 非法值忽略 / 0=关闭 / 状态复原");
 }
 
 store.close();
