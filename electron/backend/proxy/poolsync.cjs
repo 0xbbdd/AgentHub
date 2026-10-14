@@ -195,6 +195,8 @@ function restoreMetaForLocal(meta, channel) {
  *  channel 给定时只导出该渠道（同步页支持「只同步某一个编译器」）。
  *  凭据为空的账号跳过：把空号打进加密包会传播到所有设备（他机拿到的是无凭据坏号） */
 function exportPool(channel) {
+  // 包集一次全量读再按账号分桶（逐账号查在导出全渠道时是 N+1）
+  const packagesByAccount = store.listAllCreditPackages();
   const accounts = store
     .listAccounts()
     .map((view) => {
@@ -214,6 +216,8 @@ function exportPool(channel) {
         expiresAt: view.expiresAt || 0,
         credits: view.credits || 0,
         creditsAt: view.creditsAt || 0,
+        // 逐包明细随快照走，否则同步过来的账号只有聚合余额、没有到期日历
+        packages: packagesByAccount.get(view.id) || [],
         source: view.source || "paste",
         meta: prepareMetaForExport(view.meta, view.channel),
         updatedAt: rawUpdatedAt,
@@ -283,7 +287,7 @@ function mergeSnapshot(snap, channel) {
         skipped++;
         continue;
       }
-      store.addAccount({
+      const newId = store.addAccount({
         channel: ra.channel,
         uid: ra.uid || "",
         name: ra.name || "",
@@ -294,6 +298,9 @@ function mergeSnapshot(snap, channel) {
         meta: restoreMetaForLocal(ra.meta, ra.channel),
         updatedAt: raUpdatedAt || now,
       });
+      // 新入池的账号连包集一起收：没有这一步的话对端推过来的逐包明细会被丢弃，
+      // 本机这个号的日历永远是空的（账号级 credits 有值，看不出缺了东西）
+      if (Array.isArray(ra.packages)) store.setCreditPackages(newId, ra.channel, ra.packages);
       added++;
       continue;
     }
@@ -370,6 +377,9 @@ function mergeSnapshot(snap, channel) {
     if (Number(ra.creditsAt || 0) > Number(local.creditsAt || 0)) {
       patch.credits = ra.credits;
       patch.creditsAt = ra.creditsAt;
+      // 包集与额度是同一次查询的产物，必须同一次 LWW 整体替换：远端 creditsAt 更新才以它的
+      // 包集为准。放在这个门外，一份更旧的包集会盖掉本机更新的逐包状态。
+      if (Array.isArray(ra.packages)) store.setCreditPackages(local.id, ra.channel || local.channel, ra.packages);
       if (adoptRemoteCreds) patch.expiresAt = ra.expiresAt;
     }
 
@@ -698,6 +708,10 @@ async function restoreAnchorMidFromRemote() {
 }
 
 module.exports = { run, cancel, progress, configured, noteRemoved, noteKeyRemoved, onSharedPasswordMaybeChanged, accountKeyOf, backupAnchorMid, restoreAnchorMidFromRemote,
+  // 号池逐包的自测面（自测与诊断用，与下面 encodeArchive 同一先例）：
+  // mergeSnapshot 不走这两个导出的话，「包集随同步传播」只能靠 grep 源文件钉，抓不到
+  // 「写错了 LWW 门的位置」这类真缺陷
+  exportPool, mergeSnapshot,
   // 共享配置同步（自测与诊断用；主流程在 run() 内部调用 runSharedSync）
   exportShared, applyShared, encodeEnvelope, decodeEnvelope, runSharedSync,
   // 号池归档封套（自测用：与共享配置共用同一 encode/decodeEnvelope，去重后靠这组断言守住行为）

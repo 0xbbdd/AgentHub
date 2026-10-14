@@ -5,7 +5,8 @@
 //  ④ pool.decoratePackageStates：expired/expiringSoon 的边界（时间态每次出视图重算，不落库）
 //  ⑤ store.listAllCreditPackages：一次全量分桶，与逐账号读逐字段等价（号池视图走这条）
 //  ⑥ 端到端一条链：落包 → 全量读 → 时间态 → 派生账号额度
-//  ⑦ 静态接线：建表 / 刷新链路落包并派生 / poolView 附包集
+//  ⑦ 同步往返：exportPool 带包集 + mergeSnapshot 的新增/LWW/旧版本三条分支各就各位
+//  ⑧ 静态接线：建表 / 刷新链路落包并派生 / poolView 附包集 / 导出面齐全
 // 纯 Node、临时沙箱、零副作用（不开真库、不联网）
 // 跑法（store.cjs 用 node:sqlite，系统 node 没有这个内建模块）：
 //   ELECTRON_RUN_AS_NODE=1 node_modules/electron/dist/electron.exe scripts/dev-credit-packages-test.cjs
@@ -222,32 +223,94 @@ const DAY = 86400000;
   pass("⑥ 端到端：落包→全量读→时间态→派生 80/3天，且同记录隔 3 天重读自动改态");
 }
 
-// ===== ⑦ 静态接线（不联网、不开真库网关） =====
+// ===== ⑦ 同步往返：包集随快照走，且只在 creditsAt 更新时才被盖 =====
+{
+  const psync = require(path.join(ROOT, "electron", "backend", "proxy", "poolsync.cjs"));
+  const T = Date.now();
+  const uid = "u-sync";
+  const mk = (code, rem, days) => ({ code, name: code, total: rem, used: 0, remaining: rem, expiresAt: T + days * DAY });
+
+  const src = store.addAccount({ channel: "trae", uid, name: "同步源", token: "tk", refreshToken: "", source: "paste" });
+  store.updateAccount(src, { creditsAt: T, credits: 130 });
+  store.setCreditPackages(src, "trae", [mk("s1", 100, 6), mk("s2", 30, 20)]);
+  const snap = psync.exportPool("trae");
+  const snapAcc = snap.accounts.find((a) => a.uid === uid);
+  assert.deepStrictEqual((snapAcc.packages || []).map((p) => p.code), ["s1", "s2"],
+    "⑦ 导出必须带包集（不带的话对端拿到的是「有余额、无日历」的半号，而且看不出来）");
+
+  // 本机整号缺失 → 走「新增」分支：连包集一起收
+  store.removeAccount(src);
+  assert.deepStrictEqual(store.listCreditPackages(src), [], "⑦ 前置：删号后本机无包");
+  const r1 = psync.mergeSnapshot(snap, "trae");
+  assert.strictEqual(r1.added, 1, "⑦ 前置：本机无同身份账号，应走新增分支");
+  const reborn = store.listAccounts().find((a) => a.uid === uid);
+  assert.ok(reborn, "⑦ 新增分支应把账号入池");
+  assert.deepStrictEqual(store.listCreditPackages(reborn.id).map((p) => p.code), ["s1", "s2"],
+    "⑦ 新增分支必须同时写入包集（漏了就只有账号没有日历）");
+
+  // 本机已有同身份账号、且本机 creditsAt 更新 → 远端那份更旧的包集不得盖掉本机
+  store.setCreditPackages(reborn.id, "trae", [mk("local-newer", 7, 3)]);
+  store.updateAccount(reborn.id, { creditsAt: T + 2 * DAY });
+  psync.mergeSnapshot(snap, "trae");
+  assert.deepStrictEqual(store.listCreditPackages(reborn.id).map((p) => p.code), ["local-newer"],
+    "⑦ 远端 creditsAt 更旧时包集必须保持本机版本（写在这门外就是「旧快照倒灌」）");
+
+  // 本机 creditsAt 更旧 → 远端包集整体替换本机
+  store.updateAccount(reborn.id, { creditsAt: T - 2 * DAY });
+  psync.mergeSnapshot(snap, "trae");
+  assert.deepStrictEqual(store.listCreditPackages(reborn.id).map((p) => p.code), ["s1", "s2"],
+    "⑦ 远端 creditsAt 更新时以远端包集整体替换（不是叠加：本机那个 local-newer 必须消失）");
+
+  // 快照里没有 packages 字段（对端是旧版本）→ 本机包集原样保留，不得被清成空
+  const legacySnap = {
+    ...snap,
+    accounts: snap.accounts.map((a) => {
+      if (a.uid !== uid) return a;
+      const copy = { ...a, updatedAt: Date.now() + 9 * DAY, creditsAt: Date.now() + 9 * DAY };
+      delete copy.packages; // 旧版本对端根本不认识这个字段
+      return copy;
+    }),
+  };
+  assert.strictEqual(legacySnap.accounts.find((a) => a.uid === uid).packages, undefined,
+    "⑦ 前置：这份快照确实没有 packages");
+  psync.mergeSnapshot(legacySnap, "trae");
+  assert.deepStrictEqual(store.listCreditPackages(reborn.id).map((p) => p.code), ["s1", "s2"],
+    "⑦ 对端旧版本快照不带 packages 时，本机包集不得被清掉（缺字段 ≠ 清空指令）");
+
+  store.removeAccount(reborn.id);
+  pass("⑦ 同步往返：导出带包集 / 新增分支同写 / 更旧不倒灌 / 更新整体替换 / 缺字段不清空");
+}
+
+// ===== ⑧ 静态接线（不联网、不开真库网关） =====
 {
   const read = (f) => fs.readFileSync(path.join(ROOT, "electron", "backend", "proxy", f), "utf8");
   assert.ok(/CREATE TABLE IF NOT EXISTS credit_packages/.test(read("store.cjs")),
-    "⑦ store.cjs 必须建 credit_packages 表（不建表则首次 setCreditPackages 就炸）");
+    "⑧ store.cjs 必须建 credit_packages 表（不建表则首次 setCreditPackages 就炸）");
 
   const cred = read("credits.cjs");
   assert.ok(/setCreditPackages/.test(cred) && /deriveAccountCredits/.test(cred),
-    "⑦ credits.cjs 刷新链路必须落包集并用 deriveAccountCredits 派生（否则包集永远不写、账号额度与逐包不同源）");
+    "⑧ credits.cjs 刷新链路必须落包集并用 deriveAccountCredits 派生（否则包集永远不写、账号额度与逐包不同源）");
 
   // poolView 的包集来源必须是「一次全量读」，不是逐账号查。
   // 只 grep 文件里有没有 listAllCreditPackages 是抓不住的：把下面这行换回逐账号查，
   // 全量读那行仍然留在文件里，正则照样过——判据必须落到 packages: 这一行本身。
   const idx = read("index.cjs");
   const pkgLine = (idx.match(/^[ \t]*packages:[^\r\n]*/m) || ["(找不到 packages: 这一行)"])[0];
-  assert.ok(/decoratePackageStates\(/.test(pkgLine), `⑦ poolView 的 packages: 必须过 decoratePackageStates 附时间态（实测: ${pkgLine.trim()}）`);
-  assert.ok(!/store\.listCreditPackages\(/.test(pkgLine), `⑦ poolView 不得逐账号查包（N+1）（实测: ${pkgLine.trim()}）`);
-  assert.ok(/listAllCreditPackages\(\)/.test(idx), "⑦ poolView 必须先做一次全量读，否则分桶 Map 没有来源");
+  assert.ok(/decoratePackageStates\(/.test(pkgLine), `⑧ poolView 的 packages: 必须过 decoratePackageStates 附时间态（实测: ${pkgLine.trim()}）`);
+  assert.ok(!/store\.listCreditPackages\(/.test(pkgLine), `⑧ poolView 不得逐账号查包（N+1）（实测: ${pkgLine.trim()}）`);
+  assert.ok(/listAllCreditPackages\(\)/.test(idx), "⑧ poolView 必须先做一次全量读，否则分桶 Map 没有来源");
 
   // 导出面：漏一个导出不是构建期错误，是运行期 undefined is not a function
   for (const fn of ["setCreditPackages", "listCreditPackages", "listAllCreditPackages"])
-    assert.strictEqual(typeof store[fn], "function", `⑦ store 必须导出 ${fn}`);
+    assert.strictEqual(typeof store[fn], "function", `⑧ store 必须导出 ${fn}`);
   for (const fn of ["deriveAccountCredits", "decoratePackageStates"])
-    assert.strictEqual(typeof pool[fn], "function", `⑦ pool 必须导出 ${fn}`);
-  assert.strictEqual(typeof util.normalizeExpiryMs, "function", "⑦ util 必须导出 normalizeExpiryMs");
-  pass("⑦ 静态接线：建表 / 刷新链路落包并派生 / packages: 行走全量读+时间态 / 六个导出齐全");
+    assert.strictEqual(typeof pool[fn], "function", `⑧ pool 必须导出 ${fn}`);
+  assert.strictEqual(typeof util.normalizeExpiryMs, "function", "⑧ util 必须导出 normalizeExpiryMs");
+  // 这两个是 ⑦ 的入口；漏导出的话 ⑦ 只会以 TypeError 崩，红得不指向任何一条判据
+  const psync = require(path.join(ROOT, "electron", "backend", "proxy", "poolsync.cjs"));
+  for (const fn of ["exportPool", "mergeSnapshot"])
+    assert.strictEqual(typeof psync[fn], "function", `⑧ poolsync 必须导出 ${fn}（⑦ 靠它做同步往返）`);
+  pass("⑧ 静态接线：建表 / 刷新链路落包并派生 / packages: 行走全量读+时间态 / 八个导出齐全");
 }
 
 store.close();
