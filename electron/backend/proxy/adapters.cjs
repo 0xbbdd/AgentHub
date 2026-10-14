@@ -325,27 +325,52 @@ function pickEntitlementPack(packs) {
   return shaped.reduce((a, b) => (b.credits > a.credits ? b : a), { productType: 0, credits: 0, expiresAt: 0 });
 }
 
-/** Trae 逐包：user_entitlement_pack_list → 到期日历的包行（纯函数，自测直接喂合成样本）。
- *  口径与本渠道既有的账号级算法保持一字不差：只认 credits_limit > 0 的包，剩余 = limit - used。
- *  ⚠ 已知缺口（刻意留给后续一条 PR，别在本条里顺手改）：上游响应里的「不限量」包
- *  是 credits_limit < 0，会被下面这个 `limit <= 0` 整条丢掉 ⇒ 日历少一行、连带丢掉它的到期。
- *  修它要同时把账号级 credits 改成 -1 哨兵，那是行为变更，不该混在一条纯增量的 PR 里。 */
-function traeCreditPackages(packs) {
-  const out = [];
+/** Trae 逐包 + 账号级折叠：user_entitlement_pack_list → 到期日历的包行（纯函数，自测直接喂合成样本）。
+ *  返回 { packages, credits, expiresAt }；调用点只看 packages.length 决定要不要用这份结果。
+ *  两条 -1 的分工与 pool.deriveAccountCredits 同口径：remaining=-1 才是「额度不限」，
+ *  total=-1 只是「上游不给这一包的面值」，混了会把整号派生成无限并绕开 cost-first。 */
+function traeCredits(packs) {
+  const packages = [];
   for (const p of Array.isArray(packs) ? packs : []) {
-    const limit = Number(util.dig(p, /^credits_limit$/i)) || 0;
-    if (limit <= 0) continue;
+    // 参考项目 trae/usage.rs 的三条过滤：隐藏包、已取消(status=3)、兑换码包(product_type=3)。
+    // 只在 entitlement_base_info 这一层**直接读**（字段就在那），且只在结构存在时生效——
+    // 老响应没这层嵌套时照常出包，不做全域 dig（那会误吃到别的 status）。
+    const base = p && typeof p.entitlement_base_info === "object" && p.entitlement_base_info ? p.entitlement_base_info : null;
+    if (base) {
+      if (base.is_hide === true) continue;
+      if (Number(base.status) === 3) continue;
+      if (Number(base.product_type) === 3) continue;
+    }
+    const limit = Number(util.dig(p, /^credits_limit$/i));
+    if (!Number.isFinite(limit) || limit === 0) continue; // 无该字段 / 面值为 0 = 这份包不属于该号
     const used = Number(util.dig(p, /^credits_amount$/i)) || 0;
-    out.push({
-      code: String(util.dig(p, /^entitlement_pack_id$|^pack_id$|^id$/i) || `pack${out.length}`).slice(0, 128),
+    // limit < 0 是上游「不限量」哨兵。旧判据 `limit <= 0 continue` 把这种包**整条丢掉**
+    // ⇒ 日历少一行、连带丢掉它的到期。翻成本仓形状：total/remaining 各落 -1（分工见函数头）。
+    const unlimited = limit < 0;
+    packages.push({
+      code: String(util.dig(p, /^entitlement_pack_id$|^pack_id$|^id$/i) || `pack${packages.length}`).slice(0, 128),
       name: String(util.dig(p, /^display_desc$|^name$|^pack_name$/i) || "资源包").slice(0, 128),
-      total: limit,
+      total: unlimited ? -1 : limit,
       used,
-      remaining: Math.max(limit - used, 0),
-      expiresAt: util.toMs(util.dig(p, /end_time|expire|deadline|valid_until/i)),
+      remaining: unlimited ? -1 : Math.max(limit - used, 0),
+      // 与 lobster / qoder 那两族同口径走 normalizeExpiryMs（纯日期串补当天末尾、远未来脏值当长期
+      // 有效），不再用裸 toMs——不限量包最可能带的就是哨兵型到期，不归一会在日历排出一行「还剩几万年」。
+      expiresAt: util.normalizeExpiryMs(util.dig(p, /end_time|expire|deadline|valid_until/i)),
     });
   }
-  return out;
+  // 账号级折叠：任一包 remaining=-1 ⇒ 整号「不限」（与 pool.deriveAccountCredits 同判据），
+  // 且此后不再累加——把 -1 当欠款加进和里会得到 59 这种「既不是数也不是哨兵」的值。
+  // ⚠ 这里不按到期过滤（沿用本渠道既有口径）；落库那份由 credits.cjs 用
+  // pool.deriveAccountCredits 覆盖成「Σ 未过期包剩余」。两处口径不同是有意的，
+  // 但同一批包在没有过期包时必须给同一个数——闸里钉着这条。
+  let credits = 0;
+  let expiresAt = 0;
+  for (const p of packages) {
+    if (p.remaining === -1) credits = -1;
+    else if (credits !== -1) credits += p.remaining;
+    if (p.expiresAt > Date.now() && (!expiresAt || p.expiresAt < expiresAt)) expiresAt = p.expiresAt;
+  }
+  return { credits, expiresAt, packages };
 }
 
 /** zcode（JWT 侧）逐包：balances 一条 = 一个套餐额度（纯函数，自测直接喂合成样本）。
@@ -724,18 +749,14 @@ const trae = {
         }
         const packs = findList(r.data, "user_entitlement_pack_list") || [];
         if (packs.length) {
-          let credits = 0;
-          let expiresAt = 0;
-          const packages = traeCreditPackages(packs);
-          for (const p of packages) {
-            credits += p.remaining;
-            if (p.expiresAt > Date.now() && (!expiresAt || p.expiresAt < expiresAt)) expiresAt = p.expiresAt;
-          }
-          if (credits > 0) return { credits, expiresAt, packages };
-          // 新版字段缺失时退回旧档位口径（单一包 remain）
+          const t = traeCredits(packs);
+          // 守卫从 `credits > 0` 换成 `packages.length`：不限量账号的 credits 是 -1，沿用旧守卫
+          // 会掉进下面「退回旧档位口径」，把刚解析出来的包整个扔掉——正是本条要修的那个丢失。
+          if (t.packages.length) return t;
+          // 三条过滤把全部包都滤掉 / 新版字段缺失时，退回旧档位口径（单一包 remain）
           const best = pickEntitlementPack(packs);
           if (best.credits > 0) return { credits: best.credits, expiresAt: best.expiresAt };
-          return { credits: 0, expiresAt };
+          return { credits: 0, expiresAt: t.expiresAt };
         }
         lastErr = "上游未返回订阅包";
       }
@@ -4257,4 +4278,4 @@ module.exports = { get, ADAPTERS, channelModelIds, reverseAliasEntry, resolveMod
   // 供自测校验模型上限归一化（缺失/非法 → 0，绝不编造）与 trae 目录结构解析
   tokenLimit, traeLimits,
   // 供自测校验「逐包积分」的三条映射（到期日历的数据源）：都是纯函数，喂合成样本即可，不出网
-  traeCreditPackages, zcodeCreditPackages, lobsterCreditPackages, parseWbResource };
+  traeCredits, zcodeCreditPackages, lobsterCreditPackages, parseWbResource };

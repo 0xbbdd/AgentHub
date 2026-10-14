@@ -292,6 +292,13 @@ const DAY = 86400000;
   assert.ok(/setCreditPackages/.test(cred) && /deriveAccountCredits/.test(cred),
     "⑧ credits.cjs 刷新链路必须落包集并用 deriveAccountCredits 派生（否则包集永远不写、账号额度与逐包不同源）");
 
+  // trae「包集要不要交出去」这个守卫：不限量账号的 credits 是 -1，守卫若还写在 credits>0 上，
+  // 刚解析出来的包会在 return 前被整个丢掉。它在 queryCredits 的 HTTP 流程里，运行时测不到，
+  // 只能钉字面——判据落到 return t 这一行自己的条件上，不匹「文件里有没有 packages.length」。
+  const traeGuard = (read("adapters.cjs").match(/^[ \t]*if \([^\r\n]*\)[ \t]*return t;[ \t]*$/m) || ["(找不到 trae 的 return t 这一行)"])[0];
+  assert.ok(/packages\.length/.test(traeGuard),
+    `⑧ trae 交出包集的守卫必须看 packages.length（credits>0 会把不限量号吞掉）（实测: ${traeGuard.trim()}）`);
+
   // poolView 的包集来源必须是「一次全量读」，不是逐账号查。
   // 只 grep 文件里有没有 listAllCreditPackages 是抓不住的：把下面这行换回逐账号查，
   // 全量读那行仍然留在文件里，正则照样过——判据必须落到 packages: 这一行本身。
@@ -380,18 +387,65 @@ const DAY = 86400000;
   const adapters = require(path.join(ROOT, "electron", "backend", "proxy", "adapters.cjs"));
   const SEC = Math.floor((Date.now() + 20 * DAY) / 1000);
 
-  // —— Trae：remaining = limit - used；秒级到期换算成毫秒；limit<=0 的包本条仍按上游原样跳过 ——
-  const tp = adapters.traeCreditPackages([
+  // —— Trae：remaining = limit - used；秒级到期换算成毫秒；不限量包不再丢弃 ——
+  const tr = adapters.traeCredits([
     { entitlement_pack_id: "A", display_desc: "月包", end_time: SEC, quota: { credits_limit: 100, credits_amount: 30 } },
     { entitlement_pack_id: "B", display_desc: "用完了", end_time: SEC, quota: { credits_limit: 50, credits_amount: 50 } },
     { entitlement_pack_id: "Z", display_desc: "无面值", quota: { credits_limit: 0 } },
   ]);
-  assert.deepStrictEqual(tp.map((p) => p.code), ["A", "B"], "⑩ Trae：只认 credits_limit > 0 的包（与账号级同口径）");
-  assert.strictEqual(tp[0].remaining, 70, "⑩ Trae：剩余 = limit - used");
-  assert.strictEqual(tp[0].total, 100, "⑩ Trae：面值取 credits_limit");
-  assert.strictEqual(tp[0].name, "月包", "⑩ Trae：包名取 display_desc");
-  assert.strictEqual(tp[1].remaining, 0, "⑩ Trae：用完的包剩余 0 但仍出一行（日历要看得见它的到期）");
-  assert.ok(Math.abs(tp[0].expiresAt - SEC * 1000) < 2000, "⑩ Trae：秒级 end_time 要换成毫秒（落库与比较都用毫秒）");
+  assert.deepStrictEqual(tr.packages.map((p) => p.code), ["A", "B"], "⑩ Trae：只认「有面值」的包（credits_limit 缺字段或为 0 = 不属于该号）");
+  assert.strictEqual(tr.packages[0].remaining, 70, "⑩ Trae：剩余 = limit - used");
+  assert.strictEqual(tr.packages[0].total, 100, "⑩ Trae：面值取 credits_limit");
+  assert.strictEqual(tr.packages[0].name, "月包", "⑩ Trae：包名取 display_desc");
+  assert.strictEqual(tr.packages[1].remaining, 0, "⑩ Trae：用完的包剩余 0 但仍出一行（日历要看得见它的到期）");
+  assert.ok(Math.abs(tr.packages[0].expiresAt - SEC * 1000) < 2000, "⑩ Trae：秒级 end_time 要换成毫秒（落库与比较都用毫秒）");
+  assert.strictEqual(tr.credits, 70, "⑩ Trae：账号级 credits = Σ 包剩余（无限时才是哨兵）");
+
+  // 不限量包：credits_limit < 0 是上游「不限」哨兵，旧判据 `limit <= 0` 把它整条丢掉
+  const tu = adapters.traeCredits([
+    { entitlement_pack_id: "U", display_desc: "不限量包", end_time: SEC, quota: { credits_limit: -1, credits_amount: 0 } },
+    { entitlement_pack_id: "V", display_desc: "普通包", end_time: SEC, quota: { credits_limit: 100, credits_amount: 40 } },
+  ]);
+  assert.deepStrictEqual(tu.packages.map((p) => p.code), ["U", "V"],
+    "⑩ Trae：credits_limit<0 的不限量包必须出包——旧判据连它那一行日历和它的到期一起吞掉");
+  assert.strictEqual(tu.packages[0].remaining, -1, "⑩ Trae：不限量包剩余落 -1（deriveAccountCredits 认的「不限」判据）");
+  assert.strictEqual(tu.packages[0].total, -1, "⑩ Trae：不限量包没有面值，total 同落 -1");
+  assert.strictEqual(tu.credits, -1, "⑩ Trae：任一包不限 ⇒ 账号级落 -1，不是把 -1 当欠款加进 60");
+  assert.ok(tu.expiresAt > 0, "⑩ Trae：不限量包的到期照样参与最近到期折叠");
+  // 同一批包换个顺序：不限量包排在**最后**。上面那条夹具里 -1 恰好是第一个包，
+  // 「把 -1 当欠款加进和里」会凑出 -1 蒙对；这条把巧合堵掉。
+  const tu2 = adapters.traeCredits([
+    { entitlement_pack_id: "V2", display_desc: "普通包", end_time: SEC, quota: { credits_limit: 100, credits_amount: 40 } },
+    { entitlement_pack_id: "U2", display_desc: "不限量包", end_time: SEC, quota: { credits_limit: -1, credits_amount: 0 } },
+  ]);
+  assert.strictEqual(tu2.credits, -1,
+    "⑩ Trae：不限量包排在最后也要把整号折成 -1（它在首位时，把 -1 当欠款加进去凑巧也得到 -1，抓不住漏赋值）");
+
+  // 两处余额口径同数：适配器自己那份 fold 与 credits.cjs 落库用的 pool.deriveAccountCredits。
+  // 两个公式各写一遍、都往 acc.credits 方向走，不同数就等于「同一个号两个余额」。
+  assert.strictEqual(pool.deriveAccountCredits(tr.packages).credits, tr.credits,
+    "⑩ Trae：没有过期包时，适配器 fold 与派生层必须给同一个数");
+  assert.strictEqual(pool.deriveAccountCredits(tu2.packages).credits, tu2.credits,
+    "⑩ Trae：不限量时两处也要同数（都落 -1，不能一处 -1 一处 59）");
+
+  // 三条过滤（隐藏 / 已取消 / 兑换码包）+ 「没有那层嵌套就不误伤」
+  const tf = adapters.traeCredits([
+    { entitlement_pack_id: "H", entitlement_base_info: { is_hide: true }, quota: { credits_limit: 100 } },
+    { entitlement_pack_id: "C", entitlement_base_info: { status: 3 }, quota: { credits_limit: 100 } },
+    { entitlement_pack_id: "P", entitlement_base_info: { product_type: 3 }, quota: { credits_limit: 100 } },
+    { entitlement_pack_id: "OK", entitlement_base_info: { status: 1, product_type: 1, is_hide: false }, quota: { credits_limit: 100, credits_amount: 10 } },
+    { entitlement_pack_id: "NOBASE", quota: { credits_limit: 100, credits_amount: 10 } },
+  ]);
+  assert.deepStrictEqual(tf.packages.map((p) => p.code), ["OK", "NOBASE"],
+    "⑩ Trae：隐藏/已取消/兑换码三种包被滤掉；老响应没有 entitlement_base_info 这层时照常出包（不误伤）");
+  assert.strictEqual(tf.credits, 180, "⑩ Trae：只有过滤后剩下的包才进账号级余额");
+
+  // 到期归一：远未来哨兵 → 长期(0)；纯日期串 → 当天末尾（不再用裸 toMs）
+  const tfar = adapters.traeCredits([{ entitlement_pack_id: "F", quota: { credits_limit: 100, credits_amount: 0 }, end_time: "9999-12-31" }]).packages[0];
+  assert.strictEqual(tfar.expiresAt, 0, "⑩ Trae：远未来到期归一为 0（长期）——不归一会在日历排出一行「还剩几万年」");
+  const tdate = adapters.traeCredits([{ entitlement_pack_id: "D", quota: { credits_limit: 100, credits_amount: 0 }, end_time: "2030-01-15" }]).packages[0];
+  assert.ok(tdate.expiresAt > Date.UTC(2030, 0, 14) && tdate.expiresAt < Date.UTC(2030, 0, 17),
+    `⑩ Trae：纯日期串按当天末尾理解（实测 ${new Date(tdate.expiresAt).toISOString()}），不当 0 丢掉`);
 
   // —— zcode：三种剩余字段口径 + 欠额负值必须夹 0 + plan 名 join ——
   const zp = adapters.zcodeCreditPackages([
@@ -468,6 +522,40 @@ const DAY = 86400000;
   pass("⑩ 五渠道逐包映射：面值/剩余/单位换算/负值夹 0/-1 两种含义/到期归属/字段兜底");
 }
 
-store.close();
-try { fs.rmSync(WORK, { recursive: true, force: true }); } catch { /* 清不掉不影响结论 */ }
-console.log(`\nOK 积分包到期数据层闸全过（${n} 项）`);
+// ===== ⑪ 复活链路（唯一要 await 的一节 ⇒ 整闸的收尾挂在它下面，它不跑完就不会印 OK） =====
+// 为什么这条必须真跑 refreshAccount 而不是静态正则：`credits === -1` 的豁免一旦接错变量
+// （接成适配器原始的 r.credits 而不是派生后的 credits），源码里那行字面照样在、正则照样绿，
+// 而线上「无限额度的号被误标 exhausted 后永远刷不回来」照样发生。
+(async () => {
+  const adapters = require(path.join(ROOT, "electron", "backend", "proxy", "adapters.cjs"));
+  const credits = require(path.join(ROOT, "electron", "backend", "proxy", "credits.cjs"));
+  const realGet = adapters.get;
+  adapters.get = () => ({
+    refreshWindowSec: 1,
+    // 一个「不限量包」：上游给不出数值余额，包集里 remaining=-1
+    queryCredits: async () => ({
+      credits: 0, expiresAt: 0,
+      packages: [{ code: "u", name: "不限量包", total: -1, used: 0, remaining: -1, expiresAt: 0 }],
+    }),
+  });
+  try {
+    const id = store.addAccount({ channel: "trae", uid: "u-revive", name: "被误标的无限号", token: "tk", refreshToken: "", source: "paste" });
+    store.updateAccount(id, { status: "exhausted", credits: 0 });
+    await credits.refreshAccount(id);
+    const after = store.getAccount(id);
+    assert.strictEqual(Number(after.credits), -1,
+      "⑪ 包集里有 remaining=-1 ⇒ 落库余额必须是 -1（不限），不是 0");
+    assert.strictEqual(after.status, "online",
+      "⑪ 无限额度的号被误标 exhausted 后，额度刷新必须把它复活（revive 判据漏掉 credits===-1 就永远刷不回来）");
+  } finally {
+    adapters.get = realGet;
+  }
+  pass("⑪ 复活链路：stub 适配器走完整 refreshAccount（-1 余额落库 + exhausted→online）");
+})().then(() => {
+  store.close();
+  try { fs.rmSync(WORK, { recursive: true, force: true }); } catch { /* 清不掉不影响结论 */ }
+  console.log(`\nOK 积分包到期数据层闸全过（${n} 项）`);
+}, (e) => {
+  console.error(`\nFAIL ⑪ ${String((e && e.message) || e)}`);
+  process.exitCode = 1;
+});
