@@ -1,12 +1,15 @@
 import { createApp } from "vue";
 import { createPinia } from "pinia";
-import ElementPlus from "element-plus";
-import zhCn from "element-plus/es/locale/lang/zh-cn";
-import "element-plus/dist/index.css";
+// 服务式 API 不经模板渲染，插件接管不到它们的样式：全库只用到这两个（② 段重数）。
+// 中文 locale 的注入点随全量注册一起没了，改由 App.vue 的 <el-config-provider> 承接。
+import "element-plus/es/components/message/style/css";
+import "element-plus/es/components/message-box/style/css";
 // dark css-vars 绑定 html.dark，须在 element.css 之前引入，让项目主题变量赢
 import "element-plus/theme-chalk/dark/css-vars.css";
 import App from "./App.vue";
-import "./assets/phosphor/style.css";
+// Phosphor 子集：只保留全库真正用到的 97 条字形规则（全量 1530 条 / 82 KB）
+// 图标增删后重跑 node tools/gen-phosphor-subset.cjs 再生成
+import "./assets/phosphor/phosphor-used.css";
 import "./styles/global.css";
 import "./styles/skills.css";
 import "./styles/sync.css";
@@ -20,8 +23,6 @@ import { setCursorFX } from "./motion/cursor";
 
 const app = createApp(App);
 app.use(createPinia());
-// 中文 locale：日期面板月份/星期/按钮等 Element 内置文案全部中文化
-app.use(ElementPlus, { locale: zhCn });
 // mount 前安装：动效开启的用户光标已就位，避免先闪一下系统箭头
 const fxOn = localStorage.getItem("agenthub.fx") !== "0";
 // 液滴光标与总开关联动：任一关掉都恢复系统指针
