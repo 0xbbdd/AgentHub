@@ -202,7 +202,7 @@ function validate(input, existing) {
       extraBody: body.body,
       enabled,
       // 一律 round_robin：expire_first 按到期时间排序，提供商的 Key 没有到期概念（全 0），
-      // 结果恒选第一把，多 Key 轮转形同不存在。策略仍可在号池页手动改。
+      // 结果恒选第一把，多 Key 轮转形同不存在。本期界面不开放改策略（号池页只迭代内置渠道）
       poolStrategy: input.poolStrategy ?? (existing && existing.poolStrategy) ?? "round_robin",
     },
   };
@@ -359,9 +359,13 @@ async function probe({ id, accountId, baseUrl, key, model, kind, extraHeaders, e
   // 已保存过的提供商要拿它自己的清单去探：否则 upstream 真名映射、别名、思考档位降级全都不生效，
   // "探测通过但真实请求 400"就是这么来的。新建表单（无 id 或清单里没这个模型）才退化成裸名直传。
   const saved = id ? store.getProvider(String(id)) : null;
-  const probeModels = (saved && saved.models && saved.models.length ? saved.models : []).some((m) => {
+  // 别名同样算命中：客户端拿别名发的请求会走别名→上游真名的映射，探测必须用同一张表，
+  // 否则"探测失败但真实请求成功"的反向不一致会把人引向改错的排查方向
+  const probeModels = (saved && Array.isArray(saved.models) && saved.models.length ? saved.models : []).some((m) => {
     const name = typeof m === "string" ? m : m.model;
-    return String(name || "").toLowerCase() === target.toLowerCase();
+    if (String(name || "").toLowerCase() === target.toLowerCase()) return true;
+    return !!(m && typeof m === "object" && Array.isArray(m.aliases) &&
+      m.aliases.some((a) => String(a || "").toLowerCase() === target.toLowerCase()));
   })
     ? saved.models
     : [{ model: target, upstream: target }];

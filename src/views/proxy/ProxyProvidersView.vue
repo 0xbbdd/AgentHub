@@ -2,11 +2,13 @@
      一个提供商 = 一个上游端点 + 若干把 API Key（Key 走号池轮转与冷却）；模型以 `标识/模型名` 形态被客户端调用。
      与「号池」页的分工：这里管端点本身（地址、Key 集合、模型清单、连通性），号池页管各渠道账号的运行状态 -->
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import * as api from "../../api/ipc";
 import type { ProxyProvider, ProxyProviderKey, ProxyProviderModel, ProxyProviderModelRow, ProxyProviderTestResult } from "../../types";
 import { ACCOUNT_STATUS, fmtAgo } from "./format";
+import { useAppStore } from "../../stores/app";
 
+const app = useAppStore();
 const rows = ref<ProxyProvider[]>([]);
 const err = ref("");
 const busy = ref(false);
@@ -58,6 +60,8 @@ const CAPS = [
 ] as const;
 
 type ModelRow = {
+  /** 行身份：与模型名解耦——重命名、导入合并都会换名，勾选态与逐行测试结果挂在名字上就会错位 */
+  _rid: number;
   model: string;
   upstream: string;
   aliases: string[];
@@ -68,15 +72,18 @@ type ModelRow = {
   efforts: string[];
 };
 
+let rowSeq = 0;
+
 /** 空行：给"添加模型"用 */
 function blankRow(): ModelRow {
-  return { model: "", upstream: "", aliases: [], contextLength: "", maxOutputTokens: "", rate: "", caps: {}, efforts: [] };
+  return { _rid: ++rowSeq, model: "", upstream: "", aliases: [], contextLength: "", maxOutputTokens: "", rate: "", caps: {}, efforts: [] };
 }
 
 /** 存库形状 → 表格行（字符串简写与历史缺字段都在这一步补齐，写回时再统一收敛） */
 function toRow(m: ProxyProviderModel): ModelRow {
   const o = typeof m === "string" ? { model: m } : m || { model: "" };
   return {
+    _rid: ++rowSeq,
     model: String(o.model || ""),
     upstream: String(o.upstream || ""),
     aliases: Array.isArray(o.aliases) ? o.aliases.map(String) : [],
@@ -198,15 +205,22 @@ async function doSave() {
       extraBody: body,
       enabled: form.value.enabled,
     };
-    const r = isEdit.value
+    const keys = keysFromText();
+    // 更新路径不回 keyIds（不做 Key 增删），标注成并集形状让下面那条去重提示对两条路径都成立
+    const r: { ok: boolean; keyIds?: string[]; message?: string } = isEdit.value
       ? await api.proxyProviderUpdate(input)
-      : await api.proxyProviderCreate({ ...input, keys: keysFromText() });
+      : await api.proxyProviderCreate({ ...input, keys });
     if (r.ok === false) {
       formErr.value = r.message || "保存失败";
       return;
     }
     formOpen.value = false;
     await refresh();
+    const keyIds = Array.isArray(r.keyIds) ? r.keyIds : [];
+    if (!isEdit.value && keys.length > keyIds.length) {
+      // 同一把 Key 粘两遍时后端只收一把（按内容去重）：不说一声用户以为都存上了
+      err.value = `已创建；${keys.length - keyIds.length} 把重复的 Key 被跳过（同一把只存一次）`;
+    }
   } catch (e) {
     formErr.value = String((e as Error).message || e);
   } finally {
@@ -219,7 +233,7 @@ const rowSel = ref<Set<string>>(new Set());
 const rowTest = ref<Record<string, { state: "testing" | "ok" | "fail"; ms?: number; message?: string; sample?: string }>>({});
 
 function rowId(r: ModelRow) {
-  return (r.model || "").trim().toLowerCase() || `__blank_${modelRows.value.indexOf(r)}`;
+  return `r${r._rid}`;
 }
 // 浮层正文走 el-tooltip（上游既有口径）。这三条都可能为空，空串必须 :disabled——
 // 原生 title 给空串是不显示，el-tooltip 给空串会飘出一个空玻璃泡，两档语义得对齐
@@ -230,8 +244,10 @@ const testTip = computed(() =>
 function addModelRow() {
   modelRows.value.push(blankRow());
 }
-function removeModelRow(i: number) {
-  const id = rowId(modelRows.value[i]);
+function removeModelRow(r: ModelRow) {
+  const i = modelRows.value.indexOf(r);
+  if (i < 0) return;
+  const id = rowId(r);
   modelRows.value.splice(i, 1);
   rowSel.value.delete(id);
   delete rowTest.value[id];
@@ -316,6 +332,7 @@ async function testOne(r: ModelRow) {
       return;
     }
     keyPickId.value = keyPickList.value[0]?.id || "";
+    keyPickRowId.value = id;
     keyPickModel.value = model;
     keyPickOpen.value = true;
     return;
@@ -371,6 +388,7 @@ async function doTest() {
       return;
     }
     keyPickId.value = keyPickList.value[0]?.id || "";
+    keyPickRowId.value = "";
     keyPickModel.value = "";
     keyPickOpen.value = true;
     return;
@@ -405,14 +423,17 @@ async function runTest({ key = "", accountId = "" }) {
 const keyPickOpen = ref(false);
 const keyPickId = ref("");
 const keyPickList = ref<ProxyProviderKey[]>([]);
-// 从"某一行的测试按钮"进来时记住模型名，选完 Key 直接续上那次探测；整店测试留空
+// 从"某一行的测试按钮"进来时记住那一行（行 id + 模型名），选完 Key 直接续上那次探测；整店测试留空
+const keyPickRowId = ref("");
 const keyPickModel = ref("");
 async function confirmKeyPick() {
   keyPickOpen.value = false;
-  if (keyPickModel.value) {
+  if (keyPickRowId.value) {
+    const rid = keyPickRowId.value;
     const model = keyPickModel.value;
+    keyPickRowId.value = "";
     keyPickModel.value = "";
-    await runRowTest(model.toLowerCase(), model, { accountId: keyPickId.value });
+    await runRowTest(rid, model, { accountId: keyPickId.value });
     return;
   }
   await runTest({ accountId: keyPickId.value });
@@ -420,13 +441,12 @@ async function confirmKeyPick() {
 
 // ===== 从上游拉取：三态 diff，勾选合并 =====
 const importOpen = ref(false);
-const importState = ref<"loading" | "ready" | "error" | "stale">("loading");
+const importState = ref<"loading" | "ready" | "error">("loading");
 const importErr = ref("");
 const upstreamIds = ref<string[]>([]);
 // 拉取时的地址签名：改过之后再结果就"过期"了，直接应用会拿旧清单配新地址
 const importSig = ref("");
 const selAdd = ref<Set<string>>(new Set());
-const selKeep = ref<Set<string>>(new Set());
 const selDrop = ref<Set<string>>(new Set());
 
 const importGroups = computed(() => {
@@ -468,7 +488,6 @@ async function doImport() {
     const g = importGroups.value;
     // 新增默认不勾（用户可能只想看），已存在默认保持，下架默认保留——删除必须是显式动作
     selAdd.value = new Set();
-    selKeep.value = new Set(g.existing);
     selDrop.value = new Set(g.removed);
     importState.value = "ready";
   } catch (e) {
@@ -496,11 +515,16 @@ function applyImport() {
   for (const id of importGroups.value.removed) {
     if (!selDrop.value.has(id)) keep.delete(id.toLowerCase());
   }
-  const rows2 = modelRows.value.filter((r) => keep.has(rowId(r)));
+  const rows2 = modelRows.value.filter((r) => keep.has((r.model || "").trim().toLowerCase()));
   for (const id of selAdd.value) {
-    if (!keep.has(id.toLowerCase())) rows2.push({ ...blankRow(), model: id });
+    if (keep.has(id.toLowerCase())) continue;
+    // 上游真名常带命名空间（Qwen/Qwen2.5-72B 这类），而客户端名不能含 /（那是 slug 分隔符）：
+    // 拆成「末段当客户端名、完整 id 当上游真名」，拉下来即可保存；末段撞名交给上面的重复提示
+    const slash = id.lastIndexOf("/");
+    rows2.push(slash > 0 ? { ...blankRow(), model: id.slice(slash + 1), upstream: id } : { ...blankRow(), model: id });
   }
   modelRows.value = rows2;
+  rowSel.value = new Set();
   importOpen.value = false;
 }
 
@@ -543,8 +567,17 @@ async function doAddKey() {
     keyBusy.value = false;
   }
 }
-async function doRemoveKey(acc: ProxyProviderKey) {
-  if (!keysRow.value) return;
+// 移出 Key 不可逆（库里只有密文，界面无从还原），与模块内其余删除动作一样先过确认框
+const keyDelOpen = ref(false);
+const keyDelRow = ref<ProxyProviderKey | null>(null);
+function askRemoveKey(acc: ProxyProviderKey) {
+  keyDelRow.value = acc;
+  keyDelOpen.value = true;
+}
+async function doRemoveKey() {
+  if (!keysRow.value || !keyDelRow.value) return;
+  const acc = keyDelRow.value;
+  keyDelOpen.value = false;
   try {
     const r = await api.proxyProviderRemoveKey(acc.id);
     if (r.ok === false) keyErr.value = r.message || "移出失败";
@@ -579,6 +612,13 @@ async function doDelete() {
 }
 
 onMounted(refresh);
+// 页面 v-show 保活：onMounted 只跑一次；切回本页时补一次刷新，Key 的运行态与别处改过的配置不停留在旧数据
+watch(
+  () => app.activeModule === "proxy" && app.activePage === "providers",
+  (on) => {
+    if (on) refresh();
+  }
+);
 </script>
 
 <template>
@@ -677,9 +717,11 @@ onMounted(refresh);
                 <label class="m-num">倍率<input v-model="batch.rate" class="input mono" type="number" step="0.1" placeholder="不改" /></label>
                 <label v-for="c in CAPS" :key="c.key" class="m-num">
                   {{ c.label }}
-                  <select v-model="batch[c.key]" class="input">
-                    <option value="">不改</option><option value="1">设为支持</option><option value="0">设为不支持</option>
-                  </select>
+                  <el-select v-model="batch[c.key]" size="small" popper-class="glass-popper" class="m-cap-sel">
+                    <el-option value="" label="不改" />
+                    <el-option value="1" label="设为支持" />
+                    <el-option value="0" label="设为不支持" />
+                  </el-select>
                 </label>
                 <el-select v-model="batch.efforts" multiple collapse-tags size="small" popper-class="glass-popper" class="m-efforts" placeholder="档位（不改）">
                   <el-option v-for="e in EFFORT_LEVELS" :key="e" :value="e" :label="e" />
@@ -691,7 +733,7 @@ onMounted(refresh);
                 还没有模型 —— 点「添加模型」手填，或「从上游拉取」后勾选导入；留空也能用，带前缀的模型名原样透传给上游
               </div>
 
-              <div v-for="(m, i) in modelRows" :key="i" class="m-row" :class="{ on: rowSel.has(rowId(m)) }">
+              <div v-for="m in modelRows" :key="m._rid" class="m-row" :class="{ on: rowSel.has(rowId(m)) }">
                 <div class="m-line">
                   <input type="checkbox" class="m-check" :checked="rowSel.has(rowId(m))" @change="toggleRow(m)" />
                   <input v-model="m.model" class="input mono m-name" placeholder="gpt-4o" />
@@ -719,7 +761,7 @@ onMounted(refresh);
                   <el-tooltip v-else-if="rowTest[rowId(m)]?.state === 'fail'" :content="rowFailTip(m)" :disabled="!rowFailTip(m)" placement="top">
                     <span class="tag tag-warn m-fail">{{ (rowTest[rowId(m)]?.message || "").slice(0, 40) }}</span>
                   </el-tooltip>
-                  <button class="btn-link btn-sm m-del danger" @click="removeModelRow(i)">移除</button>
+                  <button class="btn-link btn-sm m-del danger" @click="removeModelRow(m)">移除</button>
                 </div>
               </div>
             </div>
@@ -737,7 +779,7 @@ onMounted(refresh);
               <div class="f-row">
                 <div class="set-name">附加请求体字段</div>
                 <textarea v-model="form.extraBodyText" class="input mono f-input" rows="2" placeholder='{ "reasoning": { "effort": "high" } }'></textarea>
-                <div class="set-desc">JSON 对象，选填，深合并进上游请求体；不能覆盖 model / messages / stream</div>
+                <div class="set-desc">JSON 对象，选填，深合并进上游请求体；不能覆盖 model / messages / prompt / stream</div>
               </div>
             </div>
             <div class="f-inline">
@@ -792,7 +834,7 @@ onMounted(refresh);
                   </td>
                   <td class="mono num">{{ acc.todayReq }} 次</td>
                   <td class="mono">{{ fmtAgo(acc.lastUsed) }}</td>
-                  <td><button class="btn-link btn-sm danger" @click="doRemoveKey(acc)">移出</button></td>
+                  <td><button class="btn-link btn-sm danger" @click="askRemoveKey(acc)">移出</button></td>
                 </tr>
                 <tr v-if="!keysList.length"><td colspan="5" class="empty-row">还没有 Key —— 在下方填一把。没有可用 Key 的提供商不会被调度</td></tr>
               </tbody>
@@ -809,6 +851,20 @@ onMounted(refresh);
           <div class="p-actions">
             <button class="btn" @click="keysOpen = false">关闭</button>
             <button class="btn btn-primary" :disabled="keyBusy || !newKey.key.trim()" @click="doAddKey">{{ keyBusy ? "添加中…" : "添加 Key" }}</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 移出 Key 确认（不可逆：库里只有密文，界面无从还原） -->
+      <div v-if="keyDelOpen" class="p-mask" @click.self="keyDelOpen = false">
+        <div class="p-dlg glass">
+          <div class="p-title">移出 Key</div>
+          <div class="set-desc">
+            确定从「{{ keysRow?.display }}」移出 Key「{{ keyDelRow?.name }}」？移出后它立即不再参与轮转，库里的密文一并删除，无法恢复。
+          </div>
+          <div class="p-actions">
+            <button class="btn" @click="keyDelOpen = false">取消</button>
+            <button class="btn btn-primary danger-solid" @click="doRemoveKey">移出</button>
           </div>
         </div>
       </div>
@@ -1075,6 +1131,17 @@ onMounted(refresh);
   display: flex;
   align-items: center;
   gap: 3px;
+}
+/* 选择控件跟全站同观感：原生 checkbox 补强调色与手型（与 Key 页选择列同款） */
+.m-selall input[type="checkbox"],
+.m-check,
+.m-cap input[type="checkbox"],
+.imp-item input[type="checkbox"] {
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+.m-cap-sel {
+  width: 104px;
 }
 .m-efforts {
   width: 150px;

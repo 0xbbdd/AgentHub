@@ -347,6 +347,12 @@ function listModels() {
     const beforeUsage = store.recentRequests(50).length;
     const p = await provider.probe({ id: "p1", accountId: acc.id, baseUrl: `http://127.0.0.1:${UP2}/v1`, model: "gpt-x" });
     ok(p.ok === true && /你好/.test(p.sample || ""), "从号池挑一把 Key 就能探（明文不过渲染层）", p);
+    // 别名也是清单里的入口：探测必须与真实请求共用同一张映射表，
+    // 否则"探测失败但真实请求成功"会把用户引向改错方向。判据落在"上游确实收到新一次请求、
+    // 且收到的是真名"——只断 ok 或只看最后一条 seen 都可能在"根本没出网"时假绿
+    const seenBefore = up2.seen.length;
+    await provider.probe({ id: "p1", accountId: acc.id, baseUrl: `http://127.0.0.1:${UP2}/v1`, model: "gpt-y" });
+    ok(up2.seen.length === seenBefore + 1 && up2.seen[seenBefore].model === "glm-4.7", "拿别名探测同样命中清单，且上游收到的是条目里配的真名", up2.seen[seenBefore]);
     ok(store.accountRows("p1")[0].cool_until === beforeCool, "探测失败与否都不把号打进冷却", store.accountRows("p1")[0].cool_until);
     ok(store.recentRequests(50).length === beforeUsage, "探测不写流水（它是配置动作，不是用户的一次请求）");
     const badKey = await provider.probe({ baseUrl: `http://127.0.0.1:${UP2}/v1`, model: "gpt-x", key: "" });

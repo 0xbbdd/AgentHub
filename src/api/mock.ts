@@ -413,6 +413,18 @@ const MOCK_PROXY_PROVIDERS: {
   },
 ];
 
+// 预览态的 Key 内容判重表（真机 addKey 按 Key 内容的 SHA-256 判重，不看名称）。
+// 刻意不进 provider 对象：那是 hasToken 脱敏视图，塞明文进去会与真机形状分叉
+const MOCK_PROVIDER_SECRETS = new Map<string, Set<string>>();
+
+/** 真机的 create/update 只回渠道视图（keys / keyCount / onlineCount 是 list 才补的），这里保持同形 */
+function providerView(p: (typeof MOCK_PROXY_PROVIDERS)[number]) {
+  return {
+    id: p.id, display: p.display, domain: p.domain, kind: p.kind, enabled: p.enabled,
+    baseUrl: p.baseUrl, models: p.models, extraHeaders: p.extraHeaders, extraBody: p.extraBody, updatedAt: p.updatedAt,
+  };
+}
+
 const PROXY_USAGE = [
   { id: 5, ts: NOW - 60000, reqId: "r5", keyId: "k1", keyName: "本地主 Key", channel: "trae", accountId: "a1", accountName: "主账号 · 沐", model: "deepseek-v4-flash", promptTokens: 1204, completionTokens: 3841, ttftMs: 820, latencyMs: 1200, status: 200, error: "" },
   { id: 4, ts: NOW - 89000, reqId: "r4", keyId: "k2", keyName: "Trae 专用", channel: "trae", accountId: "a1", accountName: "主账号 · 沐", model: "glm-4.6", promptTokens: 2010, completionTokens: 6233, ttftMs: 1500, latencyMs: 2800, status: 200, error: "" },
@@ -1256,34 +1268,49 @@ export const mock = {
         const id = String(args?.id || "");
         if (MOCK_PROXY_PROVIDERS.some((p) => p.id === id)) return { ok: false, message: `标识 "${id}" 已存在` };
         const keys = (args?.keys as { key?: string }[]) || [];
+        // 同名不同 Key 放行、同内容重复只收一把：与真机 addKey 的内容判重同一口径
+        const secrets = new Set<string>();
+        const keyRows: { id: string; name: string; status: string; hasToken: boolean; coolUntil: number; coolReason: string; todayReq: number; lastUsed: number }[] = [];
+        for (const k of keys) {
+          const s = String(k?.key || "").trim();
+          if (!s || secrets.has(s)) continue;
+          secrets.add(s);
+          keyRows.push({ id: `mk-${id}-${keyRows.length + 1}`, name: `Key ${keyRows.length + 1}`, status: "online", hasToken: true, coolUntil: 0, coolReason: "", todayReq: 0, lastUsed: 0 });
+        }
+        MOCK_PROVIDER_SECRETS.set(id, secrets);
         const p = {
           id, display: String(args?.display || id), domain: "", kind: "openai_compat", enabled: args?.enabled !== false,
           baseUrl: String(args?.baseUrl || ""), models: (args?.models as unknown[]) || [],
           extraHeaders: (args?.extraHeaders as Record<string, string>) || {}, extraBody: (args?.extraBody as Record<string, unknown>) || {},
           updatedAt: Date.now(),
-          keys: keys.map((k, i) => ({ id: `mk-${id}-${i}`, name: `Key ${i + 1}`, status: "online", hasToken: true, coolUntil: 0, coolReason: "", todayReq: 0, lastUsed: 0 })),
-          keyCount: keys.length, onlineCount: keys.length,
+          keys: keyRows, keyCount: keyRows.length, onlineCount: keyRows.length,
         };
         MOCK_PROXY_PROVIDERS.push(p);
-        return { ok: true, provider: p, keyIds: p.keys.map((k) => k.id) };
+        // create/update 的 provider 视图与真机同形：只有 list 才补 keys/keyCount/onlineCount
+        return { ok: true, provider: providerView(p), keyIds: keyRows.map((k) => k.id) };
       }
       case "proxy_provider_update": {
         const p = MOCK_PROXY_PROVIDERS.find((x) => x.id === args?.id);
         if (!p) return { ok: false, message: "提供商不存在" };
         Object.assign(p, args, { updatedAt: Date.now() });
-        return { ok: true, provider: p };
+        return { ok: true, provider: providerView(p) };
       }
       case "proxy_provider_delete": {
         const i = MOCK_PROXY_PROVIDERS.findIndex((x) => x.id === args?.id);
         if (i < 0) return { ok: false, message: "提供商不存在" };
+        MOCK_PROVIDER_SECRETS.delete(String(args?.id || ""));
         MOCK_PROXY_PROVIDERS.splice(i, 1);
         return { ok: true };
       }
       case "proxy_provider_add_key": {
         const p = MOCK_PROXY_PROVIDERS.find((x) => x.id === args?.id);
         if (!p) return { ok: false, message: "提供商不存在" };
-        if (!String(args?.key || "").trim()) return { ok: false, message: "Key 不能为空" };
-        if (p.keys.some((k) => k.name === String(args?.name || "").trim())) return { ok: false, message: "同一把 Key 已在号池里" };
+        const secret = String(args?.key || "").trim();
+        if (!secret) return { ok: false, message: "Key 不能为空" };
+        const seen = MOCK_PROVIDER_SECRETS.get(p.id) || new Set<string>();
+        if (seen.has(secret)) return { ok: false, message: "这把 Key 已经在本提供商的号池里了" };
+        seen.add(secret);
+        MOCK_PROVIDER_SECRETS.set(p.id, seen);
         const id = `mk-${p.id}-${p.keys.length + 1}`;
         p.keys.push({ id, name: String(args?.name || "").trim() || `Key ${p.keys.length + 1}`, status: "online", hasToken: true, coolUntil: 0, coolReason: "", todayReq: 0, lastUsed: Date.now() });
         p.keyCount = p.keys.length;
@@ -1309,7 +1336,7 @@ export const mock = {
         const inList = (known?.models || []).some((x) => (typeof x === "string" ? x : (x as { model: string }).model) === m);
         return inList
           ? { ok: true, ms: 640 + m.length * 7, model: m, sample: "（预览态假响应）收到", finishReason: "stop", usage: { prompt_tokens: 12, completion_tokens: 3, total_tokens: 15 } }
-          : { ok: false, message: "浏览器预览不代打上游，请在应用内测试" };
+          : { ok: false, status: 404, ms: 880, message: "浏览器预览不代打上游，请在应用内测试" };
       }
       case "proxy_provider_fetch_models":
         return { ok: true, models: ["gpt-4o", "gpt-4o-mini", "o3-pro"] };
