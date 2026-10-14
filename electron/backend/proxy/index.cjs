@@ -699,6 +699,10 @@ function rememberRunning(running) {
 }
 
 function register(ipcMain) {
+  // 请求流水保留期从设置灌入号池存储模块：gc() 只在 open()（首次摸库）时跑，register 先行不踩空。
+  // 改完设置后启动 GC 要等下次开库才按新值清；想立刻按新值删一轮，用用量统计页的「清理」按钮
+  // ——那条走的是实时 settings() 里的值，不依赖这里的模块变量。
+  store.setUsageRetention(settings().usageRetentionDays);
   // ===== 服务启停 / 状态 =====
   ipcMain.handle("proxy_status", handle(() => gatewayStatus()));
   ipcMain.handle("proxy_start", handle(async () => {
@@ -1205,6 +1209,13 @@ function register(ipcMain) {
   ipcMain.handle("proxy_stats_top", handle(({ dim, days }) => store.statsTop(dim, days)));
   ipcMain.handle("proxy_stats_detail", handle(({ page, pageSize, channel, keyId, model }) =>
     store.statsDetail({ page, pageSize, channel, keyId, model })));
+  // 手动清理流水：days 缺省取设置里的保留期（实时读，改完设置不必重启），all=true 清空整表。
+  // 删的是不可恢复的用户数据，所以落一条操作日志——统计页的提示只活几秒，日志才是事后能查的凭据。
+  ipcMain.handle("proxy_stats_cleanup", handle(({ days, all }) => {
+    const r = store.cleanupUsage(Math.round(Number(days)) || Number(settings().usageRetentionDays) || 90, !!all);
+    oplog.log("info", "用量统计", all ? `手动清空全部请求流水（${r.deleted} 条）` : `按保留期手动清理请求流水（${r.deleted} 条）`, { target: "usage_requests" });
+    return r;
+  }));
   ipcMain.handle("proxy_recent", handle(({ limit }) => store.recentRequests(limit)));
 
   // ===== 规则文件 / 目录 / 安全 =====

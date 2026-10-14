@@ -247,9 +247,22 @@ function open() {
   return db;
 }
 
-/** 流水保留 90 天，启动时 GC；余额历史同步清理；操作日志 30 天 + 5 万行上限 */
+/** 流水保留期（天）：设置页 proxy.usageRetentionDays 可调，启动 GC 与统计页「清理」共用。
+ *  放本模块的模块级变量（与 pool.expiringSoonDays 同一套做法），让热路径模块不依赖 config；
+ *  由 index.cjs 的 register() 从设置灌入一次——它跑在 main.cjs 的 proxy.boot() 之前，
+ *  所以首次 open() 里的 gc() 看到的已经是用户配的值，不是这里的默认值。
+ *  默认 90 = 本改动之前写死在 gc() 里的那个数。 */
+let usageRetentionDays = 90;
+function setUsageRetention(days) {
+  // 只接受 1~3650 的整数：非法值（NaN / 0 / 负数 / 超界）一律忽略并保留现值，
+  // 不能让一个手滑的配置项把启动 GC 变成「删光」或「永不删」。
+  const n = Math.round(Number(days) || 0);
+  if (n >= 1 && n <= 3650) usageRetentionDays = n;
+}
+
+/** 流水按保留期 GC，启动时执行；余额历史同步清理；操作日志 30 天 + 5 万行上限 */
 function gc() {
-  const cutoff = Date.now() - 90 * 86400000;
+  const cutoff = Date.now() - Math.max(1, usageRetentionDays) * 86400000;
   db.prepare("DELETE FROM usage_requests WHERE ts < ?").run(cutoff);
   const dayCut = dayStr(cutoff);
   db.prepare("DELETE FROM credits_history WHERE day < ?").run(dayCut);
@@ -1014,6 +1027,24 @@ function statsDetail({ page, pageSize, channel, keyId, model }) {
   return { total, page: p, pageSize: size, rows: rows.map(usageView) };
 }
 
+/** 手动清理流水：删保留线之前的记录，返回删除条数（设置页保留期与统计页「清理」按钮共用）。
+ *  all=true 时清空整表（忽略保留线）。注意：删完文件不会立刻变小——SQLite 只是把页标成空闲复用，
+ *  真要还磁盘得 VACUUM，而那会长时间持写锁，这里刻意不做。 */
+function cleanupUsage(days, all) {
+  open();
+  if (all) {
+    const r = db.prepare("DELETE FROM usage_requests").run();
+    return { deleted: r.changes, cutoff: 0 };
+  }
+  const raw = Number(days);
+  // 传进来的是垃圾时按默认 90 天，不按 1 天：这条路径删的是不可恢复的历史，宁可少删不能多删。
+  // （调用方是 index.cjs 的 IPC 处理器，已经先用设置值兜过一层，这里是第二道闸）
+  const n = Math.min(3650, Math.max(1, Math.round(Number.isFinite(raw) && raw > 0 ? raw : 90)));
+  const cutoff = Date.now() - n * 86400000;
+  const r = db.prepare("DELETE FROM usage_requests WHERE ts < ?").run(cutoff);
+  return { deleted: r.changes, cutoff };
+}
+
 function recentRequests(limit) {
   open();
   const rows = db.prepare("SELECT * FROM usage_requests ORDER BY ts DESC LIMIT ?").all(Math.min(50, limit || 10));
@@ -1074,4 +1105,5 @@ module.exports = {
   listModelCooldowns, upsertModelCooldown, deleteModelCooldowns,
   snapshotCredits,
   insertUsage, statsToday, statsTrend, statsTop, statsDetail, recentRequests,
+  cleanupUsage, setUsageRetention,
 };

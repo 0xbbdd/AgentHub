@@ -50,6 +50,7 @@ const defaultConfig: AppConfig = {
     rateLimitPerMin: 120,
     concurrency: 8,
     creditsRefreshMin: 30,
+    usageRetentionDays: 90,
     expiringSoonDays: 1,
     poolsyncSchedule: { hourly: false, hourlyInterval: 6, daily: false, dailyTime: "04:00" },
     debugStatus: false,

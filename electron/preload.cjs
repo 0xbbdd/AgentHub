@@ -159,6 +159,7 @@ const ALLOWED_COMMANDS = new Set([
   "proxy_stats_overview",
   "proxy_stats_top",
   "proxy_stats_detail",
+  "proxy_stats_cleanup",
   "proxy_recent",
   "proxy_oplog_list",
   "proxy_oplog_ops",
