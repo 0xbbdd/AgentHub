@@ -96,10 +96,12 @@ async function save() {
     // 判数用 Number.isFinite 而不是 ||：合法的 0（= 关闭预警）会被 || 当 falsy 跳回默认值
     const esd = Number(app.config.proxy.expiringSoonDays);
     app.config.proxy.expiringSoonDays = Math.min(3650, Math.max(0, Math.round(Number.isFinite(esd) ? esd : 1)));
-    // 保留期下限是 1 不是 0：填 0 会被后端当成「删光」，而清空流水该走统计页那个要确认的按钮。
-    // 空串得先掐掉再 Number：清空输入框直接保存时 Number("") === 0，会被钳成 1 天＝把流水删到只剩一天
+    // 保留期只认 1~3650：非正值（0 / 负数 / 空串 / 垃圾）一律兜底默认 90，与后端两处同一口径
+    // （setUsageRetention 忽略非法值保留现值、cleanupUsage 兜底 90）。刻意不把 0 钳成 1——
+    // 那等于静默把保留期改成一天，下次启动 GC 会把一天前的流水整批删掉；真要清空走统计页
+    // 那个带确认的「清理」按钮。空串得先掐掉再 Number：Number("") === 0 会被当成合法输入。
     const urd = Number(String(app.config.proxy.usageRetentionDays ?? "").trim() || NaN);
-    app.config.proxy.usageRetentionDays = Math.min(3650, Math.max(1, Math.round(Number.isFinite(urd) ? urd : 90)));
+    app.config.proxy.usageRetentionDays = Number.isFinite(urd) && Math.round(urd) >= 1 ? Math.min(3650, Math.round(urd)) : 90;
     app.config.proxy.channelCooldownMs = Math.max(10000, Math.round(Number(app.config.proxy.channelCooldownMs) || 120000));
     app.config.proxy.channelCooldownCapMs = Math.max(app.config.proxy.channelCooldownMs, Math.round(Number(app.config.proxy.channelCooldownCapMs) || 900000));
     const r = await app.save();
@@ -311,7 +313,7 @@ function openDataDir() {
         <div class="set-row">
           <div class="set-info">
             <div class="set-name">余额历史 / 请求流水保留</div>
-            <div class="set-desc">启动时按它清理超期的请求流水与余额历史（1~3650 天，默认 90）。改完不重启也不会一直按旧值跑：用量统计页的「清理」按钮按当前值立即删一轮</div>
+            <div class="set-desc">启动时按它清理超期的请求流水与余额历史（1~3650 天，默认 90；填 0 或非法值按 90 保存）。改完不重启也不会一直按旧值跑：用量统计页的「清理」按钮按当前值立即删一轮</div>
           </div>
           <input v-model.number="app.config.proxy.usageRetentionDays" class="input mono" style="width: 90px" type="number" min="1" max="3650" />
           <span style="font-size: 11px; color: var(--text-3)">天</span>

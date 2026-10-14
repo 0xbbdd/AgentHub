@@ -72,10 +72,15 @@ const snapOf = (accounts) => ({ format: "agenthub-pool@1", deviceId: "dev-b", ac
   ok(row(id).meta.renamedAt === 123, "① 显式传 renamedAt 时以传入值为准（同步采纳远端名要走这条，不能记成本机当下）");
 
   const before = row(id);
+  const tCall = Date.now();
   store.updateAccount(id, { credits: 5, creditsAt: now });
   const after = row(id);
   ok(after.meta.renamedAt === before.meta.renamedAt, "① 只改额度不得推进编辑时钟");
-  ok(after.updatedAt > before.updatedAt, "① 而 updated_at 确实被这次额度刷新推进了（两条尺不是一条，③④ 的前提）");
+  // updated_at 被写成「调用当下」：判据用 >= 而不是 >。这两步在同一毫秒内跑完时
+  // Date.now() 相等，严格大于会随机器快慢随机判红（约 1/4 概率）。「两条尺不是一条」
+  // 由后半段承担：编辑时钟此刻还是上面写进去的 123，活动时钟是当下，两者必然分开。
+  ok(after.updatedAt >= tCall && after.updatedAt > after.meta.renamedAt,
+    "① 而 updated_at 确实被这次额度刷新推进到当下（两条尺不是一条，③④ 的前提）");
 }
 
 // ===== ② store：备注的时钟与清除语义 =====
@@ -88,10 +93,14 @@ const snapOf = (accounts) => ({ format: "agenthub-pool@1", deviceId: "dev-b", ac
   store.noteAccount(id, "第一段备注");
   ok(row(id).meta.noteAt === m1.noteAt, "② 内容没变不推进时钟（同值重发会让每轮同步都白写一次）");
 
+  // 清除前先把时钟按回 1 秒前再比：这两步可能落在同一毫秒，noteAt 相等时
+  // 「清除推进了时钟」与「清除沿用了旧值」分不开，严格大于会随机判红
+  store.updateAccount(id, { meta: { ...row(id).meta, noteAt: now - 1000 } });
+  const beforeClear = row(id).meta.noteAt;
   store.noteAccount(id, "");
   const m2 = row(id).meta;
   ok("note" in m2 && m2.note === "", "② 清除写空串并保留键（原来是 delete meta.note，删键后「清除」这个动作传不出去）");
-  ok(m2.noteAt > m1.noteAt, "② 清除同样推进编辑时钟");
+  ok(m2.noteAt > beforeClear, "② 清除同样推进编辑时钟（时钟已按回 1 秒前，清除后必须高于它）");
   ok(row(id).note === "", "② accountView 读回空串（渲染层不需要知道键在不在）");
 }
 

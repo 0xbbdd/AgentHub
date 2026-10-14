@@ -322,7 +322,10 @@ const ccswitch = require("../electron/backend/proxy/ccswitch.cjs");
     assert.strictEqual(cls("http://127.0.0.1:9528", 9527).target, "other", "同机不同端口不是直连网关");
     assert.strictEqual(cls("http://127.0.0.1:9527/", 9527).target, "gateway", "尾斜杠应被剥掉");
     assert.strictEqual(cls("http://127.0.0.1:9527/v1", 9527).target, "gateway", "带路径前缀仍应认出网关");
-    console.log("✓ live 分类边界：unset / other / localhost / 坏地址 / 端口差档 / 尾斜杠与路径");
+    // URL.hostname 对 IPv6 回的是带方括号的形态，只认 "::1" 的实现会在这里露出来
+    assert.strictEqual(cls("http://[::1]:9527", 9527).target, "gateway", "IPv6 回环同样算直连");
+    assert.strictEqual(cls("http://[::1]:15721", 9527).target, "ccswitch", "IPv6 指向 CC Switch 端口应分类为经 CC Switch");
+    console.log("✓ live 分类边界：unset / other / localhost / IPv6 / 坏地址 / 端口差档 / 尾斜杠与路径");
   } finally {
     if (prevUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = prevUserProfile;
     if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;

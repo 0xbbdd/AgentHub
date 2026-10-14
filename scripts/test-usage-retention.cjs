@@ -118,7 +118,7 @@ if (API_OK) {
     ["src/api/mock.ts", /case "proxy_stats_cleanup"/g, "浏览器预览的 mock 分支"],
     ["src/api/ipc.ts", /export const proxyStatsCleanup = /g, "渲染层 api 出口"],
     ["src/components/config/ConfigProxySection.vue", /v-model\.number="app\.config\.proxy\.usageRetentionDays"/g, "设置页输入框"],
-    ["src/components/config/ConfigProxySection.vue", /app\.config\.proxy\.usageRetentionDays = Math\.min\(3650, Math\.max\(1,/g, "保存时钳位"],
+    ["src/components/config/ConfigProxySection.vue", /app\.config\.proxy\.usageRetentionDays = Number\.isFinite\(urd\) && Math\.round\(urd\) >= 1 \? Math\.min\(3650, Math\.round\(urd\)\) : 90;/g, "保存时钳位（非正值兜底 90，不钳成 1 天）"],
     ["src/views/proxy/ProxyStatsView.vue", /api\.proxyStatsCleanup\(/g, "统计页真的调这个命令"],
   ];
   for (const [rel, re, label] of pins) {
@@ -148,8 +148,9 @@ if (API_OK) {
 }
 
 // ===== ④ 设置页钳位：把 .vue 里那两行原样抠出来真跑，而不是正则看过就算 =====
-// 真机 CDP 探针（vite preview + headless Chrome）量出「清空输入框直接保存」会落盘 1 天＝把流水删到只剩一天，
-// 而 1 天正是这条设置最破坏性的取值——所以这条判据必须能区分「钳位」与「兜底」两种意图。
+// 真机 CDP 探针（vite preview + headless Chrome）量出「清空输入框直接保存」会把流水删到只剩一天，
+// 而 1 天正是这条设置最破坏性的取值——所以非正值一律兜底 90，而不是钳到下限 1：
+// 钳到 1 等于替用户把保留期静默改成一天，下次启动 GC 就把一天前的流水整批删了。
 {
   const src = fs.readFileSync(path.join(ROOT, "src/components/config/ConfigProxySection.vue"), "utf8");
   const m = src.match(/const urd = ([^\n]+);\r?\n\s*app\.config\.proxy\.usageRetentionDays = ([^\n]+);/);
@@ -161,8 +162,8 @@ if (API_OK) {
     const clamp = (v) => new Function("app", body)({ config: { proxy: { usageRetentionDays: v } } });
     const T = [
       [30, 30, "正常值原样落盘"],
-      [0, 1, "填 0 钳到下限 1（0 会被后端当「删光」）"],
-      [-5, 1, "负数同样钳到 1"],
+      [0, 90, "填 0 → 兜底 90（不钳成 1：钳成 1 就是替用户把保留期改成一天，下次 GC 删掉一天前全部流水）"],
+      [-5, 90, "负数同样兜底 90"],
       [9999, 3650, "超上界钳到 3650"],
       [7.6, 8, "小数取整"],
       [" 45 ", 45, "带空格能解析"],
@@ -173,15 +174,16 @@ if (API_OK) {
       [NaN, 90, "NaN → 兜底 90"],
     ];
     for (const [input, want, why] of T) ok(clamp(input) === want, `④ ${why}：${String(input)} → ${want}（实测 ${clamp(input)}）`);
-    // 差分正对照：同一套判据跑在「没有 trim 守卫」的朴素写法上，必须真的把 "" 判成 1——
-    // 否则上面那条 ""→90 是恒真的空判据
+    // 差分正对照：同一套判据跑在「钳到下限」的朴素写法上，必须真的把 "" 与 0 判成 1——
+    // 否则上面那两条 →90 是恒真的空判据
     const naive = (v) => {
       const urd = Number(v);
       return Math.min(3650, Math.max(1, Math.round(Number.isFinite(urd) ? urd : 90)));
     };
-    ok(naive("") === 1 && naive(null) === 1,
-      `④ 正对照：朴素写法 Number("") === 0 会被钳成 1 天（实测 ${naive("")}/${naive(null)}），证明上面那条兜底判据抓得到缺陷`);
-    ok(clamp("") !== naive(""), "④ shipped 写法与朴素写法在空值上确实分岔（判据不是两边都过的摆设）");
+    ok(naive("") === 1 && naive(null) === 1 && naive(0) === 1,
+      `④ 正对照：朴素写法会把 "" / null / 0 都钳成 1 天（实测 ${naive("")}/${naive(null)}/${naive(0)}），证明上面那几条兜底判据抓得到缺陷`);
+    ok(clamp("") !== naive("") && clamp(0) !== naive(0),
+      "④ shipped 写法与朴素写法在空值和 0 上都分岔（判据不是两边都过的摆设）");
   }
 }
 

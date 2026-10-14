@@ -83,7 +83,9 @@ function classifyLiveTarget(rawUrl, gatewayPort) {
   } catch {
     return { url, target: "other" };
   }
-  const local = host === "127.0.0.1" || host === "localhost" || host === "::1";
+  // URL.hostname 对 IPv6 回的是带方括号的形态（new URL("http://[::1]:9527").hostname === "[::1]"），
+  // 所以两种写法都要认——只写 "::1" 会让 http://[::1]:9527 这种本地地址落进 other
+  const local = host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
   if (local && port === gatewayPort) return { url, target: "gateway" };
   if (local && port === CCS_PROXY_PORT) return { url, target: "ccswitch" };
   return { url, target: "other" };
