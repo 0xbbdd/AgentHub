@@ -57,6 +57,7 @@ function defaultConfig(): AppConfig {
       rateLimitPerMin: 120,
       concurrency: 8,
     creditsRefreshMin: 30,
+    usageRetentionDays: 90,
     expiringSoonDays: 1,
     poolsyncSchedule: { hourly: false, hourlyInterval: 6, daily: false, dailyTime: "04:00" },
     debugStatus: false,
@@ -1283,6 +1284,15 @@ export const mock = {
         ];
       case "proxy_stats_detail":
         return { total: PROXY_USAGE.length, page: 1, pageSize: 20, rows: JSON.parse(JSON.stringify(PROXY_USAGE)) };
+      case "proxy_stats_cleanup": {
+        // 与后端同口径：all 清空整表，否则按 days（缺省 90）删保留线之前的流水
+        const days = Math.min(3650, Math.max(1, Math.round(Number(args?.days) || 90)));
+        const cutoff = Date.now() - days * 86400000;
+        const before = PROXY_USAGE.length;
+        if (args?.all) PROXY_USAGE.length = 0;
+        else for (let i = PROXY_USAGE.length - 1; i >= 0; i--) if (PROXY_USAGE[i].ts < cutoff) PROXY_USAGE.splice(i, 1);
+        return { deleted: before - PROXY_USAGE.length, cutoff: args?.all ? 0 : cutoff };
+      }
       case "proxy_recent":
         return JSON.parse(JSON.stringify(PROXY_USAGE));
       case "proxy_oplog_list": {

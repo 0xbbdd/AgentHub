@@ -289,6 +289,9 @@ export interface ProxyConfig {
   rateLimitPerMin: number;
   concurrency: number;
   creditsRefreshMin: number;
+  /** 请求流水保留期（天，1~3650）：启动 GC 与用量统计页「清理」共用，
+   *  默认 90 = 该保留期此前在 proxy/store.cjs 的 gc() 里写死的那个数 */
+  usageRetentionDays: number;
   /** 积分包「即将到期」预警阈值（天，0~3650，0=关闭预警）。号池到期徽标与逐包明细共用这一个值，
    *  默认 1 = 该阈值此前在 pool.cjs 里硬编码的那个数 */
   expiringSoonDays: number;

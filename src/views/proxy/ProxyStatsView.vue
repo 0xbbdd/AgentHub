@@ -1,5 +1,6 @@
 <!-- 反代网关 · 用量统计：指标卡 + 近 7 日趋势 + TOP 排行（渠道/模型/Key/账号）+ 明细分页（方案 §7 stats.html）
-     口径：不设日聚合冗余表，全部由 usage_requests 流水直查 GROUP BY；流水保留 90 天 -->
+     口径：不设日聚合冗余表，全部由 usage_requests 流水直查 GROUP BY；流水保留期可配
+     （设置 · 反代网关「余额历史 / 请求流水保留」，默认 90 天），本页「清理」按当前值立即删一轮 -->
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import * as api from "../../api/ipc";
@@ -7,6 +8,7 @@ import type { ProxyStatsOverview, ProxyStatsDetail } from "../../types";
 import { useAppStore } from "../../stores/app";
 import { fmtInt, fmtK, fmtMs, fmtTime, fmtDate, channelName, statusCls } from "./format";
 import { coalesceAsync } from "../../utils/timing";
+import { toast as ElMessage } from "../../utils/toast";
 
 const app = useAppStore();
 
@@ -66,6 +68,34 @@ async function loadDetail() {
 function goPage(p: number) {
   page.value = Math.min(totalPages.value, Math.max(1, p));
   loadDetail();
+}
+
+// ===== 清理流水：范围二选一（仅超期=按设置页保留期删旧 / 全部=清空整表），不可恢复所以先问一道 =====
+const cleanOpen = ref(false);
+const cleanScope = ref<"expired" | "all">("expired");
+const cleaning = ref(false);
+function openClean() {
+  cleanScope.value = "expired"; // 每次打开回默认档，防上次选的「全部」被顺手确认
+  cleanOpen.value = true;
+}
+async function doCleanup() {
+  cleaning.value = true;
+  try {
+    const all = cleanScope.value === "all";
+    const r = await api.proxyStatsCleanup(undefined, all);
+    ElMessage.success(
+      all
+        ? `已清空全部流水 ${fmtInt(r.deleted)} 条`
+        : `已清理保留期（${app.config.proxy.usageRetentionDays} 天）之前的流水 ${fmtInt(r.deleted)} 条`,
+    );
+    cleanOpen.value = false;
+    page.value = 1;
+    await Promise.all([refresh(), loadDetail()]);
+  } catch (e) {
+    err.value = String((e as Error).message || e);
+  } finally {
+    cleaning.value = false;
+  }
 }
 
 /** 本页是否处于前台：页面经 v-show 保活，事件刷新只在激活时跑，切走即停 */
@@ -144,7 +174,9 @@ onUnmounted(() => {
       <div class="card" style="margin-top: 12px">
         <div class="card-title">
           请求明细
-          <span class="right">{{ fmtInt(detail?.total || 0) }} 条 · 第 {{ page }}/{{ totalPages }} 页</span>
+          <span class="right">{{ fmtInt(detail?.total || 0) }} 条 · 第 {{ page }}/{{ totalPages }} 页
+            <button class="btn btn-sm" style="margin-left: 8px" @click="openClean"><i class="ph ph-broom"></i> 清理</button>
+          </span>
         </div>
         <div class="tbl-wrap">
           <table class="tbl">
@@ -187,6 +219,30 @@ onUnmounted(() => {
           <button class="btn btn-sm" :disabled="page >= totalPages" @click="goPage(page + 1)">下一页</button>
         </div>
       </div>
+      <!-- 清理确认弹窗：删的是不可恢复的历史，范围与后果都写明白 -->
+      <Teleport to="body">
+        <div v-if="cleanOpen" class="p-mask" @click.self="cleanOpen = false">
+          <div class="p-dlg glass">
+            <div class="p-title">清理请求流水</div>
+            <div class="chips" style="margin-bottom: 8px">
+              <button class="chip" :class="{ active: cleanScope === 'expired' }" @click="cleanScope = 'expired'">仅超期流水</button>
+              <button class="chip" :class="{ active: cleanScope === 'all' }" @click="cleanScope = 'all'">全部流水</button>
+            </div>
+            <div class="set-desc">
+              <template v-if="cleanScope === 'expired'">
+                将删除保留期（设置页当前为 {{ app.config.proxy.usageRetentionDays }} 天）之前的全部请求流水，此操作不可恢复。
+              </template>
+              <template v-else>
+                将清空<b>整张请求流水表</b>（含当前筛选范围之外的历史记录），此操作不可恢复。
+              </template>
+            </div>
+            <div class="p-actions">
+              <button class="btn" @click="cleanOpen = false">取消</button>
+              <button class="btn btn-primary danger-solid" :disabled="cleaning" @click="doCleanup">{{ cleaning ? "清理中…" : cleanScope === "all" ? "全部清空" : "确认清理" }}</button>
+            </div>
+          </div>
+        </div>
+      </Teleport>
     </div>
   </section>
 </template>
