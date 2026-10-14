@@ -1017,6 +1017,9 @@ async function handleChat(req, res, settings) {
       if (failoverFrom) errParts.push(`failover:${failoverFrom}→${usageRow.channel}`);
       if (usedModel !== actualModel) errParts.push("fallback→" + usedModel);
       else if ((usedForwardModel || usedTargetModel) !== actualModel) errParts.push("rev→" + (usedForwardModel || usedTargetModel));
+      // 已出线但流中报过错（截断 / 上游业务错误）：客户端拿到的是半截内容，必须在明细里留痕，
+      // 否则这一行是一条看不出任何问题的绿 200（issue #107 正是被读成「上游只回 1 token」）
+      if (streamErr) errParts.push(`notice:truncated:${String(streamErr.message || "流中错误").slice(0, 120)}`);
       // 上游 200 但一个 token 都没产出：只标注、不改判成功/失败（本机真实流水 id=63 就是这种行，
       // 用户与维护者都容易把它读成「正常回答」）——issue #78 的诊断增强
       if (Number(usage.completion_tokens) === 0) errParts.push("notice:empty-completion");

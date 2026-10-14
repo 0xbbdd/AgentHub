@@ -56,7 +56,11 @@ async function fetchStream(url, opts) {
   const { firstByteMs, ...rest } = opts || {};
   const budgetMs = Math.max(1000, Number(firstByteMs) || FIRST_BYTE_MS);
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), budgetMs);
+  // 到点置位：调用方据此区分「网关首字节预算掐断」与「上游自己断流」——两者都表现为
+  // body 读失败，只有这个标志能把截断如实归因并给出可执行文案（issue #107 的根因即在
+  // 调用方既没解除计时器、又无法分辨这次失败是超时还是断流）
+  let budgetFired = false;
+  const timer = setTimeout(() => { budgetFired = true; ctrl.abort(); }, budgetMs);
   let resp;
   try {
     // redirect 默认 follow，但**必须允许调用方覆盖**：Qoder 的请求头带签名且签名覆盖
@@ -87,7 +91,7 @@ async function fetchStream(url, opts) {
     });
     throw err;
   }
-  return { resp, cancelTimer: () => clearTimeout(timer) };
+  return { resp, cancelTimer: () => clearTimeout(timer), budgetFired: () => budgetFired };
 }
 
 /** 普通 JSON 请求（额度查询 / token 刷新），60s 总超时（参考项目 120s 口径的折中：含冷启动排队） */
@@ -4002,7 +4006,7 @@ if (store.QODER_INTL_ENABLED) {
 // 刷新是「只读不回写」渠道（方案 §7）：refreshToken 返回 noPersist 标记，
 // server/credits 据此跳过 token 落库，新凭证只进适配器进程缓存。
 const { makeAutoClaw } = require("./autoclaw/adapter.cjs");
-const autoclawDeps = { fetchStream, pumpSse, httpJson, rules, util, store, deviceIds };
+const autoclawDeps = { fetchStream, pumpSse, httpJson, rules, util, store, deviceIds, firstByteBudgetMs };
 ADAPTERS.autoclaw = makeAutoClaw("autoclaw", autoclawDeps);
 if (store.AUTOCLAW_INTL_ENABLED) {
   ADAPTERS.autoclaw_intl = makeAutoClaw("autoclaw_intl", autoclawDeps);
@@ -4278,4 +4282,7 @@ module.exports = { get, ADAPTERS, channelModelIds, reverseAliasEntry, resolveMod
   // 供自测校验模型上限归一化（缺失/非法 → 0，绝不编造）与 trae 目录结构解析
   tokenLimit, traeLimits,
   // 供自测校验「逐包积分」的三条映射（到期日历的数据源）：都是纯函数，喂合成样本即可，不出网
-  traeCredits, zcodeCreditPackages, lobsterCreditPackages, parseWbResource };
+  traeCredits, zcodeCreditPackages, lobsterCreditPackages, parseWbResource,
+  // 供自测校验「首个 SSE 事件必须解除首字节预算」（issue #107：漏解除 → 长回答被 30s 掐断）：
+  // 自测用真 fetchStream + 真 pumpSse + 缩短的 firstByteBudgetMs + 假上游复现现场
+  fetchStream, pumpSse };

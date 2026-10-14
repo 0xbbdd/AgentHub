@@ -460,7 +460,68 @@ async function e2e() {
     fs.rmSync(authDir, { recursive: true, force: true });
     assert(credentialsMod.readDesktopLogin("autoclaw").ok === false, "无登录文件时安全返回未找到");
 
-    console.log("AutoClaw e2e 全绿（对话/目录/余额/签到/刷新不回写/凭证缓存/登录/桌面导入）");
+    // —— 7. 首个 SSE 事件必须解除首字节预算（issue #107：漏解除 → 正常长回答被 30s 掐断）
+    // 行为级复现：把预算压到 400ms，假上游首块后延迟 1200ms 才发完。
+    // 漏解除时 400ms 就被 abort（客户端拿到半截回答），修复后整条流走完。
+    {
+      const { makeAutoClaw } = require("../electron/backend/proxy/autoclaw/adapter.cjs");
+      const utilMod = require("../electron/backend/proxy/util.cjs");
+      const enc7 = (o) => `data: ${JSON.stringify(o)}\n\n`;
+      // delayed=首块后延迟发完 / empty=只给响应头不给 body（首字节始终不到）
+      let mode7 = "delayed";
+      const srv7 = http.createServer((req, res) => {
+        req.resume();
+        req.on("end", () => {
+          res.writeHead(200, { "content-type": "text/event-stream" });
+          if (mode7 === "empty") return;
+          res.write(enc7({ id: "x", choices: [{ index: 0, delta: { role: "assistant", content: "你" } }] }));
+          setTimeout(() => {
+            res.write(enc7({ id: "x", choices: [{ index: 0, delta: { content: "好" }, finish_reason: "stop" }] }));
+            res.write("data: [DONE]\n\n");
+            res.end();
+          }, 1200);
+        });
+      });
+      await new Promise((r) => srv7.listen(0, "127.0.0.1", r));
+      const p7 = srv7.address().port;
+      const cfg7 = JSON.parse(JSON.stringify(rules.DEFAULTS["headers.json"]));
+      cfg7.autoclaw.userapiBase = `http://127.0.0.1:${p7}`;
+      cfg7.autoclaw_intl.userapiBase = `http://127.0.0.1:${p7}`;
+      fs.writeFileSync(hf, JSON.stringify(cfg7, null, 2), "utf8");
+      rules.reload("headers.json");
+
+      const ad7 = makeAutoClaw("autoclaw", {
+        fetchStream: adapters.fetchStream, pumpSse: adapters.pumpSse, httpJson: adapters.httpJson,
+        rules, util: utilMod,
+        deviceIds: () => ({ deviceId: "1".repeat(15), machineId: "a".repeat(64) }),
+        firstByteBudgetMs: () => 400, // 真实值 30s，这里压到 400ms 让缺陷在毫秒级暴露
+      });
+      const opts7 = (emit) => ({
+        account: acc, secrets, model: "glm-5.3",
+        body: { model: "glm-5.3", messages: [{ role: "user", content: "hi" }] },
+        emit, meta: {},
+      });
+
+      try {
+        const ev7 = [];
+        const r7 = await ad7.chat(opts7((e) => ev7.push(e)));
+        const deltas = ev7.filter((e) => e.type === "delta").length;
+        assert(r7.status === 200 && deltas === 2, `首块后延迟 1200ms 的第二块仍到达（预算已被首事件解除，实际 delta=${deltas}）`);
+        assert(!ev7.some((e) => e.type === "error"), "预算解除后整条流无截断错误");
+
+        // 首字节始终不到（响应头已到、body 空）：预算到点必须按「首字节超时」抛，
+        // 分类器据此不熔断、不冷却账号——否则一次慢请求就能把整条渠道冻结半小时
+        mode7 = "empty";
+        let emptyErr = null;
+        try { await ad7.chat(opts7(() => {})); } catch (e) { emptyErr = e; }
+        assert(emptyErr && emptyErr.firstByteTimeout === true, `未出内容的首字节预算到点按首字节超时抛出（实际：${emptyErr && emptyErr.message}）`);
+      } finally {
+        srv7.closeAllConnections?.();
+        srv7.close();
+      }
+    }
+
+    console.log("AutoClaw e2e 全绿（对话/目录/余额/签到/刷新不回写/凭证缓存/登录/桌面导入/流式预算解除）");
   } finally {
     fu.server.close();
   }
