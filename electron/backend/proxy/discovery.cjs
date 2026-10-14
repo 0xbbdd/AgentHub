@@ -1304,9 +1304,18 @@ async function beginRaccoonOAuth(channel, onDone, helpers) {
         finishOAuth({ ok: false, message: cred.message });
         return { ok: false, message: cred.message };
       }
-      // uid 从 access_token 的 iss 解（与 scanRaccoon 同口径），office_identity 入 meta
+      // uid 从 access_token 的 sub 解（账号 ID；iss 是签发方常量），office_identity 入 meta
       const uid = raccoonAuth.tokenUid(cred.token) || "";
-      const existing = uid ? store.listAccounts(channel).find((a) => a.uid === uid) : null;
+      // 二次判别：历史版本把 iss 常量当 uid 存过库，那些行 uid 全是同一个域名 ⇒ 只按 uid 判等会把
+      // 新号误判成「已存在」而只更新不新增。officeIdentity 是本账号真正身份，用它区分；
+      // 两边都为空时退回按 uid 判等（老数据行为不变）。
+      const sameAccount = (a) => {
+        if (!a || String(a.uid || "") !== String(uid)) return false;
+        const oldOi = String((a.meta && a.meta.officeIdentity) || "");
+        const newOi = String(cred.officeIdentity || "");
+        return oldOi && newOi ? oldOi === newOi : true;
+      };
+      const existing = uid ? store.listAccounts(channel).find(sameAccount) : null;
       const seed = crypto.createHash("sha256").update(`agenthub:raccoon:${uid || "anon"}`).digest("hex");
       const deviceId = `${seed.slice(0, 8)}-${seed.slice(8, 12)}-4${seed.slice(13, 16)}-a${seed.slice(17, 20)}-${seed.slice(20, 32)}`;
 

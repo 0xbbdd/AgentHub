@@ -38,13 +38,19 @@ function readTokens() {
   };
 }
 
-/** 从 JWT payload 解账户 ID（小浣熊顶层 iss；sid 是登录会话 ID 兜底，与 discovery.scanRaccoon 同口径） */
+/** 从 JWT payload 解账号 ID。
+ *  ⚠️ claim 语义（真实 token 实测）：
+ *    iss = "xiaohuanxiong.com/iam"   ← **签发方**，所有账号都相同，**不是**账号 ID
+ *    sub = "pu-00000000-…"           ← 账号 ID（每账号稳定唯一）—— 要的是它
+ *    sid = "ses-00000000-…"          ← 登录**会话** ID，每次登录都变
+ *  旧实现取 `iss || sid` 两个都错：取 iss 会让所有账号 uid 相同（号池里加不进第二个号），
+ *  取 sid 则每次登录都新增一个；跨机时 uid 相同还会让号池把不同账号当成同一个互相覆盖凭据。 */
 function tokenUid(token) {
   try {
     const p = String(token || "").trim().split(".");
     if (p.length < 2) return "";
     const payload = JSON.parse(Buffer.from(p[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
-    return String((payload && (payload.iss || payload.sid)) || "");
+    return String((payload && (payload.sub || payload.uid || payload.id || payload.iss)) || "");
   } catch {
     return "";
   }
