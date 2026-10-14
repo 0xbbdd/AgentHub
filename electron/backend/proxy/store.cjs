@@ -625,7 +625,19 @@ function updateAccount(id, patch) {
   const sets = [];
   const vals = [];
   const put = (col, val) => { sets.push(`${col}=?`); vals.push(val); };
-  if (patch.name != null) put("name", String(patch.name).slice(0, 64));
+  // 用户编辑时钟与活动时钟分开：下面那行 put("updated_at") 是无条件的，每次额度刷新、每次
+  // 代理请求扣减都会把 updated_at 推到当下。号池同步拿它仲裁 name/note ⇒ 只要对端跑过流量，
+  // 本机这一次改名就永远判负（用户看到「改完名过一会儿自己变回去」）。所以把「本行 name
+  // 何时被用户改的」单独记到 meta.renamedAt，由 poolsync 按它比。不加列，避免 schema 迁移。
+  const editClock = {};
+  if (patch.name != null) {
+    const next = String(patch.name).slice(0, 64);
+    put("name", next);
+    // 同步采纳远端名时由调用方显式传 renamedAt（把本机时钟追平到远端那次编辑），
+    // 其余情况只在名字**真的变了**时取当下：同名也推进的话两侧会互相追赶、每轮白写一次。
+    if (patch.renamedAt != null) editClock.renamedAt = Number(patch.renamedAt) || 0;
+    else if (next !== cur.name) editClock.renamedAt = Date.now();
+  }
   if (patch.status != null) put("status", String(patch.status));
   // credits 允许 -1（企业版无限额度哨兵）；其余负值一律归 0。
   // 保留两位小数：Qoder 的 Credits 是浮点计量（实测 0.0066 级），取整会抹掉小额消耗；
@@ -638,7 +650,13 @@ function updateAccount(id, patch) {
   if (patch.lastUsed != null) put("last_used", Number(patch.lastUsed) || 0);
   if (patch.token != null) put("token_enc", config.encryptSecret(patch.token));
   if (patch.refreshToken != null) put("refresh_enc", config.encryptSecret(patch.refreshToken));
-  if (patch.meta != null && typeof patch.meta === "object") put("meta", JSON.stringify(stripSensitiveMeta(patch.meta)));
+  // meta 只写一次：调用方给的整份（上游既有调用方都是读-改-写来的）与上面补的编辑时钟合并。
+  // 编辑时钟优先——它是本次写入的意图，不能被调用方手里的旧快照盖掉；patch.meta 缺省时
+  // 以库里的 meta 为底，避免「只改名」把别人写过的 meta 清掉。
+  const metaIn = patch.meta != null && typeof patch.meta === "object" ? patch.meta : null;
+  if (metaIn || Object.keys(editClock).length) {
+    put("meta", JSON.stringify(stripSensitiveMeta({ ...(metaIn || parseMeta(cur.meta)), ...editClock })));
+  }
   // 维护 updated_at：明确传入或当修改了重要字段时自动刷新
   const nextUpdatedAt = patch.updatedAt != null ? Number(patch.updatedAt) : Date.now();
   put("updated_at", nextUpdatedAt);
@@ -681,8 +699,14 @@ function noteAccount(id, note) {
   if (!cur) return false;
   const meta = { ...parseMeta(cur.meta) };
   const text = String(note || "").trim().slice(0, 200);
-  if (text) meta.note = text;
-  else delete meta.note;
+  // 内容没变就成功返回，不推进任何时钟：否则两侧拿同一个值互相追赶，每轮同步都白写一次
+  // （与 updateAccount 的改名同口径）。
+  if ((typeof meta.note === "string" ? meta.note : "") === text) return true;
+  // 清除写空串并**保留键**：删键的话「删掉备注」这个动作同步不到对端（对端只认非空
+  // remoteNote），结果是本机删掉了、别的机器永久残留旧备注。
+  meta.note = text;
+  // 备注的编辑时刻独立记一条：updated_at 会被额度刷新/请求扣减推着走，拿它比备注同样会输。
+  meta.noteAt = Date.now();
   updateAccount(id, { meta });
   return true;
 }

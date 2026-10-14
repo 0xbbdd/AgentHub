@@ -348,8 +348,14 @@ function mergeSnapshot(snap, channel) {
       // 为空对象时整包替换会把本机设备绑定元数据（machineId/deviceId/deviceMid/sw）
       // 一并抹掉 → 跨机同步后 Qoder 签名失败/小浣熊 200003 串号/ZCode 切号失效
       const localMeta = local.meta || {};
+      // 凭据合并只搬「与凭据/设备绑定有关的」meta，用户编辑的内容与时钟一律钉回本机：
+      //  ① renamedAt/noteAt 描述的是「本机这一行的 name/note 何时被用户改的」，继承了远端的值
+      //     会出现本机名字没变、时钟却变成远端那次编辑，之后本机真改名反而判负。
+      //  ② note 同理必须留在本机——否则文本跟着凭据走过来了、时钟却还是本机的（更新的那一个），
+      //     下一轮谁都比不动它；备注的传递归下面那条按 noteAt 比的独立分支管。
+      // 缺省时留 undefined（JSON 序列化即不落键），比较退回 updatedAt 旧口径，存量行为不变。
       patch.meta = restoreMetaForLocal(
-        { ...localMeta, ...(ra.meta || {}) },
+        { ...localMeta, ...(ra.meta || {}), note: localMeta.note, renamedAt: localMeta.renamedAt, noteAt: localMeta.noteAt },
         ra.channel
       );
       patch.updatedAt = raUpdatedAt || now;
@@ -383,17 +389,34 @@ function mergeSnapshot(snap, channel) {
       if (adoptRemoteCreds) patch.expiresAt = ra.expiresAt;
     }
 
-    // 自定义备注名：远端修改时间更新时覆盖本机
-    if (typeof ra.name === "string" && ra.name && ra.name !== local.name && raUpdatedAt > localUpdatedAt) {
+    // 自定义备注名：**用户编辑时钟**比大小。这里原来用 raUpdatedAt > localUpdatedAt，而
+    // updated_at 是 store.updateAccount 无条件推进的（每请求扣减 server.cjs、每 30min 额度刷新
+    // credits.cjs 都会写它）⇒ 对端只要跑过流量，它那份**陈旧名字**的时间戳就比本机新，
+    // 本机改名必然被还原。老快照没有 renamedAt 时退回原口径（updatedAt），存量行为不变。
+    const remoteNameAt = Number(ra.meta && ra.meta.renamedAt) || raUpdatedAt;
+    const localNameAt = Number(local.meta && local.meta.renamedAt) || localUpdatedAt;
+    if (typeof ra.name === "string" && ra.name && ra.name !== local.name && remoteNameAt > localNameAt) {
       patch.name = ra.name;
+      // 采纳时把编辑时钟一并落回（updateAccount 见 renamedAt 显式传入就不再取当下）：
+      // 不追平的话本机每一轮都会把这个名字当「刚改的」重发一次。
+      patch.renamedAt = remoteNameAt;
     }
 
-    // 账号备注（meta.note）：与备注名同一 LWW 口径——远端修改时间更新时覆盖本机。
-    // meta 合并只在采纳远端凭据时发生（凭据相同时不合并），备注必须独立一条才传播得动
-    const remoteNote = ra.meta && typeof ra.meta.note === "string" ? ra.meta.note.trim() : "";
+    // 账号备注（meta.note）：与备注名同一口径——按 meta.noteAt 这个用户编辑时钟比，不用 updated_at。
+    // meta 合并只在采纳远端凭据时发生（凭据相同时不合并），备注必须独立一条才传播得动。
+    // 两处判据改动：
+    //  ① 按「note 键存在」判定而不是「remoteNote 非空」——否则「删掉备注」这个动作永远传不到
+    //    对端（store.noteAccount 已改为清除时写空串保留键，两边要同口径才闭合）。
+    //  ② 采纳时把 noteAt 一并落回，本机时钟才追平远端；不追平每轮都会重发同一条备注、
+    //    updated 计数虚高。
+    const remoteNote = ra.meta && typeof ra.meta.note === "string" ? ra.meta.note.trim() : null;
     const localNote = local.meta && typeof local.meta.note === "string" ? local.meta.note : "";
-    if (remoteNote && remoteNote !== localNote && raUpdatedAt > localUpdatedAt) {
-      patch.meta = { ...(patch.meta || local.meta || {}), note: remoteNote };
+    if (remoteNote !== null && remoteNote !== localNote) {
+      const remoteNoteAt = Number(ra.meta.noteAt) || raUpdatedAt;
+      const localNoteAt = Number(local.meta && local.meta.noteAt) || localUpdatedAt;
+      if (remoteNoteAt > localNoteAt) {
+        patch.meta = { ...(patch.meta || local.meta || {}), note: remoteNote, noteAt: remoteNoteAt };
+      }
     }
 
     if (Object.keys(patch).length) {
@@ -715,7 +738,9 @@ module.exports = { run, cancel, progress, configured, noteRemoved, noteKeyRemove
   // 共享配置同步（自测与诊断用；主流程在 run() 内部调用 runSharedSync）
   exportShared, applyShared, encodeEnvelope, decodeEnvelope, runSharedSync,
   // 号池归档封套（自测用：与共享配置共用同一 encode/decodeEnvelope，去重后靠这组断言守住行为）
-  encodeArchive, decodeArchive };
+  encodeArchive, decodeArchive,
+  // 合并仲裁（自测用：改名/备注的用户编辑时钟回归，见 scripts/test-pool-edit-clock.cjs）
+  mergeSnapshot };
 const SHARED_FILE = "shared-config.json";
 const SHARED_FORMAT = "agenthub-proxy-shared@1";
 // 跨设备应当一致的配置项。设备专属的 port / bind / 并发 / 限速 / 签到开关刻意不含：
