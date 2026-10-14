@@ -139,6 +139,11 @@ console.log("\n④ Key 管理");
   ok(row && row.name === "Key 1", "没填名字的 Key 自动编号", row && row.name);
   const li = provider.list().find((x) => x.id === "relkey");
   ok(li && li.keyCount === 1 && li.onlineCount === 1, "list() 带 keyCount/onlineCount（管理页要显示）", li);
+  ok(
+    Array.isArray(li.keys) && li.keys.length === 1 && !("token_enc" in li.keys[0]) && !JSON.stringify(li.keys).includes("sk-aaa"),
+    "list() 的 keys 是脱敏视图：既不含密文信封也不含明文 Key（「Key 管理」弹窗只要运行态）",
+    li.keys && Object.keys(li.keys[0]).filter((k) => /token|key/i.test(k)),
+  );
   ok(provider.removeKey("not-an-account").ok === false, "账号不存在时如实回错");
   const builtinAcc = store.addAccount({ channel: "trae", name: "内置号", token: "sk-builtin" });
   ok(provider.removeKey(builtinAcc).ok === false, "内置渠道的账号不许从提供商入口删（不属于任何提供商）");

@@ -7,6 +7,7 @@ import type {
   ProxyGatewayStatus, ProxyKeyRow, ProxyChannelView, ProxyAccount, ProxyStatsOverview, ProxyStatsDetail,
   ProxyUsageRow, ProxyModel, ProxyScanCandidate, ProxyRuleFile, ProxyRoute, ProxyChannelId, ProxyPoolStrategy, ProxyCostTier,
   ProxyCheckinRow, CcSwitchStatus, CcSwitchRegisterResult, CcSwitchAppType, ZcodeDeviceStatusResult, ZcodeClaimModeResult,
+  ProxyProvider, ProxyProviderKind, ProxyProviderModel, ProxyProviderTestResult,
   ProxyOpLogList,
   MemoryRow, MemoryDetail, MemoryStats, MemoryIndexStatus, MemoryTimelineNode, MemoryProjectCard,
   MemoryAgentCard, MemoryAgentVerify, MemoryBridgeStatus, MemoryConfigEnvelope, MemoryStatusEnvelope,
@@ -335,6 +336,45 @@ export const proxyModels = () => call<ProxyModel[]>("proxy_models");
 export const proxyModelsSync = (channel: string) =>
   // 外网拉模型目录，主进程 httpJson 60s 上限
   call<{ ok: boolean; channel?: string; count?: number; withRate?: number; message?: string }>("proxy_models_sync", { channel }, 0);
+
+// ===== 反代网关：自定义提供商（中转站 / 自建 OpenAI 兼容端点） =====
+
+/** 创建 / 更新的入参。id 即路由前缀（`id/model` 里的 id），创建后不可改。
+ *  create 可带 keys（表单一次填完）；update 忽略 keys，Key 走 add/remove 两条命令。 */
+export interface ProxyProviderInput {
+  id: string;
+  display?: string;
+  baseUrl: string;
+  kind?: ProxyProviderKind;
+  models?: ProxyProviderModel[];
+  extraHeaders?: Record<string, string>;
+  extraBody?: Record<string, unknown>;
+  enabled?: boolean;
+  keys?: { name?: string; key: string }[];
+}
+
+export const proxyProviderList = () =>
+  call<{ ok: boolean; providers?: ProxyProvider[]; message?: string }>("proxy_provider_list");
+export const proxyProviderCreate = (input: ProxyProviderInput) =>
+  call<{ ok: boolean; provider?: ProxyProvider; keyIds?: string[]; message?: string }>("proxy_provider_create", input as unknown as Record<string, unknown>);
+export const proxyProviderUpdate = (input: Partial<ProxyProviderInput> & { id: string }) =>
+  call<{ ok: boolean; provider?: ProxyProvider; message?: string }>("proxy_provider_update", input as unknown as Record<string, unknown>);
+export const proxyProviderDelete = (id: string) =>
+  call<{ ok: boolean; message?: string }>("proxy_provider_delete", { id });
+export const proxyProviderAddKey = (id: string, key: string, name?: string) =>
+  call<{ ok: boolean; id?: string; message?: string }>("proxy_provider_add_key", { id, key, name });
+export const proxyProviderRemoveKey = (accountId: string) =>
+  call<{ ok: boolean; message?: string }>("proxy_provider_remove_key", { accountId });
+/** 用表单里当场填的地址 + Key 发一次真实最小请求（会产生上游计费，UI 已提示）。
+ *  key 与 accountId 二选一：编辑态不重填 Key 时按号池账号 id 让主进程自己解密，明文不出主进程。 */
+export const proxyProviderTest = (input: {
+  id?: string; accountId?: string; baseUrl: string; key: string; model: string;
+  kind?: ProxyProviderKind; extraHeaders?: Record<string, string>; extraBody?: Record<string, unknown>;
+}) => call<ProxyProviderTestResult>("proxy_provider_test", input as unknown as Record<string, unknown>);
+/** 拉上游 /v1/models：用该提供商号池里的 Key，因此必须先存过一次 Key */
+export const proxyProviderFetchModels = (id: string) =>
+  call<{ ok: boolean; models?: string[]; message?: string }>("proxy_provider_fetch_models", { id });
+
 /** 切号预检事实（确认框展示用）：目标客户端是否在运行 / 安装路径 / 切完是否自动重启 */
 export interface IdeSwitchProbe {
   channel: string;

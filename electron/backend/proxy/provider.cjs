@@ -10,6 +10,7 @@ const crypto = require("node:crypto");
 const config = require("../config.cjs");
 const store = require("./store.cjs");
 const adapters = require("./adapters.cjs");
+const pool = require("./pool.cjs");
 const util = require("./util.cjs");
 
 // slug 就是路由前缀（`myslug/gpt-4o`），也是 accounts.channel 的键值，一旦有账号挂上去就不许改。
@@ -220,11 +221,17 @@ function assertNoCatalogCollision(slug) {
 // ===== 管理面读写 =====
 
 function list() {
-  return store.listProviders().map((p) => ({
-    ...p,
-    keyCount: store.listAccounts(p.id).length,
-    onlineCount: store.listAccounts(p.id).filter((a) => a.status === "online" && a.hasToken).length,
-  }));
+  return store.listProviders().map((p) => {
+    // 一次取全，既给计数也给「Key 管理」弹窗当数据源：号池视图（poolView）按内置 CHANNELS
+    // 迭代，提供商不在其中，UI 没有第二个来源能拿到这些 Key 的运行态。脱敏视图，不含密文。
+    const keys = pool.poolAccounts(p.id);
+    return {
+      ...p,
+      keyCount: keys.length,
+      onlineCount: keys.filter((a) => a.status === "online" && a.hasToken).length,
+      keys,
+    };
+  });
 }
 
 function create(input) {

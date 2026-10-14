@@ -1148,7 +1148,8 @@ function register(ipcMain) {
   ipcMain.handle("proxy_provider_delete", handle(({ id }) => provider.remove(id)));
   ipcMain.handle("proxy_provider_add_key", handle(({ id, name, key }) => provider.addKey(id, { name, key })));
   ipcMain.handle("proxy_provider_remove_key", handle(({ accountId }) => provider.removeKey(accountId)));
-  // 探测用「表单里当场填的那把 Key + 地址」，不读号池：既能动未保存的配置试，也不会把号池好 Key 打成冷却
+  // 探测用「表单里当场填的 Key + 地址」，未保存的配置也能试；编辑态不重填时改传 accountId，
+  // 由主进程解密——两条都不动号池（不 pickAccount、不写流水、不进冷却），探完好 Key 还是好的
   ipcMain.handle("proxy_provider_test", handle((input) => provider.probe(input)));
   ipcMain.handle("proxy_provider_fetch_models", handle(({ id }) => provider.fetchModels(id)));
 

@@ -389,6 +389,30 @@ const PROXY_POOL = [
   },
 ];
 
+// 自定义提供商：一启用一停用，列表两态 + Key 管理弹窗的 online/cooling 两态都能在预览里看到
+const MOCK_PROXY_PROVIDERS: {
+  id: string; display: string; domain: string; kind: string; enabled: boolean; baseUrl: string;
+  models: unknown[]; extraHeaders: Record<string, string>; extraBody: Record<string, unknown>;
+  updatedAt: number; keyCount: number; onlineCount: number;
+  keys: { id: string; name: string; status: string; hasToken: boolean; coolUntil: number; coolReason: string; todayReq: number; lastUsed: number }[];
+}[] = [
+  {
+    id: "myrelay", display: "我的中转站", domain: "relay.example.com", kind: "openai_compat", enabled: true,
+    baseUrl: "https://relay.example.com",
+    models: [{ model: "gpt-4o", upstream: "gpt-4o-2024-11-20", aliases: ["gpt-4o-turbo"], contextLength: 128000, reasoning: { supportedEfforts: ["low", "high"] } }, "deepseek-v3.2"],
+    extraHeaders: {}, extraBody: {}, updatedAt: NOW - 30 * 60000, keyCount: 2, onlineCount: 1,
+    keys: [
+      { id: "pk1", name: "主 Key", status: "online", hasToken: true, coolUntil: 0, coolReason: "", todayReq: 37, lastUsed: NOW - 3 * 60000 },
+      { id: "pk2", name: "Key 2", status: "cooling", hasToken: true, coolUntil: NOW + 9 * 60000, coolReason: "上游 429 限流", todayReq: 12, lastUsed: NOW - 18 * 60000 },
+    ],
+  },
+  {
+    id: "office", display: "公司自建网关", domain: "llm.corp.example", kind: "openai_compat", enabled: false,
+    baseUrl: "https://llm.corp.example/v1", models: ["qwen3-max"],
+    extraHeaders: { "X-Channel": "agenthub" }, extraBody: {}, updatedAt: NOW - 2 * 3600000, keyCount: 0, onlineCount: 0, keys: [],
+  },
+];
+
 const PROXY_USAGE = [
   { id: 5, ts: NOW - 60000, reqId: "r5", keyId: "k1", keyName: "本地主 Key", channel: "trae", accountId: "a1", accountName: "主账号 · 沐", model: "deepseek-v4-flash", promptTokens: 1204, completionTokens: 3841, ttftMs: 820, latencyMs: 1200, status: 200, error: "" },
   { id: 4, ts: NOW - 89000, reqId: "r4", keyId: "k2", keyName: "Trae 专用", channel: "trae", accountId: "a1", accountName: "主账号 · 沐", model: "glm-4.6", promptTokens: 2010, completionTokens: 6233, ttftMs: 1500, latencyMs: 2800, status: 200, error: "" },
@@ -1225,6 +1249,70 @@ export const mock = {
         return JSON.parse(JSON.stringify(PROXY_MODELS));
       case "proxy_models_sync":
         return { ok: true, channel: args?.channel || "workbuddy", count: 6, withRate: 4 };
+      // ===== 自定义提供商（预览态不代打上游，但增删改与两态结果都要能演） =====
+      case "proxy_provider_list":
+        return { ok: true, providers: MOCK_PROXY_PROVIDERS.map((p) => ({ ...p, models: [...p.models], keys: p.keys.map((k) => ({ ...k })) })) };
+      case "proxy_provider_create": {
+        const id = String(args?.id || "");
+        if (MOCK_PROXY_PROVIDERS.some((p) => p.id === id)) return { ok: false, message: `标识 "${id}" 已存在` };
+        const keys = (args?.keys as { key?: string }[]) || [];
+        const p = {
+          id, display: String(args?.display || id), domain: "", kind: "openai_compat", enabled: args?.enabled !== false,
+          baseUrl: String(args?.baseUrl || ""), models: (args?.models as unknown[]) || [],
+          extraHeaders: (args?.extraHeaders as Record<string, string>) || {}, extraBody: (args?.extraBody as Record<string, unknown>) || {},
+          updatedAt: Date.now(),
+          keys: keys.map((k, i) => ({ id: `mk-${id}-${i}`, name: `Key ${i + 1}`, status: "online", hasToken: true, coolUntil: 0, coolReason: "", todayReq: 0, lastUsed: 0 })),
+          keyCount: keys.length, onlineCount: keys.length,
+        };
+        MOCK_PROXY_PROVIDERS.push(p);
+        return { ok: true, provider: p, keyIds: p.keys.map((k) => k.id) };
+      }
+      case "proxy_provider_update": {
+        const p = MOCK_PROXY_PROVIDERS.find((x) => x.id === args?.id);
+        if (!p) return { ok: false, message: "提供商不存在" };
+        Object.assign(p, args, { updatedAt: Date.now() });
+        return { ok: true, provider: p };
+      }
+      case "proxy_provider_delete": {
+        const i = MOCK_PROXY_PROVIDERS.findIndex((x) => x.id === args?.id);
+        if (i < 0) return { ok: false, message: "提供商不存在" };
+        MOCK_PROXY_PROVIDERS.splice(i, 1);
+        return { ok: true };
+      }
+      case "proxy_provider_add_key": {
+        const p = MOCK_PROXY_PROVIDERS.find((x) => x.id === args?.id);
+        if (!p) return { ok: false, message: "提供商不存在" };
+        if (!String(args?.key || "").trim()) return { ok: false, message: "Key 不能为空" };
+        if (p.keys.some((k) => k.name === String(args?.name || "").trim())) return { ok: false, message: "同一把 Key 已在号池里" };
+        const id = `mk-${p.id}-${p.keys.length + 1}`;
+        p.keys.push({ id, name: String(args?.name || "").trim() || `Key ${p.keys.length + 1}`, status: "online", hasToken: true, coolUntil: 0, coolReason: "", todayReq: 0, lastUsed: Date.now() });
+        p.keyCount = p.keys.length;
+        p.onlineCount = p.keys.length;
+        return { ok: true, id };
+      }
+      case "proxy_provider_remove_key": {
+        for (const p of MOCK_PROXY_PROVIDERS) {
+          const i = p.keys.findIndex((k) => k.id === args?.accountId);
+          if (i < 0) continue;
+          p.keys.splice(i, 1);
+          p.keyCount = p.keys.length;
+          p.onlineCount = p.keys.filter((k) => k.status === "online").length;
+          return { ok: true };
+        }
+        return { ok: false, message: "Key 不存在" };
+      }
+      case "proxy_provider_test": {
+        // 预览不代打上游，但要能演两种结果态：清单里有的模型算"可用"，其余回失败文案，
+        // 否则逐行测试这条 UI 在 dev:web 里永远只有一种样子
+        const m = String(args?.model || "");
+        const known = MOCK_PROXY_PROVIDERS.find((p) => p.id === args?.id);
+        const inList = (known?.models || []).some((x) => (typeof x === "string" ? x : (x as { model: string }).model) === m);
+        return inList
+          ? { ok: true, ms: 640 + m.length * 7, model: m, sample: "（预览态假响应）收到", finishReason: "stop", usage: { prompt_tokens: 12, completion_tokens: 3, total_tokens: 15 } }
+          : { ok: false, message: "浏览器预览不代打上游，请在应用内测试" };
+      }
+      case "proxy_provider_fetch_models":
+        return { ok: true, models: ["gpt-4o", "gpt-4o-mini", "o3-pro"] };
       // 切号：首调只做预检（对应真实后端 —— 一律回 needConfirm + probe，由前端弹确认框），
       // confirmAck 重调才回执行结果，预览下两条路径都可走通
       case "proxy_ide_switch":
