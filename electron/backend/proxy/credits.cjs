@@ -76,12 +76,17 @@ async function refreshAccount(id) {
   // （上游接口就不拆包）走原口径，账号级聚合值不受影响。
   let credits = r.credits;
   let expiresAt = r.expiresAt || 0;
+  // 派生成功就整体信派生值：expiresAt=0 是「长期/没有在用到期」，不得回填旧账号级到期——
+  // 否则混合包场景（有限包过期 + 不限量包）下，pickAccount 的「余额已到期」会把不限量号
+  // 永久标死，跟下面的复活判据打乒乓。回填只属于无包集的原口径（adapter 没给就沿用旧值）。
+  let fromPackages = false;
   if (Array.isArray(r.packages)) {
     store.setCreditPackages(acc.id, acc.channel, r.packages);
     const derived = pool.deriveAccountCredits(r.packages);
     if (derived) {
       credits = derived.credits;
       expiresAt = derived.expiresAt;
+      fromPackages = true;
     }
   }
 
@@ -99,7 +104,7 @@ async function refreshAccount(id) {
   store.updateAccount(acc.id, {
     credits,
     creditsAt: Date.now(),
-    expiresAt: expiresAt || cur.expires_at,
+    expiresAt: fromPackages ? expiresAt : expiresAt || cur.expires_at,
     ...(revive ? { status: "online", coolUntil: 0, coolReason: "" } : {}),
   });
   store.snapshotCredits(acc.channel, acc.id, credits, expiresAt || 0);

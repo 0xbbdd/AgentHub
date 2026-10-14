@@ -547,10 +547,21 @@ const DAY = 86400000;
       "⑪ 包集里有 remaining=-1 ⇒ 落库余额必须是 -1（不限），不是 0");
     assert.strictEqual(after.status, "online",
       "⑪ 无限额度的号被误标 exhausted 后，额度刷新必须把它复活（revive 判据漏掉 credits===-1 就永远刷不回来）");
+
+    // 派生出「长期/无到期」(0) 必须直接落库，不得回填旧的账号级到期：
+    // 混合包场景（有限包过期 + 不限量包在库）下，回填会让 pickAccount 的
+    // 「余额已到期」把不限量号永久标死，跟上面的复活判据打乒乓。
+    // 这条必须是运行时判据：`fromPackages ? expiresAt : …` 若退回 `expiresAt || cur.expires_at`，
+    // 字面改动极小、静态正则抓不住，只有真跑 store.updateAccount 才能钉住。
+    store.updateAccount(id, { expiresAt: Date.now() - 3 * 86400000 }); // 库里留一个已过期的旧到期
+    await credits.refreshAccount(id);
+    const after2 = store.getAccount(id);
+    assert.strictEqual(Number(after2.expires_at), 0,
+      "⑪ 包集派生 expiresAt=0（长期/无在用到期）必须如实落 0，不得回填库里旧的过期值");
   } finally {
     adapters.get = realGet;
   }
-  pass("⑪ 复活链路：stub 适配器走完整 refreshAccount（-1 余额落库 + exhausted→online）");
+  pass("⑪ 复活链路：stub 适配器走完整 refreshAccount（-1 余额落库 + exhausted→online + 派生 0 不回填旧到期）");
 })().then(() => {
   store.close();
   try { fs.rmSync(WORK, { recursive: true, force: true }); } catch { /* 清不掉不影响结论 */ }
