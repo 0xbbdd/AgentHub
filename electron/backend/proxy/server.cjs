@@ -1,9 +1,11 @@
 // 反代网关 · HTTP 服务（方案 §4/§6.1）：Express @ 127.0.0.1:9527（可配置）
-// 端点：POST /v1/chat/completions 与 POST /v1/messages（各 SSE 双态）/ POST /v1/messages/count_tokens
-//       / GET /v1/models / GET /healthz / GET /status（调试，默认关）
+// 端点：POST /v1/chat/completions、POST /v1/messages、POST /v1/responses（各 SSE 双态）
+//       / POST /v1/messages/count_tokens / GET /v1/models / GET /healthz / GET /status（调试，默认关）
 // 错误语义按**入站协议**回：OpenAI 侧 401 invalid_api_key / 429 配额或限流 / 400 参数 / 502 上游 /
 // 503 渠道不可用；Anthropic 侧同样这些状态码，但外壳是 { type:"error", error:{ type, message } }
 // ——Claude Code 只认这个形状，给它一个 OpenAI 的 401 会被直接判成连接失败。
+// Responses 侧沿用 OpenAI 的 { error:{ message, type, param, code } } 外壳，但流内失败必须做成
+// 一个 response.failed 帧——Codex 要看到终止事件才收流。
 // 转发不用现成反代中间件：Dispatch(Key→渠道) → PoolService(号池选号) → Adapter(渠道改写) → SSE 转换输出
 "use strict";
 const crypto = require("node:crypto");
@@ -14,6 +16,8 @@ const util = require("./util.cjs");
 const openaiOut = require("./protocols/openai-out.cjs");
 const anthropicIn = require("./protocols/anthropic-in.cjs");
 const anthropicOut = require("./protocols/anthropic-out.cjs");
+const responsesIn = require("./protocols/responses-in.cjs");
+const responsesOut = require("./protocols/responses-out.cjs");
 const events = require("./events.cjs");
 const oplog = require("./oplog.cjs");
 
@@ -476,9 +480,11 @@ const OPENAI_SURFACE = {
   readKey: (req) => ({ key: String(req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim() }),
 };
 const ANTHROPIC_SURFACE = { name: "anthropic", createSink: anthropicOut.create, readKey: anthropicIn.readKey };
+// Responses 入站的鉴权读法与 OpenAI 通路一致（Codex 走 Authorization: Bearer），复用同一个 readKey
+const RESPONSES_SURFACE = { name: "responses", createSink: responsesOut.create, readKey: OPENAI_SURFACE.readKey };
 
 /** chat/completions 主流程（stream 双态共用一套 emit → 出线或聚合）
- *  surface 只决定「这一串事件写成什么字节」：OpenAI / Anthropic 各一个工厂。
+ *  surface 只决定「这一串事件写成什么字节」：OpenAI / Anthropic / Responses 各一个工厂。
  *  下面的鉴权、别名、回退链、号池换号、冷却决策对所有协议共用同一份代码——
  *  这是当初定下「内部规范形 = OpenAI chat + emit 词汇不扩」的全部回报。 */
 async function handleChat(req, res, settings, surface) {
@@ -1116,6 +1122,27 @@ function buildApp(settings) {
   // 官方文档把 count_tokens 列为可选（缺了客户端退化成字符估算）。这里用网关自己的
   // length/4 口径实现——与客户端兜底同量级，胜在 /status 与统计页能看到同一个数。
   app.post("/v1/messages/count_tokens", (req, res) => res.json(anthropicIn.countTokens(req.body || {})));
+
+  // Responses 入口（Codex CLI）：Codex 已删除 wire_api="chat"，没有这一层就只能靠 CC Switch 翻译。
+  // enableResponses 与 enableAnthropic 同性质——默认开的紧急止血开关，关掉即回到「该端点不存在」。
+  app.post("/v1/responses", (req, res) => {
+    if (settings().enableResponses === false) {
+      res.status(404).json({ error: { message: "该网关未启用 /v1/responses", type: "not_found_error", param: null, code: null } });
+      return undefined;
+    }
+    const r = responsesIn.toInternal(req.body || {});
+    if (!r.ok) {
+      res.status(400).json({ error: { message: r.message, type: "invalid_request_error", param: null, code: null } });
+      return undefined;
+    }
+    if (r.notes && r.notes.length) {
+      console.warn(`[gateway] /v1/responses 转换损失: ${r.notes.join(" | ")}`);
+    }
+    req.body = r.body;
+    return handleChat(req, res, settings(), RESPONSES_SURFACE).catch((e) => {
+      if (!res.headersSent) res.status(500).json({ error: { message: String((e && e.message) || e), type: "api_error", param: null, code: null } });
+    });
+  });
 
   // 模型目录：三渠道合并视图，鉴权可选（方案 §6.1）；停用模型不对外列出（调不通就不给看，省下游翻找）。
   // 「没有号池」的渠道（渠道被关 / 一个账号都没有）不对外列（issue #90）；
