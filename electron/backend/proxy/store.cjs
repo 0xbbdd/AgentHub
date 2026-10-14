@@ -75,7 +75,8 @@ CREATE TABLE IF NOT EXISTS accounts (
   today_req INTEGER NOT NULL DEFAULT 0,
   today_tokens INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL DEFAULT 0
+  updated_at INTEGER NOT NULL DEFAULT 0,
+  token_at INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS credits_history (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -209,6 +210,14 @@ function open() {
   try {
     db.exec("ALTER TABLE accounts ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0");
   } catch { /* 已存在 */ }
+  // 在线迁移：accounts.token_at（**凭据**写入时刻，只有 token/refreshToken 真正变化才推进）。
+  // 号池同步的「凭据谁新」仲裁必须用它而不是 updated_at：后者被额度刷新/冷却/备注/签到等
+  // 无关更新一路顶新，会让刚刷失败（被判 relogin）的一侧拿着坏凭据在 LWW 里胜出，
+  // 反向污染另一台健康机器的凭据。存量为 0 的行按 updated_at 回填保底
+  try {
+    db.exec("ALTER TABLE accounts ADD COLUMN token_at INTEGER NOT NULL DEFAULT 0");
+  } catch { /* 已存在 */ }
+  db.prepare("UPDATE accounts SET token_at = updated_at WHERE token_at = 0").run();
   // 在线迁移：keys.key_enc（完整 Key 的 DPAPI 加密信封，供列表随时查看 / 复制）
   try {
     db.exec("ALTER TABLE keys ADD COLUMN key_enc TEXT NOT NULL DEFAULT ''");
@@ -544,6 +553,8 @@ function accountView(r) {
     todayTokens: r.today_day === dayStr() ? r.today_tokens : 0,
     createdAt: r.created_at,
     updatedAt: r.updated_at || Math.max(r.credits_at || 0, r.last_used || 0, r.created_at || 0),
+    /** 凭据（token/refreshToken）写入时刻：号池同步的凭据新旧仲裁依据（0=老库未回填） */
+    tokenAt: r.token_at || 0,
     hasToken: tokenUsable(r),
     domain: meta.domain || "",
     enterpriseId: meta.enterpriseId || "",
@@ -588,13 +599,13 @@ function accountSecrets(r) {
   };
 }
 
-function addAccount({ channel, uid, name, token, refreshToken, source, expiresAt, meta, updatedAt }) {
+function addAccount({ channel, uid, name, token, refreshToken, source, expiresAt, meta, updatedAt, tokenAt }) {
   open();
   const id = crypto.randomUUID();
   const now = Date.now();
   db.prepare(
-    `INSERT INTO accounts (id, channel, uid, name, token_enc, refresh_enc, status, credits, credits_at, expires_at, cool_until, source, last_used, today_day, today_req, today_tokens, created_at, updated_at, meta)
-     VALUES (?,?,?,?,?,?, 'online', 0, 0, ?, 0, ?, 0, ?, 0, 0, ?, ?, ?)`
+    `INSERT INTO accounts (id, channel, uid, name, token_enc, refresh_enc, status, credits, credits_at, expires_at, cool_until, source, last_used, today_day, today_req, today_tokens, created_at, updated_at, token_at, meta)
+     VALUES (?,?,?,?,?,?, 'online', 0, 0, ?, 0, ?, 0, ?, 0, 0, ?, ?, ?, ?)`
   ).run(
     id,
     String(channel),
@@ -607,6 +618,8 @@ function addAccount({ channel, uid, name, token, refreshToken, source, expiresAt
     dayStr(),
     now,
     Math.max(0, Number(updatedAt) || now),
+    // 凭据时刻：号池同步整号入池时沿用快照里的值（凭据是远端那一刻写下的），缺省按当前时刻
+    Math.max(0, Number(tokenAt) || Number(updatedAt) || now),
     meta && typeof meta === "object" ? JSON.stringify(meta) : ""
   );
   return id;
@@ -663,6 +676,19 @@ function updateAccount(id, patch) {
   if (patch.lastUsed != null) put("last_used", Number(patch.lastUsed) || 0);
   if (patch.token != null) put("token_enc", config.encryptSecret(patch.token));
   if (patch.refreshToken != null) put("refresh_enc", config.encryptSecret(patch.refreshToken));
+  // 凭据时钟（与上面改名时钟同一个道理，但要跨机持久比对，故落独立列）：
+  // 加密信封带随机数，无法用密文比对，所以解出明文比；只有**值真的变了**才推进 token_at——
+  // 每次额度刷新/冷却都会走 updateAccount，无条件推进的话「本机跑过流量」就能让坏凭据
+  // 在号池同步的 LWW 里胜出，反向污染另一台健康机器。
+  // 调用方显式传 tokenAt 时以传入为准（同步采纳远端凭据：把本机时钟追平到远端那次写入）。
+  if (patch.tokenAt != null) put("token_at", Math.max(0, Number(patch.tokenAt) || 0));
+  else if (patch.token != null || patch.refreshToken != null) {
+    const nextTok = patch.token != null ? String(patch.token) : config.decryptSecret(cur.token_enc);
+    const nextRef = patch.refreshToken != null ? String(patch.refreshToken) : config.decryptSecret(cur.refresh_enc);
+    if (nextTok !== config.decryptSecret(cur.token_enc) || nextRef !== config.decryptSecret(cur.refresh_enc)) {
+      put("token_at", Date.now());
+    }
+  }
   // meta 只写一次：调用方给的整份（上游既有调用方都是读-改-写来的）与上面补的编辑时钟合并。
   // 编辑时钟优先——它是本次写入的意图，不能被调用方手里的旧快照盖掉；patch.meta 缺省时
   // 以库里的 meta 为底，避免「只改名」把别人写过的 meta 清掉。
