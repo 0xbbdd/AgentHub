@@ -1008,6 +1008,19 @@ function wbConversationHeaders(body, meta) {
   return h;
 }
 
+/** WorkBuddy 账号级风控拦截识别：HTTP 403 + code 11140「request illegal」。
+ *  上游把它的 displayMsg 伪装成内容审核（「内容未通过安全审核，请调整后重试」），实测与提问内容、
+ *  请求头、UA、x-domain 全都无关：同一 body 换个账号立刻 200，同一账号换任何 body 仍 403；
+ *  同账号的目录（/v3/config）与计费端点也照常 200——是账号在「模型调用」这一面上的风控状态，
+ *  不是请求指纹问题，更不是提问内容问题。原样透传会把用户引到「改提问」这条死路上。
+ *  双通道判定：HTTP 路径从 body 文本认码，流内 error 事件走 code 字段（与 11128 同口径）。 */
+function isWbAccountBlocked(e) {
+  if (!e) return false;
+  if (Number(e.code) === 11140) return true;
+  const s = String(e.body || e.message || "");
+  return /\b11140\b/.test(s) || /request illegal/i.test(s);
+}
+
 /** X-Device-Token 文件兜底（参考项目 device_token.go：≤1KB、5min 缓存） */
 let deviceTokenCache = { at: 0, value: "" };
 function readDeviceTokenFile() {
@@ -1433,6 +1446,41 @@ function makeWorkBuddy(channelId) {
         cancelTimer();
       }
       return result;
+    },
+
+    /** 渠道私有业务码分类（扩展点见本文件尾契约）：11140 = 账号在模型调用面上被风控拦截。
+     *  单独成一档是为了两件事：① 立即冷却该账号（通用层会把它当 5xx，连错 3 次才熔断，
+     *  期间每次请求都白撞一趟）；② 让调用方能把上游那句「内容未通过安全审核」改写成本机能
+     *  执行的说法（见 server.cjs 的 ACCOUNT_BLOCKED_MSG）。不进渠道降级——这是账号状态，
+     *  不是渠道故障，罚渠道会误伤同渠道的其它好号 */
+    classifyError(e) {
+      if (isWbAccountBlocked(e)) return { kind: "account_blocked", switchable: true, status: 403 };
+      return null;
+    },
+
+    /** 切号前探活：这条链路与真实对话逐字节同构（同 headers / 同 rewriteBody / 同 URL 候选），
+     *  所以「探活通过」就等于「网关能拿这个号正常对话」。只回答一件事——账号是否被上游风控拦截，
+     *  其余失败（网络不通、超时、模型名不认）一律 inconclusive，由调用方放行：探活失败 ≠ 账号坏，
+     *  拿它当否决条件会让一次网络抖动挡掉正常切号。max_tokens=1，代价是一次极小的上游请求 */
+    async probeChat(account, secrets) {
+      const model = "default-model"; // 官方桌面端自带别名，两个区都存在；探活只关心闸门，不关心具体模型
+      // 首条必须是 system：上游的校验顺序是「先形状、后风控」——体形状不对只会拿到 11128，
+      // 根本摸不到 11140 那道闸，探活就白做了（实测：同账号 user 打头 → 11128，system 打头 → 11140）
+      const body = {
+        model,
+        max_tokens: 1,
+        messages: [{ role: "system", content: "You are CodeBuddy, an AI coding assistant." }, { role: "user", content: "hi" }],
+      };
+      let streamErr = null;
+      try {
+        await this.chat({ account, secrets, model, body, meta: {}, emit: (ev) => { if (ev && ev.type === "error") streamErr = ev; } });
+      } catch (e) {
+        if (isWbAccountBlocked(e)) return { ok: false, blocked: true, message: String((e && e.message) || e) };
+        return { ok: false, inconclusive: true, message: String((e && e.message) || e) };
+      }
+      // 流内 error 事件（非 2xx 之外的业务拒绝）同样要认
+      if (streamErr && isWbAccountBlocked(streamErr)) return { ok: false, blocked: true, message: String(streamErr.message || "") };
+      return { ok: true };
     },
 
     /**

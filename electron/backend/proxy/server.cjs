@@ -313,6 +313,19 @@ function classifyUpstream(e, planLimit, channel) {
   return { kind: "server", switchable: true, status: 502 }; // 5xx / 网络 / 超时
 }
 
+/** 账号级风控拦截（WB 403 code 11140）回给调用方的本地说法。
+ *  上游把它的 displayMsg 写成「内容未通过安全审核，请调整后重试」，实测与提问内容、请求头、
+ *  UA、x-domain 全无关（同 body 换号即 200，同号换任何 body 仍 403，同号目录/计费端点 200）——
+ *  原样透传只会把用户推去改提问，而改提问永远不会好。改写成本机能执行的两条路：
+ *  换号，或在客户端重新登录该账号换一个会话。上游 code/request_id 仍留在记账里（走 e.body） */
+const ACCOUNT_BLOCKED_MSG =
+  "账号被上游风控拦截（403 request illegal / code 11140）：该账号的模型调用已被上游整体拒绝，" +
+  "与提问内容无关（改提问无效）。请改用其它账号，或在客户端重新登录该账号以更换会话";
+function humanizeAccountBlocked(e, cls) {
+  if (e && cls && cls.kind === "account_blocked") e.message = ACCOUNT_BLOCKED_MSG;
+  return e;
+}
+
 /** WAF/渠道级故障识别：WAF Block Page（HTML）与渠道白名单 11128 都不是账号问题——
  *  拦的是 IP/指纹/渠道，换号照拦。正确反应是渠道级短退避 + 如实报错，绝不能逐个冷却账号 */
 function isWafBlock(e) {
@@ -897,6 +910,7 @@ async function handleChat(req, res, settings, surface) {
               // 确定性拒绝（prompt_too_long / fatal / model_denied）换号必白撞，
               // 流中路径也必须终止，否则客户端参数错误会逐个冷却全池账号
               const cls = classifyUpstream(lastErr, false, chan);
+              humanizeAccountBlocked(lastErr, cls);
               applyCool(acc.id, targetModel, cls, lastErr.message);
               if (!cls.switchable) {
                 fatalErr = lastErr;
@@ -945,6 +959,7 @@ async function handleChat(req, res, settings, surface) {
               break;
             }
             const cls = classifyUpstream(e, false, chan);
+            humanizeAccountBlocked(e, cls);
             // 无明示重置时间的 429：上游多为 1~3s 短窗限流，退避 1s 重试一次再落冷却换号
             // （参考项目 RetrySame 语义）；有墙钟/Retry-After 的 429 重试必白费，直接冷却。
             // 单号池场景下这一跳决定 429 是就地消化还是直接抛给客户端

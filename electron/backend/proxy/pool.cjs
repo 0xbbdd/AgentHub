@@ -248,6 +248,12 @@ function coolAccount(id, kind, detail) {
     case "relogin": // 401 刷新失败
       store.updateAccount(id, { status: "relogin", coolUntil: 0, coolReason: detail || "凭证失效，需重新登录" });
       break;
+    case "account_blocked": // 11140 账号级风控拦截（WB）：拦截时长上游不给，按小时级冷却
+      // 档位不能取默认的 60s——风控状态不会自己好，1 分钟后被重新选中又是一次白撞；
+      // 也不能学 relogin 直接判死：实测该状态与账号本身无关（目录/计费端点照常 200），
+      // 换会话后可能就恢复了。2h 是「别把整池拖下水」与「别误判成永久失效」的折中
+      store.updateAccount(id, { status: "cooling", coolUntil: now + 2 * 3600000, coolReason: detail || "账号被上游风控拦截" });
+      break;
     default:
       store.updateAccount(id, { status: "cooling", coolUntil: now + 60000, coolReason: detail || "" });
   }
