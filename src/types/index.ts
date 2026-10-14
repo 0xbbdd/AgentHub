@@ -124,6 +124,19 @@ export type ConflictDiff = {
   item: ConflictItem;
   left: { label: string; path: string; md: string };
   right: { label: string; path: string; md: string };
+  /** diff-link 专有：链接现状（指向哪份、还在不在、中央有没有），面板据此决定给哪几个动词 */
+  link?: {
+    linkPath: string;
+    target: string;
+    resolved: string | null;
+    isLink: boolean;
+    resolves: boolean;
+    hasSkillMd: boolean;
+    centralPath: string;
+    centralExists: boolean;
+    sameAsCentral: boolean;
+    targetInsideHub: boolean;
+  };
 };
 
 export type ToolRow = {

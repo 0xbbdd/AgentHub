@@ -107,7 +107,11 @@ function mountNameOf(mountPath) {
 function toTrash(absPath, tag) {
   const trash = trashDir();
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const dest = path.join(trash, `${stamp}-${tag || path.basename(absPath)}`);
+  // 同一毫秒归档两次（裁决里「旧中央版进回收站」紧跟「原链接进回收站」这种）会撞同一个名字，
+  // 而 rename 到已存在的位置在 Windows 直接 EPERM、在 POSIX 对目录是 EISDIR，整条裁决崩在最后一步
+  const base = `${stamp}-${tag || path.basename(absPath)}`;
+  let dest = path.join(trash, base);
+  for (let i = 2; fs.existsSync(dest); i++) dest = path.join(trash, `${base}-${i}`);
   try {
     fs.renameSync(absPath, dest);
   } catch (e) {

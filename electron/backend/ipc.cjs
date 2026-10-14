@@ -476,6 +476,16 @@ function register(ctx) {
         right: { label: "远端版", path: remoteDir, md: readMd(remoteDir) },
       };
     }
+    // diff-link：左侧是链接现在指向的那份（悬空时没有），右侧是中央真身（可能还没有）
+    if (item.kind === "diff-link") {
+      const st = syncer.linkConflictState(item);
+      return {
+        item,
+        left: { label: "链接指向", path: st.resolved || "", md: st.resolves ? readMd(st.resolved) : "" },
+        right: { label: "中央真身", path: st.centralPath, md: readMd(st.centralPath) },
+        link: st,
+      };
+    }
     const leftPath = item.kind === "content" ? path.join(item.dir, item.skill) : null;
     const rightPath = path.join(hub.skillsDir(), item.skill || "");
     return {
@@ -492,7 +502,9 @@ function register(ctx) {
       ? syncer.resolveNormConflict(item, choice, C())
       : item.kind === "remote"
         ? remotesync.resolveRemoteConflict(item, choice, C())
-        : syncer.resolveContentConflict(item, choice, C());
+        : item.kind === "diff-link"
+          ? syncer.resolveDiffLinkConflict(item, choice, C())
+          : syncer.resolveContentConflict(item, choice, C());
     if (r.ok) {
       item.resolved = { at: new Date().toISOString(), choice };
       syncer.saveConflicts(store);
