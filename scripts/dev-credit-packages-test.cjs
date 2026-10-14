@@ -372,6 +372,102 @@ const DAY = 86400000;
   pass("⑨ 阈值可配：默认=原硬编码 / 逐包与账号级共用同一旋钮 / 非法值忽略 / 0=关闭 / 状态复原");
 }
 
+// ===== ⑩ 五个渠道的逐包映射 =====
+// 夹具是按「适配器代码读哪些键」造的**合成**样本，不是抓包响应。因此本节证明的是
+// 「给定这些键，包行算得对」（口径、单位、哨兵、兜底），不证明「上游真的返回这些键」——
+// 后者要靠真账号验，本闸做不到，也不假装做得到。
+{
+  const adapters = require(path.join(ROOT, "electron", "backend", "proxy", "adapters.cjs"));
+  const SEC = Math.floor((Date.now() + 20 * DAY) / 1000);
+
+  // —— Trae：remaining = limit - used；秒级到期换算成毫秒；limit<=0 的包本条仍按上游原样跳过 ——
+  const tp = adapters.traeCreditPackages([
+    { entitlement_pack_id: "A", display_desc: "月包", end_time: SEC, quota: { credits_limit: 100, credits_amount: 30 } },
+    { entitlement_pack_id: "B", display_desc: "用完了", end_time: SEC, quota: { credits_limit: 50, credits_amount: 50 } },
+    { entitlement_pack_id: "Z", display_desc: "无面值", quota: { credits_limit: 0 } },
+  ]);
+  assert.deepStrictEqual(tp.map((p) => p.code), ["A", "B"], "⑩ Trae：只认 credits_limit > 0 的包（与账号级同口径）");
+  assert.strictEqual(tp[0].remaining, 70, "⑩ Trae：剩余 = limit - used");
+  assert.strictEqual(tp[0].total, 100, "⑩ Trae：面值取 credits_limit");
+  assert.strictEqual(tp[0].name, "月包", "⑩ Trae：包名取 display_desc");
+  assert.strictEqual(tp[1].remaining, 0, "⑩ Trae：用完的包剩余 0 但仍出一行（日历要看得见它的到期）");
+  assert.ok(Math.abs(tp[0].expiresAt - SEC * 1000) < 2000, "⑩ Trae：秒级 end_time 要换成毫秒（落库与比较都用毫秒）");
+
+  // —— zcode：三种剩余字段口径 + 欠额负值必须夹 0 + plan 名 join ——
+  const zp = adapters.zcodeCreditPackages([
+    { plan_id: "p1", total_units: 1000, used_units: 400 },              // 缺 remaining → 退 total-used
+    { plan_id: "p2", remaining_units: 50 },
+    { plan_id: "p3", available_units: 60 },
+    { plan_id: "p4", remaining_units: -1 },                              // 欠额 -1：绝不能当「不限」
+    null,
+  ], [{ plan_id: "p1", name: "专业版年度" }]);
+  assert.strictEqual(zp.length, 4, "⑩ zcode：非对象条目被滤掉，其余四条都在");
+  assert.strictEqual(zp[0].remaining, 600, "⑩ zcode：缺 remaining_units 时退回 total-used，不读成 0");
+  assert.strictEqual(zp[0].name, "专业版年度", "⑩ zcode：包名从 plans 按 plan_id join 过来");
+  assert.strictEqual(zp[1].remaining, 50, "⑩ zcode：remaining_units 直接取");
+  assert.strictEqual(zp[2].remaining, 60, "⑩ zcode：available_units 也认");
+  assert.strictEqual(zp[3].remaining, 0, "⑩ zcode：欠额的 -1 必须夹成 0——-1 是「不限」哨兵，透下去整号变无限");
+
+  // —— Lobster：上游不给逐包面值 ⇒ total=-1；ISO 与空格形式到期；远未来哨兵归 0 ——
+  const lp = adapters.lobsterCreditPackages([
+    { type: "MONTHLY", label: "月度积分", creditsRemaining: 5297, expiresAt: "2027-01-01T00:00:00Z" },
+    { type: "GIFT", creditsRemaining: -3, expiresAt: "2099-01-01 00:00:00" },
+    { type: "BAD", creditsRemaining: "abc" },
+  ]);
+  assert.strictEqual(lp.length, 2, "⑩ Lobster：剩余读不出数字的那条滤掉（不能当 0 上屏）");
+  assert.strictEqual(lp[0].total, -1, "⑩ Lobster：上游不下发逐包面值 ⇒ total=-1=「不给总额」（渲染「—」），不是额度不限");
+  assert.ok(lp[0].expiresAt > Date.now(), "⑩ Lobster：ISO 字符串到期要能被解析成未来毫秒");
+  assert.strictEqual(lp[1].remaining, 0, "⑩ Lobster：欠额负剩余夹 0（同 zcode 的哨兵理由）");
+  assert.strictEqual(lp[1].expiresAt, 0, "⑩ Lobster：2099 这类远未来占位归 0=长期有效，且空格形式日期串得能认");
+  assert.deepStrictEqual(adapters.lobsterCreditPackages(undefined), [], "⑩ Lobster：非数组 ⇒ []（调用方回落账号级聚合行）");
+
+  // —— WorkBuddy：Accounts 循环里的 r/u/s 此前只在 return 被折成标量，现在逐包带出 ——
+  const wb = adapters.parseWbResource({
+    Accounts: [
+      { PackageCode: "pk1", PackageName: "算力包一", CapacitySize: 300, CapacityUsed: 100, CapacityRemain: 200, PackageEndTime: Date.now() + 9 * DAY },
+      { PackageCode: "pk2", CycleCapacitySize: 50, CycleCapacityRemain: 50, CycleEndTime: Date.now() + 3 * DAY },
+    ],
+  }, false);
+  assert.strictEqual(wb.credits, 250, "⑩ WorkBuddy：账号级剩余口径不变（200+50）");
+  assert.deepStrictEqual(wb.packages.map((p) => p.code), ["pk1", "pk2"], "⑩ WorkBuddy：每个 Account 出一条包行");
+  assert.strictEqual(wb.packages[0].remaining, 200, "⑩ WorkBuddy：单包剩余沿用循环里已算出的 r");
+  assert.strictEqual(wb.packages[0].total, 300, "⑩ WorkBuddy：单包面值沿用循环里已算出的 s（此前被丢弃）");
+  assert.strictEqual(wb.packages[1].total, 50, "⑩ WorkBuddy：Cycle 期套餐走 CycleCapacity* 那一套字段");
+  assert.strictEqual(wb.packages[1].remaining, 50, "⑩ WorkBuddy：Cycle 期套餐走 CycleCapacity* 那一套字段（剩余）");
+  assert.ok(Math.abs(wb.packages[1].expiresAt - (Date.now() + 3 * DAY)) < 5000,
+    "⑩ WorkBuddy：包行到期取自 CycleEndTime（不是 PackageEndTime）");
+  assert.strictEqual(adapters.parseWbResource({ Accounts: [] }, false), null, "⑩ WorkBuddy：空 Accounts 仍返回 null（不改现有语义）");
+
+  // —— Qoder：四族额度；组织族总额字段是 cap 不是 total；只有专用包自带 ISO 到期 ——
+  // 到期基准必须先存成变量再同时喂给夹具和断言：两边各写一次 Date.now()+40*DAY 的话，
+  // 跨过 1ms 边界就会红，而且红的是这条无关断言——它会偷走别的作用域的变异归属。
+  const PLAN_EXP = Date.now() + 40 * DAY;
+  const { makeQoder } = require(path.join(ROOT, "electron", "backend", "proxy", "qoderAdapter.cjs"));
+  const qRows = makeQoder("qoder", { rules: new Map(), util }).__creditPackagesForTest(
+    {
+      userQuota: { remaining: 100, total: 500, used: 400 },
+      addOnQuota: { remaining: 30 },
+      orgResourcePackage: { cap: 80, used: 20, remaining: -5 },
+      dedicatedResourcePackages: [
+        { id: "d1", displayLabels: [{ title: "活动包" }], total: 10, remaining: 4, used: 6, expiresAt: "2027-03-01T00:00:00Z" },
+        { id: "d2", available: false, total: 9, remaining: 9 },
+      ],
+    },
+    PLAN_EXP,
+    (v) => (Number.isFinite(Number(v)) ? Number(v) : 0)
+  );
+  assert.deepStrictEqual(qRows.map((r) => r.name), ["套餐额度", "资源包", "组织资源包", "活动包"],
+    "⑩ Qoder：四族各成一行，不可用的专用包(d2)被排除");
+  assert.strictEqual(qRows[0].expiresAt, PLAN_EXP, "⑩ Qoder：顶层套餐到期只挂「套餐额度」那行");
+  assert.strictEqual(qRows[1].expiresAt, 0, "⑩ Qoder：资源包上游不给到期 ⇒ 0=长期，不编日期");
+  assert.strictEqual(qRows[2].total, 80, "⑩ Qoder：组织资源包总额字段是 cap；按 total 读会得到 0=已用完");
+  assert.strictEqual(qRows[2].remaining, 0, "⑩ Qoder：欠额的负剩余必须夹 0（-1 是「不限」哨兵，透下去整号变无限）");
+  assert.strictEqual(qRows[1].total, -1, "⑩ Qoder：既无 total 也无 cap ⇒ -1=「不给总额」");
+  assert.ok(qRows[3].expiresAt > Date.now(), "⑩ Qoder：专用包的 ISO 到期必须被解析（用只认数字的 num() 会得到 NaN→0，到期静默消失）");
+  assert.strictEqual(qRows[3].name, "活动包", "⑩ Qoder：包名取 displayLabels[].title（name/description 里是内部 campaign id）");
+  pass("⑩ 五渠道逐包映射：面值/剩余/单位换算/负值夹 0/-1 两种含义/到期归属/字段兜底");
+}
+
 store.close();
 try { fs.rmSync(WORK, { recursive: true, force: true }); } catch { /* 清不掉不影响结论 */ }
 console.log(`\nOK 积分包到期数据层闸全过（${n} 项）`);
