@@ -372,7 +372,8 @@ ELECTRON_RUN_AS_NODE=1 node_modules/electron/dist/electron.exe tools/proxy-cline
 记忆中枢验证入口：
 
 ```bash
-npm run verify:memory
+npm run verify:memory                                             # 静态校验：IPC 管道 / 配置分档 / 术语 / 导航 / 结构
+node tools/memory-runtime-path-selftest.cjs                       # 桥的 runtime 定位：各平台目录布局 + 大小写 + 离线报错
 ```
 
 代码结构：
