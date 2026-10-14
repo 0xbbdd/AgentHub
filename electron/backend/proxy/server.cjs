@@ -1,6 +1,9 @@
 // 反代网关 · HTTP 服务（方案 §4/§6.1）：Express @ 127.0.0.1:9527（可配置）
-// 端点：POST /v1/chat/completions（SSE 双态）/ GET /v1/models / GET /healthz / GET /status（调试，默认关）
-// 错误语义对齐 OpenAI：401 invalid_api_key / 429 配额或限流 / 400 参数 / 502 上游 / 503 渠道不可用
+// 端点：POST /v1/chat/completions 与 POST /v1/messages（各 SSE 双态）/ POST /v1/messages/count_tokens
+//       / GET /v1/models / GET /healthz / GET /status（调试，默认关）
+// 错误语义按**入站协议**回：OpenAI 侧 401 invalid_api_key / 429 配额或限流 / 400 参数 / 502 上游 /
+// 503 渠道不可用；Anthropic 侧同样这些状态码，但外壳是 { type:"error", error:{ type, message } }
+// ——Claude Code 只认这个形状，给它一个 OpenAI 的 401 会被直接判成连接失败。
 // 转发不用现成反代中间件：Dispatch(Key→渠道) → PoolService(号池选号) → Adapter(渠道改写) → SSE 转换输出
 "use strict";
 const crypto = require("node:crypto");
@@ -9,6 +12,8 @@ const pool = require("./pool.cjs");
 const adapters = require("./adapters.cjs");
 const util = require("./util.cjs");
 const openaiOut = require("./protocols/openai-out.cjs");
+const anthropicIn = require("./protocols/anthropic-in.cjs");
+const anthropicOut = require("./protocols/anthropic-out.cjs");
 const events = require("./events.cjs");
 const oplog = require("./oplog.cjs");
 
@@ -462,11 +467,39 @@ function applyCool(accId, model, cls, message) {
   }
 }
 
-/** chat/completions 主流程（stream 双态共用一套 emit → 出线或聚合） */
-async function handleChat(req, res, settings) {
+/** 入站协议面：同一套调度核心，按端点换「怎么读网关 Key / 写成什么字节」。
+ *  readKey 与 createSink 成对出现——鉴权失败的错误形状也必须按本协议回，
+ *  否则 Claude Code 收到一个 OpenAI 形状的 401 会直接判连接失败。 */
+const OPENAI_SURFACE = {
+  name: "openai",
+  createSink: openaiOut.create,
+  readKey: (req) => ({ key: String(req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim() }),
+};
+const ANTHROPIC_SURFACE = { name: "anthropic", createSink: anthropicOut.create, readKey: anthropicIn.readKey };
+
+/** chat/completions 主流程（stream 双态共用一套 emit → 出线或聚合）
+ *  surface 只决定「这一串事件写成什么字节」：OpenAI / Anthropic 各一个工厂。
+ *  下面的鉴权、别名、回退链、号池换号、冷却决策对所有协议共用同一份代码——
+ *  这是当初定下「内部规范形 = OpenAI chat + emit 词汇不扩」的全部回报。 */
+async function handleChat(req, res, settings, surface) {
   const startedAt = Date.now();
   const reqId = util.uuid().replace(/-/g, "").slice(0, 24);
   const body = req.body || {};
+  // wantStream 提前算：sink 要在鉴权之前建（鉴权失败也得按本协议的形状回错）。
+  // body.stream 在此之前不会被改，所以与原先"晚算"完全等价。
+  const wantStream = !!body.stream;
+  // 出线侧（响应头 / SSE 帧 / 聚合器 / 思考链合批）整体交给协议 sink，本函数只留调度状态。
+  // OpenAI 通路的逐字节等值由 scripts/dev-sink-golden.cjs 的场景表守着（响应字节 / 冷却决策 /
+  // 选号顺序 / 流水），Anthropic 通路由 scripts/dev-anthropic-in-test.cjs 逐事件核验。
+  // 入站 tokens 只能本地估（真分词在上游手里），只在拿不到 usage 时兜底。
+  // 传函数而不是数值：只有 Messages 协议的 message_start 要用它，OpenAI 通路一次都不该
+  // stringify 整个 messages（多模态请求上限 32MB，白算一次是看得见的开销）
+  let estInputCache = null;
+  const estInputTokens = () => {
+    if (estInputCache == null) estInputCache = util.estimateTokens(JSON.stringify(body.messages || ""));
+    return estInputCache;
+  };
+  const sink = surface.createSink({ res, reqId, requestedModel: String(body.model || ""), wantStream, estInputTokens });
   const usageRow = { ts: startedAt, reqId, keyId: "", keyName: "", channel: "", accountId: "", accountName: "", model: String(body.model || ""), status: 0 };
 
   const record = (extra) => {
@@ -483,35 +516,38 @@ async function handleChat(req, res, settings) {
       { channel: usageRow.channel, target: [usageRow.keyName, usageRow.accountName].filter(Boolean).join(" / "), detail: usageRow.error || "" });
   };
 
-  // ===== 鉴权：Bearer sk-…，库中只存哈希，实时查表（启停/删除即时生效） =====
-  const auth = String(req.headers.authorization || "");
-  const secret = auth.replace(/^Bearer\s+/i, "").trim();
-  const key = secret ? store.findKeyBySecret(secret) : null;
+  // ===== 鉴权：库中只存哈希，实时查表（启停/删除即时生效）。Key 从哪个头读由协议面定 =====
+  const keyed = surface.readKey(req) || {};
+  if (keyed.error) {
+    record({ status: 401, error: "ambiguous_api_key" });
+    return sink.endErr(401, keyed.error, "invalid_request_error", "invalid_api_key");
+  }
+  const key = keyed.key ? store.findKeyBySecret(keyed.key) : null;
   if (!key) {
     record({ status: 401, error: "invalid_api_key" });
-    return sendError(res, 401, "无效的 API Key", "invalid_request_error", "invalid_api_key");
+    return sink.endErr(401, "无效的 API Key", "invalid_request_error", "invalid_api_key");
   }
   usageRow.keyId = key.id;
   usageRow.keyName = key.name;
   if (!key.enabled) {
     record({ status: 401, error: "key disabled" });
-    return sendError(res, 401, "API Key 已停用", "invalid_request_error", "invalid_api_key");
+    return sink.endErr(401, "API Key 已停用", "invalid_request_error", "invalid_api_key");
   }
   // 日配额（0=不限，次日 00:00 重置）
   if (key.dailyQuota > 0 && store.keyTodayReq(key.id) >= key.dailyQuota) {
     record({ status: 429, error: "daily quota exceeded" });
-    return sendError(res, 429, "该 Key 今日配额已用尽（次日 00:00 重置）", "rate_limit_exceeded", "quota_exceeded");
+    return sink.endErr(429, "该 Key 今日配额已用尽（次日 00:00 重置）", "rate_limit_exceeded", "quota_exceeded");
   }
   // 单 Key 令牌桶限速
   if (!rateLimitOk(key, settings.rateLimitPerMin)) {
     record({ status: 429, error: "rate limited" });
-    return sendError(res, 429, "请求过于频繁（单 Key 限速）", "rate_limit_exceeded", "rate_limited");
+    return sink.endErr(429, "请求过于频繁（单 Key 限速）", "rate_limit_exceeded", "rate_limited");
   }
-  // 参数校验（OpenAI 同构 400）；请求体上限 32MB 由 express.json 把关
+  // 参数校验（本协议同构 400）；请求体上限 32MB 由 express.json 把关
   const bad = util.validateChatBody(body);
   if (bad) {
     record({ status: 400, error: bad });
-    return sendError(res, 400, bad, "invalid_request_error", "invalid_params");
+    return sink.endErr(400, bad, "invalid_request_error", "invalid_params");
   }
   // 角色归一（issue #47）：各渠道上游 role 白名单互相冲突（workbuddy 拒 developer、
   // raccoon 拒 function），而 400 会触发渠道回退，导致同一条请求能否成功取决于命中
@@ -534,7 +570,7 @@ async function handleChat(req, res, settings) {
   const disabledSet = new Set((settings.disabledModels || []).map((s) => String(s).toLowerCase()));
   if (disabledSet.has(actualModel.toLowerCase())) {
     record({ status: 400, error: "model disabled" });
-    return sendError(res, 400, `模型 "${actualModel}" 已被禁用（模型目录页可恢复）`, "invalid_request_error", "model_disabled");
+    return sink.endErr(400, `模型 "${actualModel}" 已被禁用（模型目录页可恢复）`, "invalid_request_error", "model_disabled");
   }
   // 模型回退链（多模型自动切换）：请求模型 → 回退模型（单跳防循环）。
   // 触发时机：① 模型不在任何渠道目录（unknown）；② 渠道号池全部不可用（耗尽/冷却）。
@@ -559,17 +595,16 @@ async function handleChat(req, res, settings) {
       const owners = (resolvedMain.disabledChannel ? [resolvedMain.disabledChannel] : (cat.sources || []))
         .filter((c, i, arr) => arr.indexOf(c) === i);
       record({ status: 400, error: "channel disabled" });
-      return sendError(
-        res, 400,
+      return sink.endErr(
+        400,
         `模型 "${actualModel}" 由渠道 ${owners.map((c) => `「${store.channelDisplay(c)}」`).join("、")}提供，` +
         `当前该渠道已被关闭或号池不可用，请在上游启闭中开启、补充号池，或改用其它模型。可用模型：${hint}`,
         "invalid_request_error", "channel_disabled"
       );
     }
     record({ status: 400, error: "unknown model" });
-    return sendError(res, 400, `模型 "${actualModel}" 不在任何渠道目录中。可用模型：${hint}`, "invalid_request_error", "model_not_found");
+    return sink.endErr(400, `模型 "${actualModel}" 不在任何渠道目录中。可用模型：${hint}`, "invalid_request_error", "model_not_found");
   }
-  const wantStream = !!body.stream;
 
   // ===== 出线准备 =====
   // 会话元数据：轮内稳定（参考项目 ChatMeta——一次 user send 内的重试/换号复用同一
@@ -588,9 +623,6 @@ async function handleChat(req, res, settings) {
   let finishReason = "stop";
   let sentDelta = false; // 是否已向客户端出过内容（决定流中错误要不要写进 SSE）
   let streamErr = null;  // 流中 error 事件：出过内容时下发作罢；一条内容都没出过时按失败换号
-  // 出线侧（响应头 / SSE 帧 / 聚合器 / 思考链合批）整体交给协议 sink，本函数只留调度状态。
-  // 逐字节等值由 scripts/dev-sink-golden.cjs 的场景表守着（响应字节 / 冷却决策 / 选号顺序 / 流水）
-  const sink = openaiOut.create({ res, reqId, requestedModel, wantStream });
 
   /**
    * 每次真实上游请求前重置「单轮尝试独占」的状态。
@@ -1052,9 +1084,38 @@ function buildApp(settings) {
   });
   app.use(express.json({ limit: "32mb" })); // 方案 §6.9：单请求体上限 32MB（多模态 base64）
 
-  app.post("/v1/chat/completions", (req, res) => handleChat(req, res, settings()).catch((e) => {
+  app.post("/v1/chat/completions", (req, res) => handleChat(req, res, settings(), OPENAI_SURFACE).catch((e) => {
     if (!res.headersSent) sendError(res, 500, String((e && e.message) || e), "server_error");
   }));
+
+  // Anthropic Messages 入口：入站归一成内部规范形后，与 chat 通路共用同一个 handleChat。
+  // 归一失败按 Messages 的错误形状回（Claude Code 只认这个形状），而不是 OpenAI 的 400。
+  // enableAnthropic 是紧急止血开关（默认开，只在 config.json 里给）：新协议面一旦把某个
+  // 客户端卡住，关掉即回到「该端点不存在」，不必回滚代码也不必重新打包。
+  app.post("/v1/messages", (req, res) => {
+    if (settings().enableAnthropic === false) {
+      res.status(404).json({ type: "error", error: { type: "not_found_error", message: "该网关未启用 /v1/messages" } });
+      return undefined;
+    }
+    const r = anthropicIn.toInternal(req.body || {});
+    if (!r.ok) {
+      res.status(400).json({ type: "error", error: { type: "invalid_request_error", message: r.message } });
+      return undefined;
+    }
+    if (r.notes && r.notes.length) {
+      // 转换中的语义损失（thinking.signature 不回投、document/图片 file 源丢弃等）必须留痕：
+      // 用户看到的是"同样的对话在 Anthropic 官方能跑、走网关差一点"，无线索就无法归因
+      console.warn(`[gateway] /v1/messages 转换损失: ${r.notes.join(" | ")}`);
+    }
+    req.body = r.body;
+    return handleChat(req, res, settings(), ANTHROPIC_SURFACE).catch((e) => {
+      if (!res.headersSent) res.status(500).json({ type: "error", error: { type: "api_error", message: String((e && e.message) || e) } });
+    });
+  });
+
+  // 官方文档把 count_tokens 列为可选（缺了客户端退化成字符估算）。这里用网关自己的
+  // length/4 口径实现——与客户端兜底同量级，胜在 /status 与统计页能看到同一个数。
+  app.post("/v1/messages/count_tokens", (req, res) => res.json(anthropicIn.countTokens(req.body || {})));
 
   // 模型目录：三渠道合并视图，鉴权可选（方案 §6.1）；停用模型不对外列出（调不通就不给看，省下游翻找）。
   // 「没有号池」的渠道（渠道被关 / 一个账号都没有）不对外列（issue #90）；
