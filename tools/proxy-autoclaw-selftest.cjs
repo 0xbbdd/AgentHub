@@ -26,6 +26,26 @@ const storeMod = require("../electron/backend/proxy/store.cjs");
 
 // ===== 离线协议断言 =====
 function offline() {
+  // ⓪ 主窗口 CSP 必须放行阿里云验证码 SDK（issue #105：v1.0.0 起 script-src 'self' 拦死
+  //   o.alicdn.com，脚本加载即报「验证码组件加载失败」，国际版 OAuth 从未走通过）。
+  //   这条护栏防止以后再改 CSP 时悄悄删掉放行项。SDK 实测触达：
+  //   脚本 o.alicdn.com / XHR *.aliyuncs.com（动态拼端点）/ iframe+图片 *.alicdn.com / 内嵌 data: 字体
+  {
+    const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+    const m = html.match(/Content-Security-Policy"[^>]*content="([^"]+)"/);
+    assert(m, "index.html 存在 CSP meta");
+    const dir = {};
+    for (const part of m[1].split(";")) {
+      const [k, ...v] = part.trim().split(/\s+/);
+      if (k) dir[k] = v.join(" ");
+    }
+    assert((dir["script-src"] || "").includes("o.alicdn.com"), "CSP script-src 放行 o.alicdn.com（验证码 SDK 脚本）");
+    assert((dir["connect-src"] || "").includes("*.aliyuncs.com"), "CSP connect-src 放行 *.aliyuncs.com（SDK XHR 验证端点）");
+    assert((dir["connect-src"] || "").includes("*.alicdn.com"), "CSP connect-src 放行 *.alicdn.com（SDK 资源请求）");
+    assert((dir["frame-src"] || "").includes("*.alicdn.com"), "CSP frame-src 放行 *.alicdn.com（SDK 会建 iframe）");
+    assert((dir["font-src"] || "").includes("data:"), "CSP font-src 放行 data:（SDK 内嵌 iconfont）");
+  }
+
   // ① X-Auth-Sign 签名向量（拼接 appId&秒级时间戳&appKey，MD5 小写）
   {
     const { ts, sign } = headers.authSign("100003", "38d2391985e2369a5fb8227d8e6cd5e5", 1760000000000);
