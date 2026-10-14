@@ -73,6 +73,7 @@ function create(ctx) {
   const msgId = `msg_${ctx.reqId}`;
   const deferred = [];        // message_start 起、首个实质内容前的所有帧
   let opened = false;         // message_start 是否已落盘
+  let terminated = false;     // 已发过 event: error：一轮只该有一个终止事件（见 endOk）
   let blocks = new Map();     // 块下标 → {kind, id?, name?}
   let nextIndex = 0;
   let closedAll = false;
@@ -266,13 +267,16 @@ function create(ctx) {
       closeAll();
     },
 
-    /** 已出线才把错误塞进流。这里不补 message_stop，也不负责收尾——调度核心随后照常走
-     *  endOk，块边界与 message_delta / message_stop 由那里补完。与 OpenAI 通路「注入错误帧
-     *  之后仍补 [DONE]」是同一条口径（判据：dev-sink-golden 的 stream-error-inflight 与
-     *  dev-anthropic-in-test 的 ⑫），要改得两条协议一起改。 */
+    /**
+     * 已出线才把错误塞进流。event: error 按协议就是这一轮的终点，所以这里置 terminated：
+     * 收尾交给 endOk，它见位只收流、不再补 message_delta / message_stop——补了等于给客户端
+     * 一个 stop_reason=end_turn 的正常收尾，而正文其实是截断的。
+     * （非流式不会走到这里：判据含 wantStream，两条通路的差异留在各自 sink 里。）
+     */
     onStreamError(err, { sent }) {
       if (!(wantStream && sent)) return false;
       flushDeferred();
+      terminated = true;
       write(ev("error", errObj(err.message, "api_error")));
       return true;
     },
@@ -314,6 +318,8 @@ function create(ctx) {
         });
         return;
       }
+      // 已经发过 event: error 的轮不再补收尾：见 onStreamError 的注释
+      if (terminated) { if (!res.writableEnded) res.end(); return; }
       flushDeferred();
       closeAll();
       write(ev("message_delta", { type: "message_delta", delta: { stop_reason: stopReason, stop_sequence: null }, usage: { output_tokens: outTokens() } }));
@@ -330,8 +336,9 @@ function create(ctx) {
       const type = ERROR_TYPE_BY_STATUS[Number(status)] || "api_error";
       if (wantStream && res.headersSent) {
         flushDeferred();
+        terminated = true;
         write(ev("error", errObj(message, type)));
-        res.end();
+        if (!res.writableEnded) res.end();
         return;
       }
       res.status(status).json(errObj(message, type));
@@ -346,10 +353,11 @@ function create(ctx) {
      * 每次真实上游请求前重置「单轮尝试独占」的输出状态。
      * 已落盘的字节撤不回来，所以调用点保证只在未出线时走到（这正是 deferredOpen 换来的能力）。
      *
-     * opened 与 deferred 不在可撤之列：comment()（模型回退明示）与 keepAlive() 会在**第一次
-     * 尝试之前**就把头与 message_start 提交到线上。把 opened 复位会让下一次 flushDeferred
+     * opened / deferred / terminated 不在可撤之列：comment()（模型回退明示）与 keepAlive() 会在
+     * **第一次尝试之前**就把头与 message_start 提交到线上。把 opened 复位会让下一次 flushDeferred
      * 再发一个 message_start，而同一条流里出现两个流头客户端必炸——这正是本文件开头那条
-     * 「先探后写」纪律要防的事，判据见 dev-anthropic-in-test 的 ⑬。
+     * 「先探后写」纪律要防的事，判据见 dev-anthropic-in-test 的 ⑬。terminated 同理：
+     * event: error 一旦写出就收不回来，复位它会让它之后又补出一个 message_stop。
      */
     resetAttempt() {
       blocks = new Map();

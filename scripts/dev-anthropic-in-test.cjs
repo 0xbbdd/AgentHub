@@ -548,7 +548,7 @@ const MSG = (extra) => Object.assign({ model: MODEL, max_tokens: 512, stream: tr
       "⑪ 同一条拒绝打到 /v1/chat/completions 时回 OpenAI 形状（surface 分流不能只看状态码）", chat.res.text.slice(0, 200));
   }
 
-  // ===== ⑫ 流中错误：已出线则塞进流里，收尾仍按 OpenAI 通路同口径补完 =====
+  // ===== ⑫ 流中错误：已出线则塞进流里，且它是这一轮的最后一个事件 =====
   console.log("\n⑫ 端到端·流中错误:");
   {
     const { res } = await run({
@@ -561,9 +561,11 @@ const MSG = (extra) => Object.assign({ model: MODEL, max_tokens: 512, stream: tr
     });
     const f = parseSse(res.text);
     ok(types(f).includes("error"), "⑫ 已出线的流中错误下发成 event: error", types(f));
-    ok(types(f)[types(f).length - 1] === "message_stop",
-      "⑫ 错误帧之后仍照常收尾：块边界补完 + message_delta + message_stop。这与 OpenAI 通路注入错误后仍补 [DONE] 是同一条口径（dev-sink-golden 的 stream-error-inflight 钉着），要改得两条一起改",
+    ok(!types(f).includes("message_stop") && !types(f).includes("message_delta"),
+      "⑫ event: error 之后不再补 message_delta / message_stop：按协议 error 就是这一轮的终点。" +
+      "补了等于给客户端一个 stop_reason=end_turn 的正常收尾，而正文其实是截断的",
       types(f));
+    ok(f[f.length - 1].data.type === "error", "⑫ 错误帧是这条流的最后一个事件", types(f));
     const errFrame = f.find((x) => x.data.type === "error");
     ok(errFrame && errFrame.data.error.type === "api_error", "⑫ 流内错误的 error.type 落在 api_error", errFrame && errFrame.data);
     ok(/前半段/.test(res.text), "⑫ 出错前已送达的正文不撤（撤不回来的字节就不该假装没发）", res.text.slice(0, 200));
