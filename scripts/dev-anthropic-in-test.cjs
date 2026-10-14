@@ -142,6 +142,39 @@ console.log("\n② thinking 预算换算:");
   const b3 = ain.toInternal({ model: "m", max_tokens: 100, messages: [{ role: "user", content: "x" }] });
   ok(!("reasoning_effort" in b3.body), "② 没写 thinking 时不凭空造档位", Object.keys(b3.body));
 
+  // 原件必须跟着走：网关有一条 Anthropic 形态的出站（zcode 渠道的 zcodeAnthropic.toAnthropic
+  // 直接读 body.thinking 的 type / budget_tokens）。这里不测「我们以为它读」，而是把真函数跑一遍。
+  const zcodeAnthropic = require("../electron/backend/proxy/zcodeAnthropic.cjs");
+  const exact = ain.toInternal({
+    model: "m", max_tokens: 8192, messages: [{ role: "user", content: "x" }],
+    thinking: { type: "enabled", budget_tokens: 3000 },
+  });
+  ok(exact.ok && exact.body.thinking && exact.body.thinking.budget_tokens === 3000,
+    "② thinking 原件逐字留在规范形里（预算精确值不是只换算成档位）", exact.body.thinking);
+  const zReq = zcodeAnthropic.toAnthropic("glm-5.3-flash", exact.body, {});
+  ok(zReq && zReq.thinking && zReq.thinking.type === "enabled" && zReq.thinking.budget_tokens === 3000,
+    "② 接上真实出站：Anthropic 形态上游拿到的是客户端给的 3000，而不是出站侧写死的 budgetMap 值", zReq && zReq.thinking);
+  ok(zReq.max_tokens === 8192, "② 出站请求的 max_tokens 仍是客户端值（预算与上限不互相顶掉）", zReq.max_tokens);
+
+  // 如实记录一条做不到的事：zcode 那条 GLM 上游对 disabled 必 400（它自己的注释带实测流水），
+  // 所以「关思考」在该渠道被折叠成最低预算。这不是本层能修的，也不该假装没发生。
+  const zOff = zcodeAnthropic.toAnthropic("glm-5.3-flash", ain.toInternal({
+    model: "m", max_tokens: 8192, messages: [{ role: "user", content: "x" }],
+    thinking: { type: "disabled" },
+  }).body, {});
+  ok(zOff.thinking && zOff.thinking.type === "enabled" && zOff.thinking.budget_tokens === 2048,
+    "② 已知边界如实钉住：zcode/GLM 侧 disabled 被上游自己折叠成 enabled+2048（该上游关不掉思考）", zOff.thinking);
+
+  // deepseek 那条靠原件里的 type 抑制注入：只发 off 不发原件时，injectThinking 会把
+  // 「关思考」翻回 thinking:{type:"enabled"} —— 原件在，它才看得见用户其实关掉了。
+  const ds = ain.toInternal({
+    model: "deepseek-v3.2", max_tokens: 100, messages: [{ role: "user", content: "x" }],
+    thinking: { type: "disabled" },
+  }).body;
+  util.injectThinking(ds, "high");
+  ok(ds.thinking.type === "disabled" && !("reasoning_effort" in ds),
+    "② deepseek 通路：原件里的 disabled 让 injectThinking 删档而不是补默认档（否则关思考被翻回开思考）", ds);
+
   // off 能不能活到上游，取决于档位降级那一层（issue #128 的守卫）。这里把两段的接缝钉住：
   // 协议层产出的 off 交给 util.normalizeReasoningEffort 之后必须还是 off。
   const obj = { model: "m", reasoning_effort: b2.body.reasoning_effort };

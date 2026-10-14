@@ -177,28 +177,37 @@ function toInternal(raw) {
   const tc = mapToolChoice(raw.tool_choice);
   if (tc) body.tool_choice = tc;
 
-  // thinking 只做「派生档位」这一件事：内部规范形里没有一个能承载 thinking 原件的位子是各渠道
-  // 上游都认的，硬塞一个私有字段要么被上游当成未知键，要么需要一层「按上游形态回填」的载体——
-  // 那个载体属于出站侧（自定义 Anthropic 形态上游）的改动，不在这一层。
-  // 所以这里把预算换算成 reasoning_effort（off/low/medium/high/max），原件若带不进就记一条损失。
+  // thinking 原件必须跟着走：网关确实有一条 Anthropic 形态的出站——zcode 渠道走
+  // zcodeAnthropic.toAnthropic，它直接读 body.thinking 的 type / budget_tokens。只发派生档位
+  // 等于把用户给的精确预算换成一张写死的映射表（那边的 budgetMap）。
+  // 原件与档位并存不是重复下发，两条路各喂一类上游：
+  //   · Anthropic 形态出站读原件（预算精确值生效）
+  //   · effort 档位型上游读 reasoning_effort（照常过 util.normalizeReasoningEffort 收敛）
+  // 而且 body.thinking 不是这里新发明的私有键：「模型目录里改思考档」那条既有路径
+  // （见 server.cjs 的 custom.reasoningEffort 分支）本来就同时写 reasoning_effort 与
+  // thinking.{type}，两条通路同形。
+  // off 也不在协议层删档：置 "off" 标记贯通管线——util.normalizeReasoningEffort 靠那条守卫
+  // 认出「关思考是开关不是档位」（issue #128），util.injectThinking 靠原件抑制 enabled 注入。
+  // 客户端若给出 max_tokens <= budget_tokens，那是 Anthropic 官方同样会 400 的组合，
+  // 这里如实透传，不替用户偷偷改预算。
   if (raw.thinking) {
+    body.thinking = raw.thinking;
     const eff = budgetToEffort(raw.thinking);
     if (eff === "off") {
-      // off 不是档位而是「关思考」这个开关，必须原样贯通管线：
-      // util.normalizeReasoningEffort 见 issue #128 的守卫，适配器侧按 provider 决定要不要改写
       body.reasoning_effort = "off";
-      notes.push("thinking disabled/budget=0：置 reasoning_effort=off");
+      notes.push("thinking disabled/budget=0：置 reasoning_effort=off（原件照常带上，由出站侧按渠道形态取舍）");
     } else if (eff) {
       body.reasoning_effort = eff;
-      notes.push(`thinking.budget_tokens=${raw.thinking.budget_tokens} 派生 reasoning_effort=${eff}（budget 精确值不转发：内部规范形只带档位）`);
+      notes.push(`thinking.budget_tokens=${raw.thinking.budget_tokens} 派生 reasoning_effort=${eff}（原件同时保留）`);
     } else {
       // enabled 但预算非法/缺失：没有档位可派生，交给上游自己的默认行为
       notes.push("thinking 无有效 budget_tokens：不派生档位，按上游默认");
     }
   }
+  // top_k / metadata 转不进内部规范形，也不硬塞：OpenAI chat 没有这两个位置，
+  // 而唯一读 metadata 的出站（zcode）自己构造设备结构，塞进去会把那边的标识覆盖掉。
   if (raw.top_k != null) notes.push("top_k 未转发（无 OpenAI chat 对应字段）");
-  if (raw.metadata) notes.push("metadata 未转发（无 OpenAI chat 对应字段）");
-  if (raw.extra_headers) notes.push("anthropic 私有 extra_headers 未转发");
+  if (raw.metadata) notes.push("metadata 未转发（无 OpenAI chat 对应字段；zcode 出站自造设备标识）");
 
   return { ok: true, body, notes };
 }
