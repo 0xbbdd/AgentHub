@@ -221,6 +221,18 @@ function main() {
     && fmtBalancePair(3000000, 3000000, "zcode").endsWith(balanceUnit("zcode")),
     fmtBalancePair(3000000, 3000000, "zcode"));
   check("J4 剩余不限、总额有数值时照实并列", fmtBalancePair(-1, 500, "trae") === "不限 / 500 积分", fmtBalancePair(-1, 500, "trae"));
+  // 号池页的逐包明细表是**分列**渲染的（不走 fmtBalancePair），而第 4 条之后上游不给面值的包
+  // 真的会带着 total=-1 进来（LobsterAI creditItems / Qoder 只给 remaining 的那几族），
+  // 同一套哨兵口径必须在两张表都成立——只在日历里堵等于没堵。
+  check("J5 号池总额格：total=-1 且剩余有数值 ⇒「—」，绝不能念成「不限」",
+    fmt.fmtPkgTotal(-1, 1880, "lobster") === "—", fmt.fmtPkgTotal(-1, 1880, "lobster"));
+  check("J6 号池总额格：两头都是 -1 才是真·不限",
+    fmt.fmtPkgTotal(-1, -1, "raccoon") === "不限", fmt.fmtPkgTotal(-1, -1, "raccoon"));
+  check("J7 号池总额格：有面值时与原口径逐字相同（新函数不得顺手改掉正常行）",
+    fmt.fmtPkgTotal(500, 300, "trae") === fmt.fmtBalance(500, "trae"), fmt.fmtPkgTotal(500, 300, "trae"));
+  check("J8 号池已用格：没有面值就没有「已用」可言 ⇒「—」；有面值照实",
+    fmt.fmtPkgUsed(0, -1, "lobster") === "—" && fmt.fmtPkgUsed(5, 5, "trae") === fmt.fmtBalance(5, "trae"),
+    fmt.fmtPkgUsed(0, -1, "lobster") + " / " + fmt.fmtPkgUsed(5, 5, "trae"));
   // ⚠ 这里原本还有 4 条（号池逐包表的「总额格 / 已用格」同一套哨兵口径）。那两张表来自
   // fork 的号池逐包列，本 PR 没带过来，断言没有对象就删掉了。**不是取消这条判据**：
   // total=-1 在两处必须同读成「—」而不是「不限」，等号池页那批一起补回。
@@ -240,9 +252,21 @@ function main() {
     /v-if="historyOpen"[\s\S]{0,80}hist-chip/.test(view) && /v-else v-model="statusFilter"/.test(view));
   check("K7 按钮文案就是「历史过期积分」，不带条数（条数归「已过期」徽标与「N 条已收起」提示，别三处各摆一份）",
     /: "历史过期积分"/.test(view) && !/历史过期积分 \$\{/.test(view));
-  // K8 原断言的是**号池页**那张逐包表（ProxyAgentsView 的总额/已用两列）也走同一套哨兵口径。
-  // 上游号池页没有逐包列，本 PR 也不带，所以删掉；它守的判据是真的——「上游不给总额」在
-  // 两张表里都必须读成「—」而不是「不限」——等号池逐包列单独成 PR 时连同 J5–J8 一起补回。
+  const poolView = fs.readFileSync(path.join(ROOT, "src/views/proxy/ProxyAgentsView.vue"), "utf8");
+  // 判据必须落在**那张表本身**：整张表里 fmtPkgTotal/fmtPkgUsed 各出现两次（浮层里也拼了一份），
+  // 只 grep 全文的话把明细格退回裸 fmtBalance，浮层那份还在，正则照样绿（实测漏网过一次）。
+  const pr0 = poolView.indexOf('class="pkg-row"');
+  const pkgBlock = pr0 < 0 ? "" : poolView.slice(pr0, poolView.indexOf("</table>", pr0) + 8);
+  check("K8 号池逐包表的总额/已用两格接的是 fmtPkgTotal/fmtPkgUsed（退回裸 fmtBalance 会把「不给总额」念成「不限」）",
+    !!pkgBlock && /fmtPkgTotal\(pkg\.total/.test(pkgBlock) && /fmtPkgUsed\(pkg\.used/.test(pkgBlock)
+      && !/fmtBalance\(pkg\.(total|used)/.test(pkgBlock),
+    pr0 < 0 ? "找不到 class=\"pkg-row\" 那张表" : pkgBlock.split("\n").filter((l) => /<td class="mono num">/.test(l)).join(" ⎫ "));
+  check("K9 展开按钮真的驱动那张表（按钮与表读的是同一个 expandedIds，否则按钮是装饰）",
+    /@click="togglePkg\(acc\.id\)"/.test(poolView) && /v-if="expandedIds\.has\(acc\.id\) && acc\.packages/.test(poolView));
+  check("K10 没有包就不出展开按钮（出了点开是一张空表，用户只会以为功能坏了）",
+    /v-if="acc\.packages && acc\.packages\.length"[\s\S]{0,260}pkg-caret/.test(poolView));
+  check("K11 没有面值的包不画已用进度条（total=-1 时条宽是无意义的数，宁可只给数字）",
+    /v-if="pkg\.total > 0"[\s\S]{0,200}pkg-bar/.test(poolView));
 
   // ===== L. 时间轴档：泳道合并、远期桶、点聚合与「渠道内归一」的尺寸尺 =====
   // 判据落在**合并语义与几何**上，不落在「我恰好那么写的字面」上。
