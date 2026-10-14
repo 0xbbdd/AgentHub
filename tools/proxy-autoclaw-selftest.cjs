@@ -370,16 +370,95 @@ async function e2e() {
     assert(/手机验证码/.test(autoThrew), "beginOAuth(autoclaw) 显式 throw 指引 SMS");
     const noCaptcha = await discovery.beginOAuth("autoclaw_intl", () => {}, {}, {});
     assert(noCaptcha.ok === false && /风控验证参数/.test(noCaptcha.message || ""), "intl 缺 captchaVerifyParam 被前置拦截");
-    // 桌面导入：写明文形态 auth.json（明文 token 直通解密），两区各产出一条候选
+    // 桌面导入：新版官方目录按地区归属（device/active-product-account.json →
+    // accounts/<accountKey>/account-credentials.enc，v10 信封 + Local State os_crypt 密钥），
+    // 旧版 auth.json 无地区标识时仍双区候选。
+    const credentialsMod = require("../electron/backend/proxy/autoclaw/credentials.cjs");
+    const qoderAuth = require("../electron/backend/proxy/qoderAuth.cjs");
+    const testKey = crypto.randomBytes(32);
+    const keyLoader = () => testKey;
+    const mkOfficial = (productDir, accountKey, plain, profile, deviceId) => {
+      const dir = path.join(process.env.APPDATA, productDir);
+      const accDir = path.join(dir, "accounts", accountKey);
+      fs.mkdirSync(accDir, { recursive: true });
+      fs.mkdirSync(path.join(dir, "device"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "device", "active-product-account.json"), JSON.stringify({ schemaVersion: 1, accountKey }), "utf8");
+      fs.writeFileSync(path.join(dir, "device", "device-id.json"), JSON.stringify({ schemaVersion: 1, deviceId }), "utf8");
+      fs.writeFileSync(path.join(accDir, "account-profile.json"), JSON.stringify(profile), "utf8");
+      fs.writeFileSync(path.join(accDir, "account-credentials.enc"), qoderAuth.encryptV10(Buffer.from(JSON.stringify(plain), "utf8"), testKey));
+      return dir;
+    };
+    const cnKey = "a".repeat(64);
+    // 真实形态：token 里的 uid（= numericUserId）与 profile.accountId（32hex）**不同**，
+    // uid 必须取前者才能与短信/OAuth 登录路径（saveAutoclawAccount）同口径、不重复建号。
+    const cnDir = mkOfficial("AutoClaw-official", cnKey,
+      { access_token: jwtOf("874974", Math.floor(Date.now() / 1000) + 86400), refresh_token: "rt-cn" },
+      { profile: { accountId: "3b6336752803d5968ad77011f6885ae2", numericUserId: 874974, phone: "173****7208" } }, "c".repeat(64));
+    const intlKey = "b".repeat(64);
+    const intlDir = mkOfficial("AutoClaw-oversea-official", intlKey,
+      { accessToken: jwtOf("u-intl", Math.floor(Date.now() / 1000) + 86400), refreshToken: "rt-intl" },
+      { profile: { accountId: "u-intl", phone: "+1 555****000" } }, "i".repeat(64));
+
+    // 单元级（跨平台）：注入密钥绕过 DPAPI，校验真实布局解析与字段别名
+    const cnLogin = credentialsMod.readOfficialLogin("autoclaw", { keyLoader });
+    assert(cnLogin.ok && cnLogin.uid === "874974" && cnLogin.refreshToken === "rt-cn", "uid 取 token（与登录路径同口径），非 profile.accountId");
+    assert(cnLogin.deviceId === "c".repeat(64) && cnLogin.name === "173****7208", "device-id.json 元数据与脱敏手机号显示名");
+    assert(cnLogin.source.includes(`accounts/${cnKey}/account-credentials.enc`), "source 指向真实凭据文件");
+    const both = credentialsMod.readDesktopLogins({ keyLoader });
+    assert(both.autoclaw && both.autoclaw.uid === "874974" && both.autoclaw_intl && both.autoclaw_intl.uid === "u-intl" && !both.legacy, "两区目录各自归属（不串区）");
+    let badKeyThrew = "";
+    try { credentialsMod.readOfficialLogin("autoclaw", { keyLoader: () => crypto.randomBytes(32) }); } catch (e) { badKeyThrew = String((e && e.message) || e); }
+    assert(/解密失败/.test(badKeyThrew), "错误密钥如实报解密失败（不静默）");
+    // 单区失败不得掩盖另一区：两区各有独立登录态，一区坏掉只应让它自己出行。
+    const partial = credentialsMod.readDesktopLogins({
+      keyLoader: (localStatePath) => (String(localStatePath).includes("AutoClaw-official") ? testKey : crypto.randomBytes(32)),
+    });
+    assert(partial.autoclaw && partial.autoclaw.uid === "874974", "一区解密失败时另一区仍正常解出（不互相掩盖）");
+    assert(!partial.autoclaw_intl && /解密失败/.test(partial.errors.autoclaw_intl || ""), "失败地区单独记入 errors，不影响成功地区");
+
+    // e2e（仅 win32）：真 DPAPI 包密钥写 Local State，走完整 scanAutoclaw → importCandidate
+    if (process.platform === "win32") {
+      const { execFileSync } = require("node:child_process");
+      const protect = (key) => {
+        const script = [
+          "$ErrorActionPreference='Stop'",
+          "Add-Type -AssemblyName System.Security | Out-Null",
+          `$b=[Convert]::FromBase64String('${key.toString("base64")}')`,
+          "$k=[System.Security.Cryptography.ProtectedData]::Protect($b,$null,[System.Security.Cryptography.DataProtectionScope]::CurrentUser)",
+          "[Convert]::ToBase64String($k)",
+        ].join("; ");
+        const out = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", windowsHide: true, timeout: 15000 }).trim();
+        return Buffer.concat([Buffer.from("DPAPI", "ascii"), Buffer.from(out, "base64")]).toString("base64");
+      };
+      for (const d of [cnDir, intlDir]) fs.writeFileSync(path.join(d, "Local State"), JSON.stringify({ os_crypt: { encrypted_key: protect(testKey) } }), "utf8");
+      let cands = discovery.scanAutoclaw();
+      assert(cands.length === 2 && cands.some((c) => c.channel === "autoclaw" && c.uid === "874974") && cands.some((c) => c.channel === "autoclaw_intl" && c.uid === "u-intl"), "新版双区各出一条候选（不串区）");
+      const cnCand = cands.find((c) => c.channel === "autoclaw");
+      assert(cnCand.meta.deviceId === "c".repeat(64) && cnCand.file.includes(cnKey) && cnCand.name === "173****7208", "候选携带 deviceId/稳定 file 标签/显示名");
+      const importedCn = discovery.importCandidate(cnCand, "autoclaw");
+      assert(!!importedCn.id, "新版 CN 候选可导入");
+      // 让国际版解密失败（覆盖其 Local State 密钥），国内版仍须正常出候选，
+      // 国际版如实出一行「加密不可读」——而不是两区一起消失。
+      fs.writeFileSync(path.join(intlDir, "Local State"), JSON.stringify({ os_crypt: { encrypted_key: protect(crypto.randomBytes(32)) } }), "utf8");
+      const mixed = discovery.scanAutoclaw();
+      const cnRow = mixed.find((c) => c.channel === "autoclaw");
+      const intlRow = mixed.find((c) => c.channel === "autoclaw_intl");
+      assert(cnRow && cnRow.uid === "874974" && !cnRow.encrypted, "一区坏掉时另一区仍出可用候选（不被掩盖）");
+      assert(intlRow && intlRow.encrypted && /解密失败/.test(intlRow.file || ""), "失败地区如实出一行加密不可读（带原因）");
+    }
+    fs.rmSync(cnDir, { recursive: true, force: true });
+    fs.rmSync(intlDir, { recursive: true, force: true });
+
     const authDir = path.join(process.env.APPDATA, "AutoClaw");
     fs.mkdirSync(authDir, { recursive: true });
     fs.writeFileSync(path.join(authDir, "auth.json"), JSON.stringify({ deviceId: "d".repeat(64), token: jwtOf("u77", Math.floor(Date.now() / 1000) + 86400), refreshToken: "rt-desktop" }), "utf8");
     const cands = discovery.scanAutoclaw();
-    assert(cands.length === 2 && cands.every((c) => c.uid === "u77"), "桌面登录态两区各产出候选（不猜地区）");
-    assert(cands[0].meta.deviceId === "d".repeat(64), "桌面导入带 deviceId 进 meta");
+    assert(cands.length === 2 && cands.every((c) => c.uid === "u77"), "旧版桌面登录态仍为两区各产出候选");
+    assert(cands[0].meta.deviceId === "d".repeat(64), "旧版桌面导入带 deviceId 进 meta");
     const imported = discovery.importCandidate(cands[0], "autoclaw");
     assert(!!imported.id, "桌面候选可导入");
     fs.rmSync(authDir, { recursive: true, force: true });
+    assert(credentialsMod.readDesktopLogin("autoclaw").ok === false, "无登录文件时安全返回未找到");
 
     console.log("AutoClaw e2e 全绿（对话/目录/余额/签到/刷新不回写/凭证缓存/登录/桌面导入）");
   } finally {

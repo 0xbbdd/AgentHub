@@ -581,44 +581,48 @@ function scanAll() {
   return [...scanTrae(), ...scanWorkBuddy(), ...scanRaccoon(), ...scanZcode(), ...scanQoder(), ...scanCatpaw(), ...scanAutoclaw(), ...scanCline()];
 }
 
-/** AutoClaw 本机登录态扫描：读 %APPDATA%/AutoClaw/auth.json（加密）→ ~/.openclaw-autoclaw/openclaw.json（明文 JWT）。
- *
- *  与参照实现同一条歧义的处置：两地（国内/国际构建）**共用同一个登录态文件**且文件无地区标记，
- *  不猜地区——对两个渠道各产出一份候选，用户在哪个渠道下点导入就得到哪一家的账号
- *  （猜错可见 = 上游 401，换一项重导即可）。 */
+/** AutoClaw 本机登录态扫描：新版两个官方目录按地区归属；旧版共享来源仍同时产出双区候选。 */
 function scanAutoclaw() {
   const out = [];
   const channels = ["autoclaw", ...(store.AUTOCLAW_INTL_ENABLED ? ["autoclaw_intl"] : [])]
     .filter((ch) => store.CHANNELS.some((c) => c.id === ch) && adapters.channelOn(ch));
   if (!channels.length) return out;
-  let login = null;
-  try {
-    login = require("./autoclaw/credentials.cjs").readDesktopLogin();
-  } catch (e) {
-    // 解密失败如实回报原因（常见：与客户端不同 Windows 用户 / Local State 缺失），两区各一条
+  const credentials = require("./autoclaw/credentials.cjs");
+  let logins;
+  try { logins = credentials.readDesktopLogins(); }
+  catch (e) {
+    // 兜底：readDesktopLogins 已逐地区吞错，走到这里说明是更外层的意外失败
     const reason = String((e && e.message) || e).slice(0, 90);
-    for (const ch of channels) {
-      out.push({ channel: ch, uid: "", name: "", token: "", refreshToken: "", source: "scan", encrypted: true, file: `AutoClaw 登录态：${reason}` });
-    }
-    return out;
+    return channels.map((channel) => ({ channel, uid: "", name: "", token: "", refreshToken: "", source: "scan", encrypted: true, file: `AutoClaw 登录态：${reason}` }));
   }
-  if (!login || !login.ok) return out;
-  const exp = (() => {
-    try { const p = util.jwtDecode(login.token); return p && p.exp ? p.exp * 1000 : 0; } catch { return 0; }
-  })();
-  for (const ch of channels) {
+  const errors = logins.errors || {};
+  const add = (channel, login) => {
+    if (!login || !login.ok || !channels.includes(channel)) return;
+    const exp = (() => { try { const p = util.jwtDecode(login.token); return p && p.exp ? p.exp * 1000 : 0; } catch { return 0; } })();
     out.push({
-      channel: ch,
+      channel,
       uid: login.uid,
       name: login.name || login.email || (login.uid ? `账号 ${String(login.uid).slice(-6)}` : ""),
       token: login.token,
       refreshToken: login.refreshToken,
       expiresAt: exp,
-      // desktop 标记 + deviceId（刷新/签到/登录接口的 device_id 来源）
-      meta: { desktop: true, ...(login.deviceId ? { deviceId: login.deviceId } : {}) },
+      meta: { desktop: true, ...(login.deviceId ? { deviceId: login.deviceId } : {}), ...(login.email ? { email: login.email } : {}) },
       source: "scan",
-      file: `%APPDATA%/AutoClaw/auth.json（${login.source}）`,
+      file: `%APPDATA%/${login.source}`,
     });
+  };
+  // 新版目录名本身就是地区信号，不能再复制到另一地区。
+  add("autoclaw", logins.autoclaw);
+  add("autoclaw_intl", logins.autoclaw_intl);
+  // 旧布局没有地区信息，保留历史行为：每个启用渠道各一条候选。
+  if (logins.legacy) for (const channel of channels) add(channel, logins.legacy);
+  // 读失败按地区如实出行（常见：与客户端不同 Windows 用户 / Local State 缺失）。
+  // 只在对应地区**没有**成功候选时才出，避免好账号被同一地区的错误行盖住；
+  // 旧布局是两区共用来源，读失败对每个尚无候选的渠道都算数。
+  for (const [product, channel] of [["autoclaw", "autoclaw"], ["autoclaw_intl", "autoclaw_intl"]]) {
+    if (!channels.includes(channel) || out.some((c) => c.channel === channel)) continue;
+    const reason = errors[product] || errors.legacy;
+    if (reason) out.push({ channel, uid: "", name: "", token: "", refreshToken: "", source: "scan", encrypted: true, file: `AutoClaw 登录态：${reason}` });
   }
   return out;
 }
@@ -762,12 +766,16 @@ function currentLocalLogins() {
     if (login.uid) out.catpaw = { uid: login.uid, name: String(login.loginName || "") };
   } catch { /* 同上 */ }
   try {
-    // AutoClaw 两地共用同一个登录态文件（无地区标记），两键同值——徽标只是「本机有登录态」的提示
-    const login = require("./autoclaw/credentials.cjs").readDesktopLogin();
-    if (login && login.ok && login.uid) {
-      const name = String(login.name || login.email || "");
-      out.autoclaw = { uid: login.uid, name };
-      if (store.AUTOCLAW_INTL_ENABLED) out.autoclaw_intl = { uid: login.uid, name };
+    // 新版两个官方目录各自带地区标记，按地区点亮徽标；旧布局无地区信息，两键同值
+    //（徽标只是「本机有登录态」的提示）。
+    const logins = require("./autoclaw/credentials.cjs").readDesktopLogins();
+    for (const [channel, login] of [["autoclaw", logins.autoclaw], ["autoclaw_intl", logins.autoclaw_intl]]) {
+      if (login && login.ok && login.uid) out[channel] = { uid: login.uid, name: String(login.name || login.email || "") };
+    }
+    if (logins.legacy && logins.legacy.ok && logins.legacy.uid) {
+      const name = String(logins.legacy.name || logins.legacy.email || "");
+      out.autoclaw = { uid: logins.legacy.uid, name };
+      if (store.AUTOCLAW_INTL_ENABLED) out.autoclaw_intl = { uid: logins.legacy.uid, name };
     }
   } catch { /* 同上 */ }
   try {
