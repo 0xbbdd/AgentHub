@@ -857,7 +857,9 @@ function switchWorkbuddyAccount(acc, opts) {
   const accountFor = { uid: acc.uid, name: acc.name, expiresAt: acc.expires_at, tokenType: acc.meta && acc.meta.tokenType };
   const merged = encrypted ? mergeAuthFieldsEncrypted(json, accountFor, secrets) : mergeAuthFields(json, accountFor, secrets);
   try { fs.mkdirSync(path.dirname(file), { recursive: true }); } catch {}
-  const tmp = `${file}.tmp`;
+  // 中转名带 pid：本文件另外两处原子写（Qoder/Claude 侧）早就带 pid，只有 WorkBuddy 这处落的是
+  // 用户家目录里的真实登录文件——两个实例同刻切号时固定名会互相踩
+  const tmp = `${file}.tmp.${process.pid}`;
   try {
     fs.writeFileSync(tmp, JSON.stringify(merged, null, 2), "utf8");
     fs.renameSync(tmp, file);

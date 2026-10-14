@@ -36,7 +36,9 @@ function loadManifest() {
 function saveManifest(m) {
   m.updatedAt = new Date().toISOString();
   const p = manifestFile();
-  const tmp = p + ".tmp";
+  // 中转名带 pid：台账落在两个安装共享的 ~/.agent_skills，固定名会让两边互相把对方的 .tmp
+  // rename 走（renameSync ENOENT），落进台账的就成了别人的半成品
+  const tmp = `${p}.tmp.${process.pid}`;
   fs.writeFileSync(tmp, JSON.stringify(m, null, 2), "utf-8");
   fs.renameSync(tmp, p);
 }

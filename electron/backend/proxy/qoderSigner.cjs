@@ -130,7 +130,7 @@ function buildPatchedModule(product, loc) {
   if (fs.existsSync(out)) return out;
   const text = fs.readFileSync(loc.obf, "utf8");
   const patched = patchText(text);
-  const tmp = out + ".tmp";
+  const tmp = `${out}.tmp.${process.pid}`;
   fs.writeFileSync(tmp, patched, "utf8");
   fs.renameSync(tmp, out);
   // 清理旧版本缓存（同渠道只保留最新一份，避免 33MB 累积）

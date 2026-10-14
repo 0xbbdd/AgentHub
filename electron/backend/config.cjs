@@ -575,7 +575,9 @@ function saveConfig(cfg, opts = {}) {
     disk.webdavShared.password = encryptSecret(disk.webdavShared.password);
     disk.webdavShared.encryptionPassphrase = encryptSecret(disk.webdavShared.encryptionPassphrase);
   }
-  const tmp = p + ".tmp";
+  // 中转名带 pid，与本仓其余原子写同形（memory/config.cjs、memory/store.cjs、synonyms.cjs、
+  // inject.cjs 早就是 `.tmp.${process.pid}`）：固定名时两个写入者会互相把对方的 .tmp rename 走
+  const tmp = `${p}.tmp.${process.pid}`;
   fs.writeFileSync(tmp, JSON.stringify(disk, null, 2), "utf8");
   fs.renameSync(tmp, p);
   return { ok: true, message: "设置保存成功" };
