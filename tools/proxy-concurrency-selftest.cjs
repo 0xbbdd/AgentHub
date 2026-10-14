@@ -127,7 +127,8 @@ async function main() {
     // ===== B2：两个候选渠道都满 → 才 429，且文案如实归因到网关并发 =====
     hold.wba.on = true;
     let p4 = call();
-    check("B2 前置：R4 已到 wba（第二渠道在途也占满）", await until(() => hits.wba >= 1), JSON.stringify(hits));
+    // 判据必须是「第 2 次」命中：第 1 次是 R2 贡献的，轮询它成立不代表 R4 已占到槽位
+    check("B2 前置：R4 已到 wba（第二渠道在途也占满）", await until(() => hits.wba >= 2), JSON.stringify(hits));
     let r5 = await call();
     let body5 = await r5.text();
     check("B2 全部候选都满才 429", r5.status === 429, `${r5.status} ${body5.slice(0, 200)}`);

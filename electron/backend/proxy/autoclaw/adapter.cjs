@@ -245,8 +245,9 @@ function makeAutoClaw(channel, deps) {
         });
       } catch (e) {
         // 流中断：已出内容则如实上报，未出内容交给外层换号。
-        // 注意「已出内容 + 首字节预算到点」这个组合已不可能出现：预算只在**首个 SSE 事件**到达时
-        // 解除，而事件一旦到达就说明首字节达标；到点必然意味着一个事件都没到（sentDelta 也为假）。
+        // 「已出内容 + 首字节预算到点」正常情况下不会出现：预算在**首个 SSE 事件**到达时即解除，
+        // 到点必然意味着一个事件都没到（sentDelta 也为假）。唯一例外是首帧恰好在预算到点前一瞬
+        // 处理完的微任务竞态——此时按流中断上报即可，明细里的 notice:truncated 仍会留痕。
         if (sentDelta) {
           emit({ type: "error", status: 502, message: `流中断：${String((e && e.message) || e).slice(0, 120)}` });
           return result;
