@@ -118,7 +118,11 @@ function toInternal(raw) {
     const blocks = Array.isArray(m.content) ? m.content : null;
 
     if (!blocks) {
-      messages.push({ role, content: typeof m.content === "string" ? m.content : "" });
+      // 非字符串的 content（null / 数字 / 对象）与空串一样没有信息量：上游对
+      // {role:"user",content:""} 的容忍度不一致（部分直接 400），别把空消息发出去
+      const c = typeof m.content === "string" ? m.content : "";
+      if (!c) continue;
+      messages.push({ role, content: c });
       continue;
     }
 
@@ -164,8 +168,13 @@ function toInternal(raw) {
       else if (images.length) messages.push({ role: "user", content: images });
       continue;
     }
-    const msg = { role, content: textParts.join("") };
-    if (images.length) msg.content = [{ type: "text", text: msg.content }, ...images];
+    // 所有块都被丢弃（纯 thinking / redacted_thinking / document / 未知类型）时 textParts 为空，
+    // 此时不能产出一条空消息：它不带任何信息，而上游对空 content 的容忍度不一致（部分直接 400）。
+    // 有 tool_calls 或图片时照常保留——那些是实质内容，不是空壳
+    const text = textParts.join("");
+    if (!text && !images.length && !toolCalls.length) continue;
+    const msg = { role, content: text };
+    if (images.length) msg.content = [{ type: "text", text }, ...images];
     if (toolCalls.length) msg.tool_calls = toolCalls;
     messages.push(msg);
   }
@@ -267,8 +276,13 @@ function safeStringify(v) {
  *  我们复用网关既有的 length/4 估算口径，保证与它自己的兜底同量级、不出现"两边数差很多" */
 function countTokens(raw) {
   const util = require("../util.cjs");
-  const r = toInternal(raw);
-  const text = r.ok ? JSON.stringify(r.body.messages) : JSON.stringify(raw || {});
+  // 官方把 count_tokens 列为可选端点，它的请求体里通常**没有** max_tokens（那不是它的必填项），
+  // 而 toInternal 按 Messages 协议要求它必填——直接调会永远走 !ok 分支、拿原始 body 估算，
+  // 口径与真实请求对不上（system 合并、块展平、图片展开都没算进去）。补一个占位值让它走
+  // 同一条转换链，数字才与真正发出去的那次请求同量级
+  const src = raw && typeof raw === "object" ? raw : {};
+  const r = toInternal({ ...src, max_tokens: Number(src.max_tokens) > 0 ? src.max_tokens : 1 });
+  const text = r.ok ? JSON.stringify(r.body.messages) : JSON.stringify(src);
   const n = util.estimateTokens(text);
   return { input_tokens: n };
 }

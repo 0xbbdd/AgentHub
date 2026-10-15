@@ -453,7 +453,9 @@ function mergeSnapshot(snap, channel, opts) {
     //  ② 采纳时把 noteAt 一并落回，本机时钟才追平远端；不追平每轮都会重发同一条备注、
     //    updated 计数虚高。
     const remoteNote = ra.meta && typeof ra.meta.note === "string" ? ra.meta.note.trim() : null;
-    const localNote = local.meta && typeof local.meta.note === "string" ? local.meta.note : "";
+    // 本机侧同样 trim 再比：store.noteAccount 写入时就 trim 过，但用户手改库可能留下首尾空白，
+    // 一边 trim 一边不 trim 会让同一条备注永远「不等」、每轮同步都白写一次
+    const localNote = local.meta && typeof local.meta.note === "string" ? local.meta.note.trim() : "";
     if (remoteNote !== null && remoteNote !== localNote) {
       const remoteNoteAt = Number(ra.meta.noteAt) || raUpdatedAt;
       const localNoteAt = Number(local.meta && local.meta.noteAt) || localUpdatedAt;

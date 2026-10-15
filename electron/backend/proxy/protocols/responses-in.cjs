@@ -45,7 +45,7 @@ function toInternal(raw) {
     notes.push("请求用的是 messages 而非 input（Responses 协议里没有这种写法），已按 chat 形态接收");
   }
 
-  const body = { model, messages, stream: !!raw.stream };
+  const body = { model, messages: mergeAdjacentToolCalls(messages), stream: !!raw.stream };
   if (Number.isFinite(Number(raw.max_output_tokens)) && Number(raw.max_output_tokens) > 0) body.max_tokens = Math.floor(Number(raw.max_output_tokens));
   if (raw.temperature != null) body.temperature = Number(raw.temperature);
   if (raw.top_p != null) body.top_p = Number(raw.top_p);
@@ -93,6 +93,27 @@ function toInternal(raw) {
     if (raw[f] !== undefined) notes.push(`Responses 字段 ${f} 已收下并忽略（网关无对应能力）`);
   }
   return { ok: true, body, notes };
+}
+
+/** 相邻的「纯 tool_calls」assistant 消息合并成一条。
+ *  Codex 并行工具调用会连续发多个 function_call item，逐个成条会得到
+ *  `[assistant(tc1), assistant(tc2), tool(out1), tool(out2)]`——而部分上游要求 role:tool
+ *  的消息紧跟**同一条** assistant 的 tool_calls，中间夹一条 assistant 就 400。
+ *  只合并「相邻 + 都是 assistant + 都只有 tool_calls（content 为空）」的消息：
+ *  带正文的 assistant 消息是用户或模型的实质输出，合并会改变语义，一律不碰。 */
+function mergeAdjacentToolCalls(messages) {
+  const pureToolCalls = (m) =>
+    !!m && m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length > 0 && !m.content;
+  const out = [];
+  for (const m of messages) {
+    const prev = out[out.length - 1];
+    if (pureToolCalls(m) && pureToolCalls(prev)) {
+      prev.tool_calls = [...prev.tool_calls, ...m.tool_calls];
+      continue;
+    }
+    out.push(m);
+  }
+  return out;
 }
 
 /** instructions：string 或 ContentItem[]，与 system 同处理——拼成一条 */

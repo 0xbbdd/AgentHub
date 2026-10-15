@@ -178,7 +178,9 @@ async function doBatchDelete() {
   batchDelBusy.value = true;
   try {
     const r = await api.proxyKeysDeleteBatch(ids);
-    const done = r.ok !== false;
+    // r 缺失（IPC 返回了非预期形状）不能当成成功：原来是 `r.ok !== false`，
+    // undefined !== false 为真，会弹「已删除 N 个」而实际一条都没删
+    const done = !!r && r.ok !== false;
     if (done) ElMessage.success(`已删除 ${r.removed ?? ids.length} 个 Key`);
     else ElMessage.error(r.message || "批量删除失败");
     batchDelOpen.value = false;
