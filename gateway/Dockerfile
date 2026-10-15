@@ -46,10 +46,10 @@ EXPOSE 9527 9528
 RUN mkdir -p /data && chown node:node /data
 USER node
 
-# 健康检查指向进程存活（/api/status 是纯状态读取，恒可用）；
-# 业务就绪度（有可用账号）走 /api/readyz，不参与容器健康判定——空池是合法状态
+# 健康检查指向进程存活（/api/livez 恒 200）；
+# 业务就绪度（有在线账号）走 /api/readyz，不参与容器健康判定——空池是合法状态
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD curl -fsS "http://127.0.0.1:${AGENTHUB_ADMIN_PORT}/api/status" || exit 1
+    CMD curl -fsS "http://127.0.0.1:${AGENTHUB_ADMIN_PORT}/api/livez" || exit 1
 
 # 入口在 /app/gateway/src/index.cjs（入口内 PROJECT_ROOT 取其上两级 = /app）
 ENTRYPOINT ["/usr/bin/tini", "--", "node", "gateway/src/index.cjs"]

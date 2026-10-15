@@ -1343,6 +1343,37 @@ function stopAsync() {
   });
 }
 
+/** 优雅停机（容器 SIGTERM 专用）：先摘 runtime（服务停止期间到达的连接一律 503）→ 停收新连接
+ *  （close 不毙在途）→ 等在途请求自然结束 → 超时才强制断开。stop()/stopAsync() 都立刻
+ *  closeAllConnections，流式响应会被拦腰掐断——桌面重启路径需要那个语义，保持不动；只加不改。 */
+function drainAndStop(opts) {
+  if (!runtime) return Promise.resolve({ ok: true, drained: true, active: 0 });
+  const r = runtime;
+  runtime = null;
+  const timeoutMs = Math.max(0, Number(opts && opts.timeoutMs) || 15000);
+  return new Promise((resolve) => {
+    const deadline = Date.now() + timeoutMs;
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      try { r.server.closeAllConnections && r.server.closeAllConnections(); } catch { /* 已关 */ }
+      resolve({ ok: true, drained: r.active <= 0, active: r.active });
+    };
+    try {
+      r.server.close(() => finish()); // 回调 = 现存连接全部自然结束
+    } catch {
+      return finish();
+    }
+    const tick = () => {
+      if (settled) return;
+      if (r.active <= 0 || Date.now() >= deadline) return finish();
+      setTimeout(tick, 100).unref();
+    };
+    tick();
+  });
+}
+
 function status() {
   return {
     running: !!runtime,
@@ -1353,7 +1384,7 @@ function status() {
   };
 }
 
-module.exports = { start, stop, stopAsync, status, channelHealthSnapshot, classifyUpstream,
+module.exports = { start, stop, stopAsync, drainAndStop, status, channelHealthSnapshot, classifyUpstream,
   // 成本感知路由纯函数（tools/proxy-cost-route-selftest.cjs / proxy-empty-pool-route-selftest.cjs 行为断言用）
   channelScore, costFirstScore, tierGroups, cmpByOrder, routeOrderOf, pickByOrder, routeUsable,
   // 故障转移规模纯函数（tools/proxy-failover-selftest.cjs 边界断言用）

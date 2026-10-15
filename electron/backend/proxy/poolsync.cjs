@@ -25,6 +25,7 @@ const oplog = require("./oplog.cjs");
 const zip = require("../zip.cjs");
 const events = require("./events.cjs");
 const util = require("./util.cjs");
+const platform = require("./platform/index.cjs");
 
 const POOL_DIR = "pool";
 const ZIP_ENTRY = "accounts.json";
@@ -796,7 +797,7 @@ function checkAborted() {
 }
 
 function appVersion() {
-  try { return require("electron").app.getVersion(); } catch { return ""; }
+  return platform.version();
 }
 
 /** 统一 WebDAV 密码改动后调用：令历史上传记账失效，下次同步用新密码重打包 */

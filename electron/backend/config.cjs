@@ -22,21 +22,54 @@ function isPortable() {
   return !!process.env.PORTABLE_EXECUTABLE_DIR;
 }
 
-// WebDAV 密码用系统级密钥加密落盘（safeStorage 不可用就降级明文）。
-// 渲染层永远只拿掩码，真值留在主进程
+// 凭据信封按前缀分派，加密后端二选一（桌面 safeStorage / headless AES）：
+//   enc:v1: — Electron safeStorage（Windows 下即 DPAPI），OS 用户绑定、原理上不可跨机
+//   enc:v2: — AES-256-GCM，密钥取自 AGENTHUB_SECRET_KEY，桌面与 headless 形态通用
+// 两种前缀并存是刻意的：统一成"可移植信封"只会退化成把密钥一起搬走（等于没有加密）。
+// 无 safeStorage 且无 key 时保持明文降级（自测环境依赖此行为）；生产形态由网关入口强制 key
 let safeStorage = null;
 try { safeStorage = require("electron").safeStorage; } catch { /* 自测环境无 electron */ }
 const ENC_PREFIX = "enc:v1:";
+const AES_PREFIX = "enc:v2:";
+
+function aesKey() {
+  const secret = String(process.env.AGENTHUB_SECRET_KEY || "");
+  return secret ? crypto.createHash("sha256").update(secret).digest() : null;
+}
+
+/** 是否本模块产出的密文信封（敏感 meta 判定用：enc:v2: 同样算密文，不能当明文剥掉） */
+function isEncrypted(v) {
+  return typeof v === "string" && (v.startsWith(ENC_PREFIX) || v.startsWith(AES_PREFIX));
+}
 
 function encryptSecret(plain) {
   const s = String(plain || "");
-  if (!s || s.startsWith(ENC_PREFIX)) return s; // 空值或已是密文不重复加密
-  if (!safeStorage || !safeStorage.isEncryptionAvailable()) return s;
-  return ENC_PREFIX + safeStorage.encryptString(s).toString("base64");
+  if (!s || isEncrypted(s)) return s; // 空值或已是密文不重复加密
+  if (safeStorage && safeStorage.isEncryptionAvailable()) {
+    return ENC_PREFIX + safeStorage.encryptString(s).toString("base64");
+  }
+  const key = aesKey();
+  if (!key) return s; // 明文降级（历史行为；生产形态的 key 由网关入口把关）
+  const nonce = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, nonce);
+  const ct = Buffer.concat([cipher.update(s, "utf8"), cipher.final()]);
+  return AES_PREFIX + [nonce, cipher.getAuthTag(), ct].map((b) => b.toString("base64url")).join(".");
 }
 
 function decryptSecret(stored) {
   const s = String(stored || "");
+  if (s.startsWith(AES_PREFIX)) {
+    const key = aesKey();
+    if (!key) return ""; // 密钥缺失/不符：与 enc:v1: 跨环境解不开同语义，交由上层"保留磁盘密文"的保护兜底
+    try {
+      const [n, tag, ct] = s.slice(AES_PREFIX.length).split(".");
+      const d = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(n, "base64url"));
+      d.setAuthTag(Buffer.from(tag, "base64url"));
+      return Buffer.concat([d.update(Buffer.from(ct, "base64url")), d.final()]).toString("utf8");
+    } catch {
+      return ""; // 密钥不符或密文损坏，让用户重填
+    }
+  }
   if (!s.startsWith(ENC_PREFIX)) return s; // 明文（降级环境存的）直接用
   if (!safeStorage || !safeStorage.isEncryptionAvailable()) return "";
   try {
@@ -658,7 +691,7 @@ function applyAutoStart(cfg) {
 
 module.exports = {
   dataDir, configPath, hubDir, ensureHub, loadConfig, saveConfig, defaultConfig, ENC_PREFIX,
-  getUpdateNotified, setUpdateNotified, isPortable, encryptSecret, decryptSecret, applyAutoStart,
+  getUpdateNotified, setUpdateNotified, isPortable, encryptSecret, decryptSecret, isEncrypted, applyAutoStart,
   loadSharedWebdav, saveSharedWebdav, clearSharedWebdav, maskedSharedWebdav, moduleWebdav, sharedEncryptionPassphrase, PASSWORD_MASK,
   normalizeHm, normalizeJitter,
   saveConfigFromUI, OUT_OF_BAND_PROXY_FIELDS,

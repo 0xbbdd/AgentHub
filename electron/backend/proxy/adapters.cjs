@@ -9,6 +9,7 @@ const store = require("./store.cjs");
 const util = require("./util.cjs");
 const raccoonAuth = require("./raccoonAuth.cjs");
 const config = require("../config.cjs");
+const platform = require("./platform/index.cjs");
 
 function proxyConfig() {
   try {
@@ -4062,9 +4063,8 @@ const zcode = {
       region: String((cc && cc.region) || "cn"),
     };
 
-    // ② 调起独立沙箱验证窗
-    const zcodeCapture = require("./zcodeCapture.cjs");
-    const cap = await zcodeCapture.solveCaptcha(captchaCfg, { forceShow: true });
+    // ② 调起人机校验（桌面 = 沙箱验证窗；无图形环境返回 needCaptcha，由调用方如实标记人工）
+    const cap = await platform.solveCaptcha(captchaCfg, { forceShow: true });
     if (!cap.ok) {
       return { ok: false, message: cap.message || "人机校验未完成" };
     }

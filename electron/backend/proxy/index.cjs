@@ -5,8 +5,8 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto"); // JSON 导入账号的 uid 派生用（Node 22 全局 crypto 是 WebCrypto，无 createHash）
-const { shell } = require("electron");
 const config = require("../config.cjs");
+const platform = require("./platform/index.cjs");
 const store = require("./store.cjs");
 const rules = require("./rules.cjs");
 const pool = require("./pool.cjs");
@@ -24,7 +24,6 @@ const ccswitch = require("./ccswitch.cjs");
 const oplog = require("./oplog.cjs");
 const xlsx = require("./xlsx.cjs"); // xlsx 写入器在本目录（v1.57.0 误写 ../xlsx.cjs，顶层 require 抛错 → 启动即崩）
 const zcodeLocal = require("./zcodeLocal.cjs");
-const zcodeCapture = require("./zcodeCapture.cjs");
 const zip = require("../zip.cjs");
 // 休眠唤醒守卫：避免唤醒瞬间逾期定时任务集中爆发（见 backend/wakeGuard.cjs 的实测说明）
 const wakeGuard = require("../wakeGuard.cjs");
@@ -216,7 +215,7 @@ async function checkinBatch({ channel, accountId, action, interactive }) {
           // 不弹窗，该行如实标「需人工过码」，UI 提示用户手动领取
           if (r && r.needCaptcha && r.captcha && r.captcha.sceneId && typeof ad.checkin === "function") {
             if (interactive) {
-              const cap = await zcodeCapture.solveCaptcha(r.captcha);
+              const cap = await platform.solveCaptcha(r.captcha);
               if (cap.ok) {
                 r = await ad.checkin(acc, secrets, { captcha: { verifyParam: cap.verifyParam, region: cap.region || r.captcha.region, sceneId: r.captcha.sceneId }, planId: r.planId });
               } else {
@@ -446,11 +445,18 @@ async function boot() {
   }
 }
 
-function shutdown() {
+/** 停掉本模块持有的全部定时设施与在途流程（额度刷新 / 自动签到 / 号池同步 / 在途 OAuth）。
+ *  shutdown 与容器停机序列共用——网关监听停不停由调用方决定（桌面 shutdown 停 server；
+ *  容器先 drain 在途请求再关） */
+function stopTimers() {
   credits.stopScheduler();
   stopCheckinAuto();
   poolsched.stop();
   discovery.cancelOAuth();
+}
+
+function shutdown() {
+  stopTimers();
   server.stop();
 }
 
@@ -560,7 +566,7 @@ function openAuthWindow(opts) {
   // 新开窗（含 target=_blank / window.open）：深链接管捕获，其余一律交系统浏览器打开
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^office-raccoon:\/\//i.test(url)) capture(url);
-    else if (isAuthPage(url)) shell.openExternal(url).catch(() => {});
+    else if (isAuthPage(url)) platform.openExternal(url);
     return { action: "deny" };
   });
   win.webContents.on("will-navigate", (ev, url) => {
@@ -961,7 +967,7 @@ function register(ipcMain) {
     }, { openAuthWindow }, { captchaVerifyParam, vendor });
     // 带授权地址的渠道在系统浏览器打开（小浣熊走内嵌授权窗，不回 url——深链回调绝不能进浏览器
     // 再被系统交给官方客户端：授权码是一次性的，官方客户端消费掉 AgentHub 就永远收不到回调）
-    if (r.ok && r.url) await shell.openExternal(r.url);
+    if (r.ok && r.url) await platform.openExternal(r.url);
     // port 一并回传：AutoClaw 国际版回环登录会占用 z.ai 登记的白名单端口，前端展示/排障需要它；
     // userCode 一并回传：Cline 设备授权要显示「用户码」供手动输码（verification_uri_complete
     // 已带码，但用户改用普通授权页时仍需要这串码）
@@ -1261,11 +1267,11 @@ function register(ipcMain) {
   // ===== 规则文件 / 目录 / 安全 =====
   ipcMain.handle("proxy_rules_list", handle(() => rules.list()));
   ipcMain.handle("proxy_open_rules_dir", handle(async () => {
-    await shell.openPath(rules.rulesDir());
+    await platform.openPath(rules.rulesDir());
     return ok({});
   }));
   ipcMain.handle("proxy_open_data_dir", handle(async () => {
-    await shell.openPath(store.proxyDir());
+    await platform.openPath(store.proxyDir());
     return ok({});
   }));
   ipcMain.handle("proxy_vault_status", handle(() => ({
@@ -1294,4 +1300,4 @@ function register(ipcMain) {
 }
 
 // 计划判定与抖动的纯函数一并导出：供自测直接验证跨午夜 / 不补欠账 / 已完成等分支
-module.exports = { boot, shutdown, setRuntime, register, settings, checkinJitterOffset, checkinPlannedAt, checkinDueKey };
+module.exports = { boot, shutdown, stopTimers, setRuntime, register, settings, checkinJitterOffset, checkinPlannedAt, checkinDueKey };

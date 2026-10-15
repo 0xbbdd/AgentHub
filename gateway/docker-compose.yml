@@ -1,17 +1,19 @@
 # AgentHub 反代网关 Docker 部署
 #
-# 启动: docker compose -f gateway/docker-compose.yml up -d --build
-# 网关: http://<主机>:9527/v1 （OpenAI / Anthropic / Responses 兼容）
-# 管理: http://<主机>:9528/api （管理 REST API）
+# 启动（在仓库根执行）：
+#   AGENTHUB_SECRET_KEY=$(openssl rand -base64 32) docker compose -f gateway/docker-compose.yml up -d --build
+# 网关：http://<主机>:9527/v1 （OpenAI / Anthropic / Responses 三协议兼容）
+# 管理：http://127.0.0.1:9528/api （默认只绑宿主本机；远程管理请前置带 TLS 的反向代理）
 #
-# 与桌面版关联：
-#   1. 配置同一个 WebDAV/S3 服务器（webdavShared），号池自动同步
-#   2. 或手动在桌面版导出号池 JSON，在 Docker 版通过管理 API 导入
+# 账号从哪来（两条路，详见仓库 docs 下的部署文档）：
+#   ① 配同一个 WebDAV/S3：PUT /api/config/webdav 写入后号池自动同步（推荐）
+#   ② POST /api/accounts/import 导入 JSON（桌面版导出的快照或手工凭据）
+# 注意：与桌面版共用同一个数据卷拿不到凭据——桌面凭据是 safeStorage 密文，容器解不开
 #
 # 环境变量：
-#   AGENTHUB_SECRET_KEY     凭据加密密钥（生产必须设置，否则明文存储）
-#   AGENTHUB_PROXY_PORT     网关端口（默认 9527）
-#   AGENTHUB_ADMIN_PORT     管理 API 端口（默认 9528）
+#   AGENTHUB_SECRET_KEY    凭据加密密钥（必填；未设置时入口拒绝启动）
+#   AGENTHUB_ADMIN_TOKEN   管理 API 鉴权令牌（未设置时管理面只绑容器回环）
+#   TZ                     业务时区（签到时刻与日额度重置按本地时间计算）
 
 services:
   agenthub-gateway:
@@ -22,16 +24,20 @@ services:
     container_name: agenthub-gateway
     restart: unless-stopped
     ports:
-      - "9527:9527"    # 反代网关（客户端连接此端口）
-      - "9528:9528"    # 管理 API（管理操作走此端口）
+      - "${AGENTHUB_PROXY_PORT:-9527}:${AGENTHUB_PROXY_PORT:-9527}"                 # 反代网关（客户端连接）
+      - "127.0.0.1:${AGENTHUB_ADMIN_PORT:-9528}:${AGENTHUB_ADMIN_PORT:-9528}"     # 管理 API 默认只绑宿主本机
     environment:
-      AGENTHUB_SECRET_KEY: ${AGENTHUB_SECRET_KEY:-}
+      AGENTHUB_SECRET_KEY: ${AGENTHUB_SECRET_KEY:?必须先设置（openssl rand -base64 32）}
+      AGENTHUB_ADMIN_TOKEN: ${AGENTHUB_ADMIN_TOKEN:-}
       AGENTHUB_PROXY_PORT: ${AGENTHUB_PROXY_PORT:-9527}
       AGENTHUB_ADMIN_PORT: ${AGENTHUB_ADMIN_PORT:-9528}
+      TZ: ${TZ:-Asia/Shanghai}
     volumes:
-      - ./data:/data
-    # 可选：Qoder 渠道需要挂载本机客户端目录（取消注释并按实际路径调整）
-    # volumes:
-    #   - ./data:/data
-    #   - "/c/Users/<user>/AppData/Local/Programs/Qoder CN:/qoder-cn:ro"
-    #   - "/c/Users/<user>/AppData/Roaming/com.qodercn.app.stable:/qoder-cn-data:ro"
+      # 独立数据目录：先 mkdir -p gateway-data && sudo chown 1000:1000 gateway-data
+      - ../gateway-data:/data
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    deploy:
+      resources:
+        limits: { memory: 512M }
