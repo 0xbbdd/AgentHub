@@ -454,10 +454,13 @@ function scanRaccoon() {
   const token = String(parsed.access_token || "").trim();
   if (!token) return out;
   const dec = raccoonJwtPayload(token);
-  // uid 取小浣熊 JWT 的 iss（账户 ID，十六进制缩写，跨登录稳定 → 号池去重正确）；
-  // 缺失才退回 sid（会话 ID，每次登录变化）。util.jwtDecode 只认 data.id/auth_id/sub/user_id，
-  // 小浣熊顶层 iss/sid/name 读不出，故本地解析。
-  const uid = String(dec.iss || dec.sid || "");
+  // uid 取小浣熊 JWT 的 sub（账号 ID，每账号稳定唯一 → 号池去重正确）。
+  // iss 是签发方常量（"xiaohuanxiong.com/iam"，所有账号相同）**不是**账号 ID；sid 是登录会话 ID。
+  // 口径必须与 raccoonAuth.tokenUid 完全一致：否则同一条凭据「OAuth 登录落库」与「本机扫描」
+  // 会算出两个不同 uid —— 同一账号在号池里出现两条，且 store.open() 的一次性历史纠正
+  // 会被下一次扫描重新打回域名形态（来回震荡，永远修不干净）。
+  // util.jwtDecode 只认 data.id/auth_id/sub/user_id，小浣熊顶层 sub/iss/sid/name 读不出，故本地解析。
+  const uid = String(dec.sub || dec.uid || dec.id || dec.iss || "");
   const name = String(parsed.name || parsed.nickname || dec.name || (uid ? `账号 ${uid}` : ""));
   out.push({
     channel: "raccoon",
@@ -475,7 +478,7 @@ function scanRaccoon() {
   return out;
 }
 
-/** 小浣熊 JWT payload 本地解析（不进 store，仅扫描用）：读顶层 exp/iss/jti/name/sid */
+/** 小浣熊 JWT payload 本地解析（不进 store，仅扫描用）：读顶层 exp/sub/iss/jti/name/sid */
 function raccoonJwtPayload(token) {
   try {
     const t = String(token || "").trim().replace(/^Bearer\s+/i, "");
@@ -1304,9 +1307,18 @@ async function beginRaccoonOAuth(channel, onDone, helpers) {
         finishOAuth({ ok: false, message: cred.message });
         return { ok: false, message: cred.message };
       }
-      // uid 从 access_token 的 iss 解（与 scanRaccoon 同口径），office_identity 入 meta
+      // uid 从 access_token 的 sub 解（账号 ID；iss 是签发方常量），office_identity 入 meta
       const uid = raccoonAuth.tokenUid(cred.token) || "";
-      const existing = uid ? store.listAccounts(channel).find((a) => a.uid === uid) : null;
+      // 二次判别：历史版本把 iss 常量当 uid 存过库，那些行 uid 全是同一个域名 ⇒ 只按 uid 判等会把
+      // 新号误判成「已存在」而只更新不新增。officeIdentity 是本账号真正身份，用它区分；
+      // 两边都为空时退回按 uid 判等（老数据行为不变）。
+      const sameAccount = (a) => {
+        if (!a || String(a.uid || "") !== String(uid)) return false;
+        const oldOi = String((a.meta && a.meta.officeIdentity) || "");
+        const newOi = String(cred.officeIdentity || "");
+        return oldOi && newOi ? oldOi === newOi : true;
+      };
+      const existing = uid ? store.listAccounts(channel).find(sameAccount) : null;
       const seed = crypto.createHash("sha256").update(`agenthub:raccoon:${uid || "anon"}`).digest("hex");
       const deviceId = `${seed.slice(0, 8)}-${seed.slice(8, 12)}-4${seed.slice(13, 16)}-a${seed.slice(17, 20)}-${seed.slice(20, 32)}`;
 

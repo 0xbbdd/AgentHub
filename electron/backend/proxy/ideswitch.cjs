@@ -1010,7 +1010,8 @@ function ideSwitchStatus() {
   } catch { /* 探测失败按未安装处理 */ }
   out.channels.trae = { installed: out.traeInstalled, file: "", uid: "" };
   // 小浣熊：~/.box-agent 目录在即视为已安装（官方「退出登录」会删 auth.json，但号池凭据完整、
-  //   切号时可重建文件——不能因文件缺失把切号按钮禁掉）；uid 取 JWT 的 iss（与 scanRaccoon 同口径）
+  //   切号时可重建文件——不能因文件缺失把切号按钮禁掉）；uid 取 JWT 的 sub（账号 ID，与
+  //   scanRaccoon / raccoonAuth.tokenUid 同口径；iss 是签发方常量，不是账号 ID）
   try {
     const rf = raccoonAuthFile();
     const home = path.dirname(path.dirname(rf)); // ~/.box-agent
@@ -1020,7 +1021,7 @@ function ideSwitchStatus() {
       if (rjson && rjson.access_token) {
         const p = String(rjson.access_token).split(".");
         const payload = p.length >= 2 ? JSON.parse(Buffer.from(p[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")) : null;
-        ruid = String((payload && (payload.iss || payload.sid)) || "");
+        ruid = String((payload && (payload.sub || payload.uid || payload.id || payload.iss)) || "");
       }
     } catch { /* 未登录 / 文件不存在 */ }
     out.raccoonInstalled = fs.existsSync(rf) || fs.existsSync(home);

@@ -237,6 +237,39 @@ function open() {
   try {
     db.exec("ALTER TABLE usage_requests ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0");
   } catch { /* 已存在 */ }
+  // ===== 一次性数据迁移：小浣熊账号 uid 由「签发方域名」纠正为账号 ID（sub）=====
+  // 旧版 tokenUid 取 JWT 的 iss（= "xiaohuanxiong.com/iam" 签发方常量，所有账号都相同），
+  // 于是历史行 uid 被写成该域名：号池里加不进第二个小浣熊号，跨机还会把不同账号当同一个
+  // 互相覆盖凭据。这里只把「uid 恰好等于该域名」的行用 token 里的 sub 纠正，别的形态不动；
+  // 解不开 token 或没有 sub 则跳过（下次启动再试）。
+  try {
+    const RACCOON_ISS_UID = "xiaohuanxiong.com/iam";
+    const rows = db.prepare("SELECT id, uid, name, token_enc FROM accounts WHERE channel = 'raccoon' AND uid = ?").all(RACCOON_ISS_UID);
+    if (rows.length) {
+      const subOf = (tok) => {
+        try {
+          const parts = String(tok || "").split(".");
+          if (parts.length < 2) return "";
+          const pl = JSON.parse(Buffer.from(parts[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
+          return String((pl && pl.sub) || "");
+        } catch { return ""; }
+      };
+      const updUid = db.prepare("UPDATE accounts SET uid = ? WHERE id = ?");
+      const updName = db.prepare("UPDATE accounts SET name = ? WHERE id = ?");
+      let fixed = 0;
+      for (const row of rows) {
+        const sub = subOf(config.decryptSecret(row.token_enc));
+        if (!sub || sub === RACCOON_ISS_UID) continue;
+        updUid.run(sub, row.id);
+        // 名字若还是按旧 uid 派生的「账号 」+域名前 6 字符，一并纠正（不覆盖用户自定义名）
+        if (row.name === "账号 " + String(row.uid).slice(0, 6)) updName.run("账号 " + sub.slice(0, 12), row.id);
+        fixed++;
+      }
+      if (fixed) {
+        try { require("./oplog.cjs").log("info", "号池账号", `纠正 ${fixed} 个小浣熊账号的 uid（签发方域名 → 账号 ID）`, { channel: "raccoon" }); } catch { /* 日志失败无碍 */ }
+      }
+    }
+  } catch { /* 迁移失败不阻断启动，下次再试 */ }
   try {
     db.exec("ALTER TABLE usage_requests ADD COLUMN cache_creation_tokens INTEGER NOT NULL DEFAULT 0");
   } catch { /* 已存在 */ }
