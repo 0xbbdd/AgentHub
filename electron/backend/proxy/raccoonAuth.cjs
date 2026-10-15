@@ -58,14 +58,15 @@ function tokenUid(token) {
 
 /**
  * 本地文件是否确属该账号。号池可多号而 auth.json 只有一份，回写串号会把桌面端别的号顶掉，
- * 必须先验明正身：access 的 iss 与账号 uid 一致，或 refresh_token 与传入快照同值（同号铁证）。
+ * 必须先验明正身：access 的 uid（tokenUid 解 JWT 的 sub）与账号 uid 一致，
+ * 或 refresh_token 与传入快照同值（同号铁证）。
  * 命中返回文件凭据（可安全采用/回写），否则返回 null（绝不碰该文件）。
  */
 function ownedTokens(accountUid, secretsRefresh) {
   const t = readTokens();
   if (!t) return null;
-  const iss = tokenUid(t.accessToken);
-  if (iss && accountUid && String(iss) === String(accountUid)) return t;
+  const fileUid = tokenUid(t.accessToken);
+  if (fileUid && accountUid && String(fileUid) === String(accountUid)) return t;
   if (t.refreshToken && secretsRefresh && t.refreshToken === secretsRefresh) return t;
   return null;
 }

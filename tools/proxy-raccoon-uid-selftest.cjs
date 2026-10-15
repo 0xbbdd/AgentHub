@@ -105,6 +105,23 @@ console.log("\n=== T6 一次性迁移：历史行 uid 由域名纠正为 sub ===
   ok("T6d 没有 sub 时跳过（不写坏数据）", /if \(!sub \|\| sub === RACCOON_ISS_UID\) continue;/.test(s));
 }
 
+console.log("\n=== T7 口径一致：scanRaccoon / ideswitch 与 tokenUid 必须同一条链 ===");
+{
+  // 这条守卫来自真实返工：只改 tokenUid 与登录落库、漏改 scanRaccoon 时，同一条凭据
+  // 「本机扫描入池」与「OAuth 登录落库」会算出两个不同 uid —— 同一账号在号池里出现两条，
+  // 且 store.open() 的一次性历史纠正会被下一次扫描重新打回域名形态（来回震荡，修不干净）。
+  const disc = fs.readFileSync(path.join(ROOT, "electron/backend/proxy/discovery.cjs"), "utf8");
+  const ide = fs.readFileSync(path.join(ROOT, "electron/backend/proxy/ideswitch.cjs"), "utf8");
+  ok("T7a scanRaccoon 与 tokenUid 同链（sub → uid → id → iss）",
+    /const uid = String\(dec\.sub \|\| dec\.uid \|\| dec\.id \|\| dec\.iss \|\| ""\)/.test(disc));
+  ok("T7b ideswitch 状态上报与 tokenUid 同链",
+    /ruid = String\(\(payload && \(payload\.sub \|\| payload\.uid \|\| payload\.id \|\| payload\.iss\)\) \|\| ""\)/.test(ide));
+  ok("T7c scanRaccoon 不再有「iss 优先」的旧形态", !/const uid = String\(dec\.iss/.test(disc));
+  ok("T7d ideswitch 不再有「iss || sid」的旧形态", !/payload\.iss \|\| payload\.sid/.test(ide));
+  ok("T7e tokenUid 自身绝不回退 sid（会话 ID，每次登录都变）",
+    !/payload\.sid/.test(fs.readFileSync(path.join(ROOT, "electron/backend/proxy/raccoonAuth.cjs"), "utf8").split("function tokenUid")[1].split("function ownedTokens")[0]));
+}
+
 try { fs.rmSync(SANDBOX, { recursive: true, force: true }); } catch {}
 console.log("\n  小浣熊账号 ID 自测: 通过 " + pass + "  失败 " + fail);
 if (fail) console.log("  失败项:\n    - " + cases.join("\n    - "));

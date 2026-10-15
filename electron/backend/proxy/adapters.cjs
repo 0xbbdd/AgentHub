@@ -2234,8 +2234,9 @@ const raccoon = {
         name: String(d.name || d.nickname || d.user_name || ""),
       };
     }
-    // 接口不可用时本地解码兜底：小浣熊 JWT 顶层是 iss（账户 ID）/ sid，util.jwtDecode 读不出，
-    // 必须用 raccoon 自己的口径（与 discovery.scanRaccoon 一致），否则 uid 恒空、号池去重失效
+    // 接口不可用时本地解码兜底：小浣熊 JWT 顶层的 sub 才是账号 ID（iss 是签发方常量、sid 是会话 ID），
+    // util.jwtDecode 读不出，必须用 raccoon 自己的口径（tokenUid 的 sub 链，与 discovery.scanRaccoon
+    // 完全一致），否则 uid 恒空、或与 OAuth 登录落库的口径不一致导致号池去重失效
     return { uid: raccoonAuth.tokenUid(token), name: "" };
   },
 };
