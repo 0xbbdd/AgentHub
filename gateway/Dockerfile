@@ -32,7 +32,6 @@ COPY --from=deps /app/node_modules ./node_modules
 # 换「以后新增依赖零改动」
 COPY electron/backend ./electron/backend
 COPY gateway/src ./gateway/src
-COPY gateway/package.json ./gateway/
 COPY package.json ./
 
 ENV AGENTHUB_DATA_DIR=/data \

@@ -1351,6 +1351,7 @@ function drainAndStop(opts) {
   const r = runtime;
   runtime = null;
   const timeoutMs = Math.max(0, Number(opts && opts.timeoutMs) || 15000);
+  const POLL_MS = 100; // 在途计数轮询：够密不漏过请求收尾，够疏不空转
   return new Promise((resolve) => {
     const deadline = Date.now() + timeoutMs;
     let settled = false;
@@ -1368,7 +1369,7 @@ function drainAndStop(opts) {
     const tick = () => {
       if (settled) return;
       if (r.active <= 0 || Date.now() >= deadline) return finish();
-      setTimeout(tick, 100).unref();
+      setTimeout(tick, POLL_MS).unref();
     };
     tick();
   });

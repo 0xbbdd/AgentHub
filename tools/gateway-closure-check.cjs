@@ -65,12 +65,18 @@ function walk(file) {
   } catch {
     return;
   }
-  const re = /require\(\s*["']([^"']+)["']\s*\)/g;
-  let m;
-  while ((m = re.exec(src))) {
-    const next = resolveRel(file, m[1]);
-    if (next) walk(next);
-    else if (m[1].startsWith(".")) missing.push(`${file.slice(ROOT.length + 1)} -> ${m[1]}`);
+  // 逐行扫描并跳过整行注释：注释里的示例性/历史性 require 不该算入闭包（防误报缺失）。
+  // 行尾注释与块注释中段未剥离——当前代码库无此形态，出现时按缺失报出人工确认即可
+  for (const line of src.split(/\r?\n/)) {
+    const t = line.trim();
+    if (t.startsWith("//") || t.startsWith("*")) continue;
+    const re = /require\(\s*["']([^"']+)["']\s*\)/g;
+    let m;
+    while ((m = re.exec(line))) {
+      const next = resolveRel(file, m[1]);
+      if (next) walk(next);
+      else if (m[1].startsWith(".")) missing.push(`${file.slice(ROOT.length + 1)} -> ${m[1]}`);
+    }
   }
 }
 

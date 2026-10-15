@@ -11,12 +11,14 @@ function log(level, msg, meta) {
   (console[level] || console.log)(redact(text));
 }
 
+// request 事件每请求一条，按 5% 采样打日志；其余事件类型全量（都经 redact）
+const REQUEST_LOG_SAMPLE = 0.05;
+
 module.exports = {
-  // request 事件是高频流，采样输出；其余类型全量（都经 redact）
   emit(payload) {
     const t = payload && payload.type;
     if (!t) return;
-    if (t === "request" && Math.random() >= 0.05) return;
+    if (t === "request" && Math.random() >= REQUEST_LOG_SAMPLE) return;
     log("log", `[gateway] ${t}`, payload);
   },
 
@@ -35,6 +37,7 @@ module.exports = {
   },
 
   version() {
+    // 上四级即仓库根（electron/backend/proxy/platform → 容器内 /app），读根 package.json 的版本
     try { return require("../../../../package.json").version || ""; } catch { return ""; }
   },
 
