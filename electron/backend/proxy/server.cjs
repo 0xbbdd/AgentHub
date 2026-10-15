@@ -239,6 +239,31 @@ function concurrencyBlockedMessage(triedChannels, upstreamTries) {
   return `所有候选渠道均在途并发已满（${detail}），请稍后重试或降低并发`;
 }
 
+/**
+ * 与请求名「形近」的目录模型，最多 3 个（issue #117）。
+ * 归一化：小写 + 去掉 - _ . 分隔符；判据是双向包含（漏后缀、写简写、少一段都能命中）。
+ *
+ * 为什么需要：模型名记错是最常见的误用——把 `deepseek-v4.1-flash` 写成 `deepseek4.1`、
+ * 把 `claude-sonnet-4.5` 写成 `claude-sonnet`。此时 400 只回一长串可用模型，
+ * 人眼在那串里对不上，用户的第一反应是「网关不支持这个模型」，而不是「我名字写错了」。
+ * 先给最接近的几个，省一轮试错。
+ */
+function nearModelIds(model, all) {
+  const norm = (s) => String(s || "").toLowerCase().replace(/[-_.]/g, "");
+  const key = norm(model);
+  if (!key) return [];
+  const out = [];
+  for (const m of all || []) {
+    const k = norm(m && m.id);
+    // 不排除 k === key：归一后相同、原文不同正是「只差分隔符」的误用（gpt5 vs gpt-5），
+    // 而这种请求一定走到了这里（说明按原文查不到），提示它恰恰是对的
+    if (!k) continue;
+    if (k.includes(key) || key.includes(k)) out.push(m.id);
+    if (out.length >= 3) break;
+  }
+  return out;
+}
+
 /** 按生效档取最优渠道（resolveChannel 智能分支）；sort 稳定，同分保持 modelOwners 返回序 */
 function pickByOrder(order, candidates, groups) {
   return [...candidates].sort(cmpByOrder(order, groups))[0];
@@ -659,7 +684,16 @@ async function handleChat(req, res, settings, surface, convNotes) {
       );
     }
     record({ status: 400, error: "unknown model" });
-    return sink.endErr(400, `模型 "${actualModel}" 不在任何渠道目录中。可用模型：${hint}`, "invalid_request_error", "model_not_found");
+    // 名字记错（漏后缀/写简写）是最常见的误用：先给最接近的几个，再给全量列表。
+    // 直接甩全量列表时用户对不上，会误判成「网关不支持这个模型」（issue #117）
+    const similar = nearModelIds(actualModel, adapters.mergedModels(settings));
+    return sink.endErr(
+      400,
+      `模型 "${actualModel}" 不在任何渠道目录中。` +
+        (similar.length ? `相近的模型有：${similar.join("、")}。` : "") +
+        `可用模型：${hint}`,
+      "invalid_request_error", "model_not_found"
+    );
   }
 
   // ===== 出线准备 =====
@@ -1319,4 +1353,6 @@ module.exports = { start, stop, stopAsync, status, channelHealthSnapshot, classi
   // 故障转移规模纯函数（tools/proxy-failover-selftest.cjs 边界断言用）
   normalizeChannelFailoverMax, perModelUpstreamBudget,
   // 候选队列耗尽文案（scripts/test-concurrency-message.cjs 行为断言用）
-  concurrencyBlockedMessage };
+  concurrencyBlockedMessage,
+  // 模型名形近提示（scripts/test-model-hint.cjs 行为断言用）
+  nearModelIds };
