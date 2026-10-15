@@ -218,6 +218,27 @@ function perModelUpstreamBudget(failoverEnabled, failoverMax) {
   return Math.max(UPSTREAM_TRIES_FLOOR, normalizeChannelFailoverMax(failoverMax) + 1);
 }
 
+/**
+ * 候选队列是否**全部**因「在途并发已满」被跳过（issue #106）。
+ * 是 → 返回聚合文案；否则返回空串（调用方照旧走通用包装）。
+ *
+ * 为什么单独判：队列耗尽时的 msg 取 lastErr，而 lastErr 是「首错保留」写法的产物——
+ * 谁先撞上并发墙谁就成了最终文案，用户看到的是「渠道 A 在途并发已满（8/8）」，
+ * 但请求其实把 B、C 也试了、也满了。观感上就像「B 明明刚开始用却也报这个」，
+ * 第一反应是怀疑错误串号了。全部满就该明说「都满」。
+ *
+ * 判据两道：① 一次上游都没发出去（upstreamTries=0，否则说明至少有一个渠道真跑过）；
+ * ② triedChannels 里每一条的 note 都以「在途并发已满」开头（含 null 项则不成立）。
+ */
+function concurrencyBlockedMessage(triedChannels, upstreamTries) {
+  const list = triedChannels || [];
+  if (upstreamTries || !list.length) return "";
+  const notes = list.filter((t) => t && t.note && /^在途并发已满/.test(t.note));
+  if (notes.length !== list.length) return "";
+  const detail = [...new Set(notes.map((t) => `${t.chan} ${t.note}`))].join("、");
+  return `所有候选渠道均在途并发已满（${detail}），请稍后重试或降低并发`;
+}
+
 /** 按生效档取最优渠道（resolveChannel 智能分支）；sort 稳定，同分保持 modelOwners 返回序 */
 function pickByOrder(order, candidates, groups) {
   return [...candidates].sort(cmpByOrder(order, groups))[0];
@@ -1048,7 +1069,12 @@ async function handleChat(req, res, settings, surface) {
     // 轨迹形如 `qoder(账号A) → qoder_intl(无可用账号)`：渠道名后括号内是该渠道实际用过的账号名，
     // 空括号说明该渠道压根没进号池（降级中/无可用账号）——用户据此区分「停用的账号是否真被用了」
     const st = (lastErr && lastErr.status) || 503;
+    // 并发满专用口径（issue #106）：全部候选都在途满时给聚合文案，而不是甩第一个渠道的 429。
+    // 判据与文案见 concurrencyBlockedMessage()（纯函数，scripts/test-concurrency-message.cjs 守）
+    const concMsg = concurrencyBlockedMessage(triedChannels, upstreamTries);
+    const allConcBlocked = !!concMsg;
     let msg = st === 402 ? "该渠道号池积分全部耗尽" : (lastErr && lastErr.message) || "渠道暂不可用（号池无可用账号）";
+    if (concMsg) msg = concMsg;
     const seenChan = new Map(); // chan → 轨迹项（同一渠道可能在多个模型上被尝试，账号名取并集）
     for (const t of triedChannels) {
       if (!t) continue;
@@ -1077,11 +1103,13 @@ async function handleChat(req, res, settings, surface) {
     });
     // 一个候选就失败时也要报渠道名与原因：只说「渠道暂不可用（号池无可用账号）」的话，
     // 用户只能去明细表里猜到底试了谁、为什么失败（issue #86）
-    if (triedUnique.length) msg = `已尝试 ${triedUnique.length} 个渠道（${triedUnique.join(" → ")}）均不可用：${msg}`;
+    // 并发满的情况上面已给出专用文案（含逐渠道明细），不再套通用包装——「号池为空或降级中」
+    // 这个措辞对「号池不空、也没降级，单纯在途打满」是不准确的，套上反而误导
+    if (!allConcBlocked && triedUnique.length) msg = `已尝试 ${triedUnique.length} 个渠道（${triedUnique.join(" → ")}）均不可用：${msg}`;
     // 一次上游都没发过（号池空/降级被跳过）：明说——失败行的「渠道」列取的是最后到达的候选，
     // 不点明的话会被读成「用这个渠道发过请求」。判定用 upstreamTries 而不是轨迹里的账号名：
     // fatal（上游 400 透传）那条路径刻意不往轨迹里 push，用轨迹会误报「没发过请求」
-    if (!upstreamTries) msg = `未发起任何上游请求（候选渠道号池为空或降级中）：${msg}`;
+    if (!allConcBlocked && !upstreamTries) msg = `未发起任何上游请求（候选渠道号池为空或降级中）：${msg}`;
     // AgentHub 请求 id 前缀：用户报障时直接引用它，就能在明细里定位到同一行（issue #78）。
     // 同时把上游的 code / request_id 落进记账（客户端消息会截断，长标识常被切掉）
     msg = `[ah:${String(reqId).slice(0, 8)}] ${msg}`;
@@ -1281,4 +1309,6 @@ module.exports = { start, stop, stopAsync, status, channelHealthSnapshot, classi
   // 成本感知路由纯函数（tools/proxy-cost-route-selftest.cjs / proxy-empty-pool-route-selftest.cjs 行为断言用）
   channelScore, costFirstScore, tierGroups, cmpByOrder, routeOrderOf, pickByOrder, routeUsable,
   // 故障转移规模纯函数（tools/proxy-failover-selftest.cjs 边界断言用）
-  normalizeChannelFailoverMax, perModelUpstreamBudget };
+  normalizeChannelFailoverMax, perModelUpstreamBudget,
+  // 候选队列耗尽文案（scripts/test-concurrency-message.cjs 行为断言用）
+  concurrencyBlockedMessage };
