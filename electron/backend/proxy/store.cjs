@@ -1321,7 +1321,15 @@ function deleteModelCooldowns(accId, model) {
   else db.prepare("DELETE FROM model_cooldowns WHERE acc_id = ?").run(String(accId));
 }
 
+/** 一致性快照导出：VACUUM INTO 生成单文件干净库（含 WAL 里未 checkpoint 的事务）。
+ *  在线备份用——直接拷 stats.db 会丢掉 WAL 中的最近写入 */
+function vacuumInto(target) {
+  open();
+  db.exec(`VACUUM INTO '${String(target).replace(/'/g, "''")}'`);
+}
+
 module.exports = {
+  vacuumInto,
   open, close, proxyDir, dayStr, dayStartMs,
   driver: () => driver,
   CHANNELS,

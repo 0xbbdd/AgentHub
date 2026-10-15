@@ -10,6 +10,8 @@
 // 导入侧用本机机制重新封信），这是两种形态之间唯一正确的凭据通道。
 "use strict";
 
+const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
 
@@ -60,7 +62,35 @@ function timingSafeEqual(a, b) {
   return ba.length === bb.length && crypto.timingSafeEqual(ba, bb);
 }
 
+/** 单实例锁：同一数据目录只允许一个网关进程。本机直跑与容器、或两个容器共卷同时写，
+ *  会把冷却表/签到/号池同步互相踩烂。同 host 且 pid 存活 → 拒绝；异 host（换了容器或机器）
+ *  无法探活，接管并继续——跨机共用数据卷属误配置，部署文档明确不支持 */
+function acquireLock() {
+  const lockFile = path.join(process.env.AGENTHUB_DATA_DIR, "gateway.lock");
+  try {
+    if (fs.existsSync(lockFile)) {
+      const [host, pidStr] = String(fs.readFileSync(lockFile, "utf8")).trim().split(":");
+      const pid = Number(pidStr);
+      if (host === os.hostname() && pid && pid !== process.pid) {
+        let alive = false;
+        try { process.kill(pid, 0); alive = true; } catch (e) { alive = e.code === "EPERM"; }
+        if (alive) {
+          console.error(`[AgentHub Gateway] 拒绝启动：数据目录已被本机 pid ${pid} 占用（${lockFile}）`);
+          process.exit(1);
+        }
+      }
+    }
+    fs.writeFileSync(lockFile, `${os.hostname()}:${process.pid}`);
+    return lockFile;
+  } catch (e) {
+    platform.log("warn", "[gateway] 锁文件不可用，跳过单实例检查", { message: String((e && e.message) || e) });
+    return null;
+  }
+}
+let lockFile = null;
+
 async function main() {
+  lockFile = acquireLock();
   console.log(`[AgentHub Gateway] 启动中 platform=${platform.form()} version=${platform.version()}`);
   console.log(`[AgentHub Gateway] 数据目录 ${process.env.AGENTHUB_DATA_DIR}`);
   console.log(`[AgentHub Gateway] 凭据加密 ${process.env.AGENTHUB_SECRET_KEY ? "AES-256-GCM (AGENTHUB_SECRET_KEY)" : "无（AGENTHUB_ALLOW_PLAINTEXT=1 已放行明文）"}`);
@@ -229,6 +259,18 @@ function startAdmin() {
     }
   });
 
+  // 备份：数据库一致性快照（WAL 下直接拷文件会丢最近事务，VACUUM INTO 不会）
+  app.get("/api/backup", (req, res) => {
+    const target = path.join(os.tmpdir(), `agenthub-stats-${Date.now()}.db`);
+    try {
+      store.vacuumInto(target);
+      res.download(target, "stats.db", () => { try { fs.unlinkSync(target); } catch { /* 已清 */ } });
+    } catch (e) {
+      try { fs.unlinkSync(target); } catch { /* 不存在 */ }
+      res.status(500).json({ ok: false, message: String((e && e.message) || e) });
+    }
+  });
+
   const srv = app.listen(ADMIN_PORT, ADMIN_BIND);
   // 监听失败必须显式收口：否则 unhandled 'error' 事件直接崩掉整个进程（含在跑的反代网关）
   srv.on("error", (e) => {
@@ -250,6 +292,7 @@ async function shutdown(signal) {
   const drained = await server.drainAndStop({ timeoutMs: 15000 });
   console.log(`[AgentHub Gateway] 反代网关已停（在途 ${drained.active}，${drained.drained ? "已排空" : "超时强断"}）`);
   try { store.close(); } catch { /* 句柄随进程退出 */ }
+  if (lockFile) { try { fs.unlinkSync(lockFile); } catch { /* 已清 */ } }
   process.exit(0);
 }
 process.on("SIGTERM", () => { void shutdown("SIGTERM"); });
