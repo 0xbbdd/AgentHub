@@ -204,7 +204,10 @@ function makeQoder(product, deps) {
       try {
         session = await signer.createSession({ product, token, uid, machineId });
       } catch (e) {
-        throw Object.assign(new Error(`Qoder 签名器不可用：${String((e && e.message) || e).slice(0, 160)}`), {
+        // 截断上限 240：签名器不可用时会带上「客户端版本 / obf 体积 / 入口标记 / 内嵌 wasm /
+        // 已命中特征 / 取证脚本」这段诊断（见 qoderSigner.buildPatchedModule），
+        // 160 会把最后那段取证指引切掉——而它正是用户自助定位的唯一入口
+        throw Object.assign(new Error(`Qoder 签名器不可用：${String((e && e.message) || e).slice(0, 240)}`), {
           status: 503,
           qoderSignerDown: true,
         });

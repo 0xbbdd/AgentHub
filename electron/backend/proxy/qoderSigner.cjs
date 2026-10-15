@@ -31,6 +31,8 @@ const config = require("../config.cjs");
 const install = require("./qoderInstall.cjs");
 
 const ENTRY_MARK = "SY(),Bir("; // 0.4.x worker 入口；截断点（未命中则走通用提取）
+const WASM_MAGIC = "AGFzbQEAAAA"; // 内嵌 wasm 的 base64 魔数（\0asm）；下面 pickByStructure 的正则里是同一串
+const REQUIRED_FEATURES = ["wasmVar", "loaderWasm", "glueVar", "loaderGlue", "initAsync"]; // 通用提取缺任一即失败
 const CACHE_VERSION = 2; // v2：新增通用提取路径 + 安装定位多候选，旧缓存自动失效
 
 /** 客户端 resources 目录（多候选定位，见 qoderInstall.cjs） */
@@ -98,9 +100,14 @@ function patchText(text) {
     return `${text.slice(0, cut)}\nexport{t9 as initGlue,Hm as glue};\n`;
   }
   const n = pickByStructure(text);
-  const missing = ["wasmVar", "loaderWasm", "glueVar", "loaderGlue", "initAsync"].filter((k) => !n[k]);
+  const missing = REQUIRED_FEATURES.filter((k) => !n[k]);
   if (missing.length) {
-    throw new Error(`Qoder worker 结构变化：通用提取缺 ${missing.join("/")}（客户端版本可能大改，需重新适配）`);
+    const err = new Error(`Qoder worker 结构变化：通用提取缺 ${missing.join("/")}（客户端版本可能大改，需重新适配）`);
+    // 诊断上下文挂在错误上：buildPatchedModule 补上客户端版本/体积后一并抛出。
+    // 「入口标记在不在 / 内嵌 wasm 还在不在」这两项决定这次是放宽正则就能救，
+    // 还是客户端把 wasm 拆成了外链文件（那要新增一条读取路径，不是调正则的事）。
+    err.qoderDiag = { entryMarkHit: false, hasInlineWasm: text.includes(WASM_MAGIC), features: n, missing };
+    throw err;
   }
   return [
     text,
@@ -129,7 +136,22 @@ function buildPatchedModule(product, loc) {
   const out = path.join(cacheDir(), `worker-${product}-${hash}.mjs`);
   if (fs.existsSync(out)) return out;
   const text = fs.readFileSync(loc.obf, "utf8");
-  const patched = patchText(text);
+  let patched;
+  try {
+    patched = patchText(text);
+  } catch (e) {
+    // 把「哪个版本、多大、入口标记在不在、内嵌 wasm 在不在、已命中哪些特征」补进消息。
+    // 只靠「缺 X/Y/Z」用户没法自助，维护者也得反追问一轮；补上后一眼能判断适配方向。
+    if (e && e.qoderDiag) {
+      const d = e.qoderDiag;
+      const hit = Object.keys(d.features || {}).filter((k) => d.features[k]);
+      e.message +=
+        `｜客户端版本=${loc.version} sdk=${loc.sdk || "?"} obf=${st.size}B` +
+        `｜入口标记${d.entryMarkHit ? "命中" : "未命中"}，内嵌 wasm ${d.hasInlineWasm ? "在" : "不在"}，已命中特征=${hit.join(",") || "无"}` +
+        `｜取证：node tools/proxy-qoder-probe.cjs`;
+    }
+    throw e;
+  }
   const tmp = `${out}.tmp.${process.pid}`;
   fs.writeFileSync(tmp, patched, "utf8");
   fs.renameSync(tmp, out);
@@ -243,4 +265,61 @@ async function describe(product) {
   return info;
 }
 
-module.exports = { locate, available, createSession, describe, installResources, buildPatchedModule, patchText, pickByStructure };
+/**
+ * 取证：对某产品的 obf 做**纯结构探测**，返回可直接回传的诊断摘要（issue #119 用）。
+ * 只读客户端文件——不加载 wasm、不写缓存、不联网，可在任何机器上安全跑。
+ *
+ * 输出里最能定方向的三项：
+ *   · entryMark.hit    入口标记是否还在 → 在的话走截断路径，通用路径根本没被用到
+ *   · inlineWasm.hit   内嵌 wasm 是否还在 → 不在说明客户端把 wasm 拆成外链了，要新增读取路径
+ *   · missing          通用提取缺哪几个特征 → 决定是放宽正则还是改结构
+ */
+function probe(product) {
+  const loc = locate(product);
+  if (!loc) {
+    return {
+      product,
+      installed: false,
+      message:
+        "客户端未安装，或 resources 目录未定位到（可用 AGENTHUB_QODER_RESOURCES / AGENTHUB_QODER_INTL_RESOURCES 直接指定 resources 目录）",
+    };
+  }
+  const st = fs.statSync(loc.obf);
+  const text = fs.readFileSync(loc.obf, "utf8");
+  const entryAt = text.indexOf(ENTRY_MARK);
+  const wasmAt = text.indexOf(WASM_MAGIC);
+  const features = pickByStructure(text);
+  const missing = REQUIRED_FEATURES.filter((k) => !features[k]);
+  return {
+    product,
+    installed: true,
+    version: loc.version,
+    sdk: loc.sdk,
+    obf: loc.obf,
+    obfSize: st.size,
+    obfMtime: new Date(Math.floor(st.mtimeMs)).toISOString(),
+    entryMark: { mark: ENTRY_MARK, hit: entryAt >= 0, offset: entryAt },
+    inlineWasm: { magic: WASM_MAGIC, hit: wasmAt >= 0, offset: wasmAt },
+    features,
+    missing,
+    path: entryAt >= 0 ? "截断路径（入口标记命中）" : missing.length ? "两条路径均失败" : "通用路径（结构提取成功）",
+    snippets: probeSnippets(text, entryAt),
+  };
+}
+
+/** 取特征附近的短片段（客户端混淆代码，不含任何用户数据），供适配时比对结构 */
+function probeSnippets(text, entryAt) {
+  const near = (re) => {
+    const m = text.match(re);
+    return m ? text.slice(Math.max(0, m.index - 80), m.index + 220) : "";
+  };
+  return {
+    wasmDecl: near(/([A-Za-z_$][\w$]*)="AGFzbQEAAAA/),
+    wasmLoader: near(/,\s*([A-Za-z_$][\w$]*)=b\(\(\)=>\{[A-Za-z_$][\w$]*="AGFzbQEAAAA/),
+    erCall: near(/er\(([A-Za-z_$][\w$]*),\s*\{[^{}]{0,800}?QoderContext:\(\)=>/),
+    profileEnc: near(/ProfileEncryptor:\(\)=>([A-Za-z_$][\w$]*)/),
+    entryMark: entryAt < 0 ? "" : text.slice(Math.max(0, entryAt - 160), entryAt + 160),
+  };
+}
+
+module.exports = { locate, available, createSession, describe, probe, installResources, buildPatchedModule, patchText, pickByStructure };
