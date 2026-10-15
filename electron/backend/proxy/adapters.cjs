@@ -4241,9 +4241,13 @@ function compatUrl(base, leaf) {
   return `${base}/v1/${leaf}`;
 }
 
-function makeOpenaiCompat(row) {
+function makeOpenaiCompat(row, opts) {
   const entries = compatModelEntries(row);
   const chatUrl = compatUrl(row.baseUrl, "chat/completions");
+  // 首字节预算函数可注入（opts.firstByteBudgetMs），只为自测能把 30s 缩短到秒级复现
+  // 「首事件不解除预算 → 长回答被掐断」这条现场；生产路径一律用模块内那份口径。
+  // 与 autoclawDeps 注入 firstByteBudgetMs 是同一个先例，不新造第二套预算算法
+  const budgetOf = opts && typeof opts.firstByteBudgetMs === "function" ? opts.firstByteBudgetMs : firstByteBudgetMs;
   // 客户端名 → 上游真名 / → 条目。别名与模型名同等参与解析（别名不进 /v1/models，
   // 但客户端拿它发请求必须能命中），所以两张表都要把 aliases 铺进去。
   const upstreamByClient = new Map();
@@ -4345,13 +4349,25 @@ function makeOpenaiCompat(row) {
     /** OpenAI 协议 1:1 透传 */
     async chatOpenai({ secrets, model, body, emit }) {
       const payload = JSON.stringify(this.rewriteBody(model, body));
-      const { resp, cancelTimer } = await fetchStream(chatUrl, { method: "POST", headers: this.headers(secrets), body: payload });
+      // 首字节预算按 prompt 规模给（与内置渠道同一条口径），不再吃 fetchStream 的固定 30s 缺省
+      const { resp, cancelTimer } = await fetchStream(chatUrl, {
+        method: "POST", headers: this.headers(secrets), body: payload,
+        firstByteMs: budgetOf(payload),
+      });
       const result = { status: 200, planLimit: false };
+      // 首个字节达标即解除首字节预算计时器：漏这一步会让计时器在整个流期间一直武装，
+      // 到点 abort 掉 resp.body，把一条正常的长回答掐成「HTTP 200 + 半截内容」——客户端与
+      // 请求明细都显示 200，被误读成「上游只回了这一点」（issue #107 的根因）。
+      // 本文件其余内置渠道（workbuddy / raccoon / zcode / qoder / autoclaw）都在首事件里这么做，
+      // 这里是同一条纪律；finally 那次是「一个字节都没到时」的兜底。
+      let settled = false;
+      const settle = () => { if (!settled) { settled = true; cancelTimer(); } };
       try {
         // 少数中转站无视 stream:true、直接回一整个 JSON：SseScanner 找不到 data: 行会一条都不产出，
         // 客户端就拿到 200 空响应。这里按 content-type 单独走非流式分支，别让它静默变空。
         const ctype = String(resp.headers.get("content-type") || "");
         if (!ctype.includes("event-stream")) {
+          settle(); // 非流式形态没有"首事件"，读到正文即达标；否则读大 body 期间同样会被 abort
           const text = await resp.text();
           const data = parseJson(text);
           if (!data) throw Object.assign(new Error(`上游返回非 JSON（${text.slice(0, 200)}）`), { status: 502 });
@@ -4359,6 +4375,7 @@ function makeOpenaiCompat(row) {
           return result;
         }
         await pumpSse(resp, (_event, raw) => {
+          settle();
           if (raw === "[DONE]") { emit({ type: "finish", reason: "" }); return; }
           const data = parseJson(raw);
           if (!data) return;
@@ -4481,7 +4498,7 @@ if (store.AUTOCLAW_INTL_ENABLED) {
 // 同套实现按池参数化（与 qoder/autoclaw 双区同款手法）：两池同域同协议同凭证，
 // 差别只有「收哪个池的模型」；配置共用 headers.json 的 cline 段，无地区开关（常开）。
 const { makeCline } = require("./cline/adapter.cjs");
-const clineDeps = { fetchStream, pumpSse, httpJson, rules, util };
+const clineDeps = { fetchStream, pumpSse, httpJson, rules, util, firstByteBudgetMs };
 ADAPTERS.cline_free = makeCline("cline_free", clineDeps);
 ADAPTERS.cline_pass = makeCline("cline_pass", clineDeps);
 
