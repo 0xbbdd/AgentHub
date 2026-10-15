@@ -1240,22 +1240,264 @@ function statsTop(dim, days) {
   ).all(from);
 }
 
-/** 明细分页（保留 90 天） */
-function statsDetail({ page, pageSize, channel, keyId, model }) {
+// ===== 用量统计增强：区间化聚合（方案《反代网关-用量统计增强方案.md》§5） =====
+// 口径统一：from/to 为毫秒闭区间；全部 SELECT ... GROUP BY 直查，不建冗余表。
+// 注意 tokens 只算 prompt + completion：缓存读/写是 prompt 的子集（见 server.cjs 记账口径，
+// Anthropic 的 cache_read/creation 已合计进 prompt_tokens），再加一遍会重复计数。
+
+const DAY_MS = 86400000;
+const MAX_RANGE_DAYS = 366;
+
+/** 区间归一：缺省 / 颠倒 / 超长都在这里收口，调用方不必各自判 */
+function normRange(from, to) {
+  const now = Date.now();
+  let f = Number(from);
+  let t = Number(to);
+  if (!Number.isFinite(t) || t <= 0) t = now;
+  if (!Number.isFinite(f) || f <= 0) f = t - 7 * DAY_MS;
+  if (t < f) { const tmp = f; f = t; t = tmp; }
+  if (t - f > MAX_RANGE_DAYS * DAY_MS) f = t - MAX_RANGE_DAYS * DAY_MS;
+  return { from: Math.round(f), to: Math.round(t) };
+}
+
+/** 粒度决策：auto 时跨度 ≤ 2 天走小时，否则走天；显式要小时但跨度 > 7 天时回落按天（防桶爆炸） */
+function pickGranularity(from, to, g) {
+  const span = to - from;
+  if (g === "day") return "day";
+  if (g === "hour") return span <= 7 * DAY_MS ? "hour" : "day";
+  return span <= 2 * DAY_MS ? "hour" : "day";
+}
+
+function hourStr(ts) {
+  const d = new Date(ts);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:00`;
+}
+
+/** 聚合列模板：所有分组/汇总查询共用，避免各处手抄漏列 */
+const AGG_COLS = `
+  COUNT(*) AS req,
+  SUM(CASE WHEN status >= 200 AND status < 300 THEN 1 ELSE 0 END) AS ok,
+  SUM(prompt_tokens) AS prompt_tokens,
+  SUM(completion_tokens) AS completion_tokens,
+  SUM(cache_read_tokens) AS cache_read_tokens,
+  SUM(cache_creation_tokens) AS cache_creation_tokens,
+  AVG(CASE WHEN ttft_ms > 0 THEN ttft_ms END) AS ttft,
+  AVG(CASE WHEN latency_ms > 0 THEN latency_ms END) AS latency`;
+
+/** 聚合行 → 前端字段（SUM/AVG 的原始列摊平，空区间回全 0 而不是 null） */
+function shapeAgg(r) {
+  const req = Number(r && r.req) || 0;
+  const ok = Number(r && r.ok) || 0;
+  const p = Number(r && r.prompt_tokens) || 0;
+  const c = Number(r && r.completion_tokens) || 0;
+  return {
+    req, ok, err: req - ok,
+    successRate: req ? Math.round((ok / req) * 1000) / 10 : 0,
+    promptTokens: p,
+    completionTokens: c,
+    cacheReadTokens: Number(r && r.cache_read_tokens) || 0,
+    cacheCreationTokens: Number(r && r.cache_creation_tokens) || 0,
+    tokens: p + c,
+    ttftAvg: Math.round(Number(r && r.ttft) || 0),
+    latencyAvg: Math.round(Number(r && r.latency) || 0),
+  };
+}
+
+/** TTFT 中位数：SQLite 无 percentile，按「先数总数、再 OFFSET 取中位那一行」两步取 */
+function statsTtftP50(from, to) {
+  const c = db.prepare("SELECT COUNT(*) AS c FROM usage_requests WHERE ts >= ? AND ts <= ? AND ttft_ms > 0").get(from, to).c || 0;
+  if (!c) return 0;
+  const row = db.prepare(
+    "SELECT ttft_ms AS v FROM usage_requests WHERE ts >= ? AND ts <= ? AND ttft_ms > 0 ORDER BY ttft_ms LIMIT 1 OFFSET ?"
+  ).get(from, to, Math.floor((c - 1) / 2));
+  return Math.round((row && row.v) || 0);
+}
+
+/** 区间 KPI：请求 / 成功 / 四类 token / 平均与 P50 TTFT / 平均耗时 / 覆盖的去重维度数 */
+function statsSummary(from, to) {
   open();
-  const size = Math.min(100, Math.max(5, pageSize || 20));
-  const p = Math.max(1, page || 1);
+  const r = db.prepare(
+    `SELECT ${AGG_COLS},
+            COUNT(DISTINCT NULLIF(channel, '')) AS channels,
+            COUNT(DISTINCT NULLIF(model, '')) AS models,
+            COUNT(DISTINCT NULLIF(key_id, '')) AS keys,
+            COUNT(DISTINCT NULLIF(account_id, '')) AS accounts
+     FROM usage_requests WHERE ts >= ? AND ts <= ?`
+  ).get(from, to);
+  const s = shapeAgg(r);
+  return {
+    req: s.req, ok: s.ok, err: s.err,
+    // 空区间成功率给 100（没有失败请求），与旧 statsToday 的兜底口径一致
+    successRate: s.req ? s.successRate : 100,
+    promptTokens: s.promptTokens, completionTokens: s.completionTokens,
+    cacheReadTokens: s.cacheReadTokens, cacheCreationTokens: s.cacheCreationTokens,
+    totalTokens: s.tokens,
+    ttftAvg: s.ttftAvg, ttftP50: statsTtftP50(from, to), latencyAvg: s.latencyAvg,
+    channels: Number(r.channels) || 0, models: Number(r.models) || 0,
+    keys: Number(r.keys) || 0, accounts: Number(r.accounts) || 0,
+  };
+}
+
+/** 时间序列：按天 / 按小时聚合，缺桶补零（图表 x 轴连续，最右为区间终点） */
+function statsSeries(from, to, granularity) {
+  open();
+  const fmt = granularity === "hour" ? "%Y-%m-%d %H:00" : "%Y-%m-%d";
+  const rows = db.prepare(
+    `SELECT strftime('${fmt}', ts / 1000, 'unixepoch', 'localtime') AS k, ${AGG_COLS}
+     FROM usage_requests WHERE ts >= ? AND ts <= ?
+     GROUP BY k`
+  ).all(from, to);
+  const map = new Map();
+  for (const r of rows) if (r && r.k) map.set(r.k, r);
+  const out = [];
+  if (granularity === "hour") {
+    const start = new Date(from);
+    start.setMinutes(0, 0, 0);
+    for (let t = start.getTime(); t <= to; t += 3600000) {
+      const k = hourStr(t);
+      out.push({ t, label: k, ...shapeAgg(map.get(k)) });
+    }
+  } else {
+    const start = new Date(from);
+    start.setHours(0, 0, 0, 0);
+    for (let t = start.getTime(); t <= to; t += DAY_MS) {
+      const k = dayStr(t);
+      out.push({ t, label: k, ...shapeAgg(map.get(k)) });
+    }
+  }
+  return out;
+}
+
+const TOP_COLS = { channel: "channel", model: "model", key: "key_name", account: "account_name" };
+
+/** TOP 排行（富字段）：按 dim 分组，请求数倒序取前 N（前端本地切排序口径再截前 10） */
+function statsTopRich(dim, from, to, limit) {
+  open();
+  const col = TOP_COLS[dim] || "channel";
+  const n = Math.min(200, Math.max(1, Number(limit) || 50));
+  const rows = db.prepare(
+    `SELECT ${col} AS name, ${AGG_COLS}
+     FROM usage_requests WHERE ts >= ? AND ts <= ? AND ${col} != ''
+     GROUP BY ${col} ORDER BY req DESC LIMIT ?`
+  ).all(from, to, n);
+  return rows.map((r) => ({ name: r.name, ...shapeAgg(r) }));
+}
+
+/** 各 Key 用量：按 key_id 分组（Key 名可改，id 才是身份），带最近使用时间 */
+function statsKeys(from, to) {
+  open();
+  const rows = db.prepare(
+    `SELECT key_id, MAX(key_name) AS name, MAX(ts) AS last_ts, ${AGG_COLS}
+     FROM usage_requests WHERE ts >= ? AND ts <= ? AND key_id != ''
+     GROUP BY key_id ORDER BY req DESC LIMIT 100`
+  ).all(from, to);
+  return rows.map((r) => ({ keyId: r.key_id, name: r.name || "", lastTs: Number(r.last_ts) || 0, ...shapeAgg(r) }));
+}
+
+/** 状态码分桶：2xx / 4xx / 5xx / 无响应（status=0 或 3xx 等归「无响应」桶） */
+function statsStatus(from, to) {
+  open();
+  const rows = db.prepare(
+    `SELECT CASE
+              WHEN status >= 200 AND status < 300 THEN 'ok'
+              WHEN status >= 400 AND status < 500 THEN '4xx'
+              WHEN status >= 500 THEN '5xx'
+              ELSE 'other' END AS b,
+            COUNT(*) AS c
+     FROM usage_requests WHERE ts >= ? AND ts <= ? GROUP BY b`
+  ).all(from, to);
+  const m = { ok: 0, "4xx": 0, "5xx": 0, other: 0 };
+  for (const r of rows) if (r && Object.prototype.hasOwnProperty.call(m, r.b)) m[r.b] = Number(r.c) || 0;
+  return [
+    { name: "成功 2xx", key: "ok", value: m.ok },
+    { name: "客户端 4xx", key: "4xx", value: m["4xx"] },
+    { name: "服务端 5xx", key: "5xx", value: m["5xx"] },
+    { name: "无响应", key: "other", value: m.other },
+  ];
+}
+
+/** Token 构成：输入 / 输出两个互斥分量（合计 = totalTokens，可直接画环形图） */
+function statsTokenMix(from, to) {
+  open();
+  const r = db.prepare(
+    "SELECT SUM(prompt_tokens) AS p, SUM(completion_tokens) AS c FROM usage_requests WHERE ts >= ? AND ts <= ?"
+  ).get(from, to);
+  return [
+    { name: "输入 Token", key: "prompt", value: Number(r.p) || 0 },
+    { name: "输出 Token", key: "completion", value: Number(r.c) || 0 },
+  ];
+}
+
+/** LIKE 参数转义：用户输入里的 \ % _ 必须当字面量，否则搜一个 "%" 会命中全表 */
+function likeArg(s) {
+  return "%" + String(s).replace(/[\\%_]/g, (m) => "\\" + m) + "%";
+}
+
+/** 状态分桶 → SQL 片段（与 statsStatus 的分桶口径保持一致） */
+function statusWhere(status) {
+  if (status === "ok") return "status >= 200 AND status < 300";
+  if (status === "4xx") return "status >= 400 AND status < 500";
+  if (status === "5xx") return "status >= 500";
+  if (status === "other") return "(status < 200 OR (status >= 300 AND status < 400))";
+  return "";
+}
+
+/** 统计总览：一次返回 KPI / 序列 / 四维排行 / 各 Key / 状态分布 / Token 构成。
+ *  四维排行一次给全，前端切维度零延迟、少 3 次 IPC。 */
+function statsOverview(opts) {
+  const o = opts || {};
+  const { from, to } = normRange(o.from, o.to);
+  const granularity = pickGranularity(from, to, o.granularity);
+  return {
+    range: { from, to, granularity },
+    summary: statsSummary(from, to),
+    series: statsSeries(from, to, granularity),
+    tops: {
+      channel: statsTopRich("channel", from, to),
+      model: statsTopRich("model", from, to),
+      key: statsTopRich("key", from, to),
+      account: statsTopRich("account", from, to),
+    },
+    keys: statsKeys(from, to),
+    status: statsStatus(from, to),
+    tokenMix: statsTokenMix(from, to),
+  };
+}
+
+/** 明细分页：区间 + 渠道/状态精确 + Key/模型模糊搜索；同时回筛选命中的 token 汇总。
+ *  区间缺省 = 不限（保留期自测等旧调用方按「全表」用；统计页总是显式传 from/to）。 */
+function statsDetail(opts) {
+  open();
+  const o = opts || {};
+  const size = Math.min(100, Math.max(5, o.pageSize || 20));
+  const p = Math.max(1, o.page || 1);
   const where = [];
   const vals = [];
-  if (channel) { where.push("channel = ?"); vals.push(channel); }
-  if (keyId) { where.push("key_id = ?"); vals.push(keyId); }
-  if (model) { where.push("model = ?"); vals.push(model); }
+  const from = Number(o.from);
+  const to = Number(o.to);
+  if (Number.isFinite(from) && from > 0) { where.push("ts >= ?"); vals.push(Math.round(from)); }
+  if (Number.isFinite(to) && to > 0) { where.push("ts <= ?"); vals.push(Math.round(to)); }
+  if (o.channel) { where.push("channel = ?"); vals.push(o.channel); }
+  if (o.keyId) { where.push("key_id = ?"); vals.push(o.keyId); }
+  if (o.key) { where.push("(key_name LIKE ? ESCAPE '\\' OR key_id LIKE ? ESCAPE '\\')"); vals.push(likeArg(o.key), likeArg(o.key)); }
+  if (o.model) { where.push("model LIKE ? ESCAPE '\\'"); vals.push(likeArg(o.model)); }
+  const sw = statusWhere(o.status);
+  if (sw) where.push(sw);
   const w = where.length ? "WHERE " + where.join(" AND ") : "";
   const total = db.prepare(`SELECT COUNT(*) AS c FROM usage_requests ${w}`).get(...vals).c;
+  const agg = shapeAgg(db.prepare(`SELECT ${AGG_COLS} FROM usage_requests ${w}`).get(...vals));
   const rows = db.prepare(
     `SELECT * FROM usage_requests ${w} ORDER BY ts DESC LIMIT ? OFFSET ?`
   ).all(...vals, size, (p - 1) * size);
-  return { total, page: p, pageSize: size, rows: rows.map(usageView) };
+  return {
+    total, page: p, pageSize: size,
+    agg: {
+      req: agg.req, promptTokens: agg.promptTokens, completionTokens: agg.completionTokens,
+      cacheReadTokens: agg.cacheReadTokens, cacheCreationTokens: agg.cacheCreationTokens, tokens: agg.tokens,
+    },
+    rows: rows.map(usageView),
+  };
 }
 
 /** 手动清理流水：删保留线之前的记录，返回删除条数（设置页保留期与统计页「清理」按钮共用）。
@@ -1347,5 +1589,7 @@ module.exports = {
   listModelCooldowns, upsertModelCooldown, deleteModelCooldowns,
   snapshotCredits,
   insertUsage, statsToday, statsTrend, statsTop, statsDetail, recentRequests,
+  normRange, pickGranularity, statsOverview, statsSummary, statsSeries, statsTopRich,
+  statsKeys, statsStatus, statsTokenMix,
   cleanupUsage, setUsageRetention,
 };

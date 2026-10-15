@@ -1,4 +1,4 @@
-// echarts 按需注册入口：全库只用折线图 + 直角坐标系网格 + 提示框 + 图例（含滚动图例）+ canvas 渲染器。
+// echarts 按需注册入口：折线图 + 饼/环形图 + 直角坐标系网格 + 提示框 + 图例（含滚动图例）+ canvas 渲染器。
 // 所有图表一律从本文件 import，不要再 `import * as echarts from "echarts"` —— 那会把全量包
 // （实测 5.6.0 min 后 1009 KB / gzip 332 KB，见本 PR 的体积对照）整块拉进首屏 chunk。
 //
@@ -9,13 +9,14 @@
 //
 // 全库无 registerTheme、无 graphic option、无 mark* / dataZoom / title 组件：
 // sync/Heatmap.vue 与 memory/MemoryHeatmap.vue 是纯 DOM 格子，积分日历的时间轴档与见底曲线档
-// 分别是纯 DOM 与内联 SVG，都不碰 echarts。新增图表类型时才往上面的 use([...]) 里加。
+// 分别是纯 DOM 与内联 SVG，都不碰 echarts。PieChart 由反代网关用量统计页的
+// 「Token 构成 / 请求状态」两个环形图使用。新增图表类型时才往上面的 use([...]) 里加。
 import * as echarts from "echarts/core";
-import { LineChart } from "echarts/charts";
+import { LineChart, PieChart } from "echarts/charts";
 import { GridComponent, LegendComponent, LegendScrollComponent, TooltipComponent } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 
-echarts.use([LineChart, GridComponent, LegendComponent, LegendScrollComponent, TooltipComponent, CanvasRenderer]);
+echarts.use([LineChart, PieChart, GridComponent, LegendComponent, LegendScrollComponent, TooltipComponent, CanvasRenderer]);
 
 // 图表用到的三个入口：init（实例）、graphic.LinearGradient（面积渐变）、ECharts（实例类型）。
 // echarts/core 确实导出 graphic（含 LinearGradient），不是从全量包里侥幸拿到的。

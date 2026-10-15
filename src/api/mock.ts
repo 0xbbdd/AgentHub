@@ -438,6 +438,69 @@ const PROXY_TREND = Array.from({ length: 7 }, (_, i) => {
   return { day: d.toISOString().slice(0, 10), req: [186, 242, 210, 305, 268, 391, 681][i], tokens: [42, 55, 48, 71, 60, 88, 156][i] * 1000 };
 });
 
+// ===== 预览用：区间化统计总览（与真实后端契约一致，见《反代网关-用量统计增强方案.md》§4.2） =====
+/** 富字段排行行：由「请求数 + 总 Token」派生出输入/输出/缓存与成功率，形状与后端 statsTopRich 对齐 */
+function mockTopRow(name: string, req: number, tokens: number) {
+  const ok = Math.round(req * 0.99);
+  return {
+    name, req, ok, err: req - ok, successRate: req ? Math.round((ok / req) * 1000) / 10 : 0,
+    promptTokens: Math.round(tokens * 0.78), completionTokens: Math.round(tokens * 0.22),
+    cacheReadTokens: Math.round(tokens * 0.28), cacheCreationTokens: 0, tokens,
+    ttftAvg: 820, latencyAvg: 1900,
+  };
+}
+
+function mockProxyOverview(args?: { from?: number; to?: number; granularity?: string }) {
+  const to = Number(args?.to) || NOW;
+  const from = Number(args?.from) || NOW - 6 * 86400000;
+  const granularity = args?.granularity === "day" ? "day" : args?.granularity === "hour" ? "hour" : to - from <= 2 * 86400000 ? "hour" : "day";
+  const series = PROXY_TREND.map((d, i) => {
+    const ok = Math.round(d.req * 0.99);
+    return {
+      t: new Date(`${d.day}T00:00:00`).getTime(), label: d.day,
+      req: d.req, ok, err: d.req - ok,
+      promptTokens: Math.round(d.tokens * 0.78), completionTokens: Math.round(d.tokens * 0.22),
+      cacheReadTokens: Math.round(d.tokens * 0.28), cacheCreationTokens: 0, tokens: d.tokens,
+      ttftAvg: 800 + i * 12, latencyAvg: 1850, successRate: d.req ? Math.round((ok / d.req) * 1000) / 10 : 0,
+    };
+  });
+  const req = 1284;
+  const ok = 1276;
+  const totalTokens = 312400;
+  return {
+    range: { from, to, granularity },
+    summary: {
+      req, ok, err: req - ok, successRate: Math.round((ok / req) * 1000) / 10,
+      promptTokens: Math.round(totalTokens * 0.78), completionTokens: Math.round(totalTokens * 0.22),
+      cacheReadTokens: Math.round(totalTokens * 0.28), cacheCreationTokens: 0, totalTokens,
+      ttftAvg: 820, ttftP50: 690, latencyAvg: 1900,
+      channels: 3, models: 4, keys: 3, accounts: 3,
+    },
+    series,
+    tops: {
+      channel: [mockTopRow("trae", 745, 182000), mockTopRow("workbuddy", 421, 96000), mockTopRow("workbuddy_ai", 118, 34400)],
+      model: [mockTopRow("deepseek-v4-flash", 512, 120000), mockTopRow("glm-4.6", 233, 62000), mockTopRow("claude-sonnet-4.5", 301, 88000)],
+      key: [mockTopRow("本地主 Key", 612, 148200), mockTopRow("Trae 专用", 403, 96400), mockTopRow("WorkBuddy 专用", 269, 67800)],
+      account: [mockTopRow("主账号 · 沐", 560, 132000), mockTopRow("工作号", 421, 96000), mockTopRow("备用号", 185, 50000)],
+    },
+    keys: [
+      { keyId: "k1", lastTs: NOW - 60000, ...mockTopRow("本地主 Key", 612, 148200) },
+      { keyId: "k2", lastTs: NOW - 89000, ...mockTopRow("Trae 专用", 403, 96400) },
+      { keyId: "k3", lastTs: NOW - 140000, ...mockTopRow("WorkBuddy 专用", 269, 67800) },
+    ],
+    status: [
+      { name: "成功 2xx", key: "ok", value: 1276 },
+      { name: "客户端 4xx", key: "4xx", value: 6 },
+      { name: "服务端 5xx", key: "5xx", value: 2 },
+      { name: "无响应", key: "other", value: 0 },
+    ],
+    tokenMix: [
+      { name: "输入 Token", key: "prompt", value: Math.round(totalTokens * 0.78) },
+      { name: "输出 Token", key: "completion", value: Math.round(totalTokens * 0.22) },
+    ],
+  };
+}
+
 const PROXY_MODELS = [
   { id: "deepseek-v4-flash", object: "model", created: 0, owned_by: "trae", sources: ["trae"], name: "DeepSeek-V4-Flash", rate: null, capabilities: {}, contextLength: 131072, maxOutputTokens: 0, enabled: true, override: "", fallback: "" },
   { id: "glm-4.6", object: "model", created: 0, owned_by: "trae", sources: ["trae"], name: "GLM-4.6", rate: null, capabilities: {}, contextLength: 131072, maxOutputTokens: 0, enabled: true, override: "", fallback: "" },
@@ -1367,39 +1430,41 @@ export const mock = {
         // （它在号池页高频调用，同步 tasklist 会堵主进程），运行态只在切号预检的 probe 里给
         return { workbuddyInstalled: true, workbuddyAiInstalled: true, traeInstalled: false, raccoonInstalled: true, zcodeInstalled: true, qoderInstalled: true, qoderIntlInstalled: false, currentUid: "wb_7c21" };
       case "proxy_stats_overview":
-        return {
-          today: { req: 1284, tokens: 312400, successRate: 99.4, ttftAvg: 820 },
-          trend: PROXY_TREND,
-          tops: {
-            channel: [
-              { name: "trae", req: 745, tokens: 182000 },
-              { name: "workbuddy", req: 421, tokens: 96000 },
-              { name: "workbuddy_ai", req: 118, tokens: 34400 },
-            ],
-            model: [
-              { name: "deepseek-v4-flash", req: 512, tokens: 120000 },
-              { name: "glm-4.6", req: 233, tokens: 62000 },
-              { name: "claude-sonnet-4.5", req: 301, tokens: 88000 },
-            ],
-            key: [
-              { name: "本地主 Key", req: 612, tokens: 148200 },
-              { name: "Trae 专用", req: 403, tokens: 96400 },
-              { name: "WorkBuddy 专用", req: 269, tokens: 67800 },
-            ],
-            account: [
-              { name: "主账号 · 沐", req: 560, tokens: 132000 },
-              { name: "工作号", req: 421, tokens: 96000 },
-              { name: "备用号", req: 185, tokens: 50000 },
-            ],
-          },
-        };
+        return mockProxyOverview(args as { from?: number; to?: number; granularity?: string });
       case "proxy_stats_top":
         return [
           { name: "trae", req: 745, tokens: 182000 },
           { name: "workbuddy", req: 421, tokens: 96000 },
         ];
-      case "proxy_stats_detail":
-        return { total: PROXY_USAGE.length, page: 1, pageSize: 20, rows: JSON.parse(JSON.stringify(PROXY_USAGE)) };
+      case "proxy_stats_detail": {
+        // 与后端同口径：Key / 模型模糊搜索 + 渠道 / 状态过滤，并回筛选命中的 token 汇总
+        const a = (args || {}) as { key?: string; model?: string; channel?: string; status?: string; page?: number; pageSize?: number };
+        const kw = String(a.key || "").toLowerCase();
+        const mw = String(a.model || "").toLowerCase();
+        let rows = PROXY_USAGE.filter((r) => {
+          if (kw && !(r.keyName || "").toLowerCase().includes(kw) && !(r.keyId || "").toLowerCase().includes(kw)) return false;
+          if (mw && !(r.model || "").toLowerCase().includes(mw)) return false;
+          if (a.channel && r.channel !== a.channel) return false;
+          if (a.status === "ok" && !(r.status >= 200 && r.status < 300)) return false;
+          if (a.status === "4xx" && !(r.status >= 400 && r.status < 500)) return false;
+          if (a.status === "5xx" && !(r.status >= 500)) return false;
+          if (a.status === "other" && !(r.status < 200 || (r.status >= 300 && r.status < 400))) return false;
+          return true;
+        });
+        const agg = rows.reduce(
+          (s, r) => ({ req: s.req + 1, promptTokens: s.promptTokens + (r.promptTokens || 0), completionTokens: s.completionTokens + (r.completionTokens || 0) }),
+          { req: 0, promptTokens: 0, completionTokens: 0 },
+        );
+        const pageSize = a.pageSize || 20;
+        const page = a.page || 1;
+        const total = rows.length;
+        rows = rows.slice((page - 1) * pageSize, page * pageSize);
+        return {
+          total, page, pageSize,
+          agg: { ...agg, cacheReadTokens: 0, cacheCreationTokens: 0, tokens: agg.promptTokens + agg.completionTokens },
+          rows: JSON.parse(JSON.stringify(rows)),
+        };
+      }
       case "proxy_stats_cleanup": {
         // 与后端同口径：all 清空整表，否则按 days（缺省 90）删保留线之前的流水
         const days = Math.min(3650, Math.max(1, Math.round(Number(args?.days) || 90)));

@@ -5,6 +5,7 @@ import type {
   ReportRow, ToolRow, TrashRow, UpdateStatus, ProbeRow, RemoveToolPlan,
   WebDavStatus, RemoteDevice, WebDavLog, HubExtraRow, WatchStatus,
   ProxyGatewayStatus, ProxyKeyRow, ProxyChannelView, ProxyAccount, ProxyStatsOverview, ProxyStatsDetail,
+  ProxyStatsDim, ProxyStatsAggRow, ProxyStatsKeyRow,
   ProxyUsageRow, ProxyModel, ProxyScanCandidate, ProxyRuleFile, ProxyRoute, ProxyChannelId, ProxyPoolStrategy, ProxyCostTier,
   ProxyCheckinRow, CcSwitchStatus, CcSwitchRegisterResult, CcSwitchAppType, ZcodeDeviceStatusResult, ZcodeClaimModeResult,
   ProxyProvider, ProxyProviderKind, ProxyProviderModel, ProxyProviderTestResult,
@@ -19,6 +20,7 @@ export type {
   ReportRow, ToolRow, TrashRow, UpdateStatus, UpdateEvent, ProbeRow, RemoveToolPlan,
   WebDavStatus, RemoteDevice, WebDavLog, WebDavEvent, HubExtraRow, WatchStatus,
   ProxyGatewayStatus, ProxyKeyRow, ProxyChannelView, ProxyAccount, ProxyStatsOverview, ProxyStatsDetail,
+  ProxyStatsDim, ProxyStatsAggRow, ProxyStatsKeyRow,
   ProxyUsageRow, ProxyModel, ProxyScanCandidate, ProxyRuleFile, ProxyRoute, ProxyChannelId, ProxyPoolStrategy, ProxyCostTier,
   ProxyAccountStatus, ProxyEvent, ProxyCheckinRow, CcSwitchStatus, CcSwitchRegisterResult,
   ProxyOpLogList, ProxyOpLogRow,
@@ -412,11 +414,23 @@ export const proxyZcodeRestoreMid = (confirmAck?: boolean) =>
  *  主进程侧已有 120s 看门狗 + 页面 SDK 15s 加载超时托底，这里留 150s 余量即可 */
 export const proxyZcodeSolveCaptcha = (accountId: string) =>
   call<{ ok: boolean; message?: string }>("proxy_zcode_solve_captcha", { accountId }, 150_000);
-export const proxyStatsOverview = (days?: number) => call<ProxyStatsOverview>("proxy_stats_overview", { days });
-export const proxyStatsTop = (dim: "channel" | "model" | "key" | "account", days?: number) =>
+/** 区间化统计总览：from/to 为毫秒闭区间，granularity 缺省按跨度自动决策（≤2天→小时） */
+export const proxyStatsOverview = (opts?: { from?: number; to?: number; granularity?: "auto" | "hour" | "day" }) =>
+  call<ProxyStatsOverview>("proxy_stats_overview", opts as Record<string, unknown>);
+export const proxyStatsTop = (dim: ProxyStatsDim, days?: number) =>
   call<{ name: string; req: number; tokens: number }[]>("proxy_stats_top", { dim, days });
-export const proxyStatsDetail = (opts: { page?: number; pageSize?: number; channel?: string; keyId?: string; model?: string }) =>
-  call<ProxyStatsDetail>("proxy_stats_detail", opts as Record<string, unknown>);
+/** 请求明细：key/model 为模糊搜索，status 走分桶（ok/4xx/5xx/other） */
+export const proxyStatsDetail = (opts: {
+  from?: number;
+  to?: number;
+  page?: number;
+  pageSize?: number;
+  channel?: string;
+  keyId?: string;
+  key?: string;
+  model?: string;
+  status?: string;
+}) => call<ProxyStatsDetail>("proxy_stats_detail", opts as Record<string, unknown>);
 export const proxyStatsCleanup = (days?: number, all?: boolean) =>
   call<{ deleted: number }>("proxy_stats_cleanup", { days, all });
 export const proxyRecent = (limit?: number) => call<ProxyUsageRow[]>("proxy_recent", { limit });

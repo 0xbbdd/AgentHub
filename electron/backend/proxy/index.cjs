@@ -1242,19 +1242,12 @@ function register(ipcMain) {
   }));
 
   // ===== 统计 =====
-  ipcMain.handle("proxy_stats_overview", handle(({ days }) => ({
-    today: store.statsToday(),
-    trend: store.statsTrend(days || 7),
-    tops: {
-      channel: store.statsTop("channel", days || 7),
-      model: store.statsTop("model", days || 7),
-      key: store.statsTop("key", days || 7),
-      account: store.statsTop("account", days || 7),
-    },
-  })));
+  // 区间化总览：一次回 KPI / 序列 / 四维排行 / 各 Key / 状态分布 / Token 构成（方案 §4.2）
+  ipcMain.handle("proxy_stats_overview", handle(({ from, to, granularity }) =>
+    store.statsOverview({ from, to, granularity })));
   ipcMain.handle("proxy_stats_top", handle(({ dim, days }) => store.statsTop(dim, days)));
-  ipcMain.handle("proxy_stats_detail", handle(({ page, pageSize, channel, keyId, model }) =>
-    store.statsDetail({ page, pageSize, channel, keyId, model })));
+  ipcMain.handle("proxy_stats_detail", handle(({ from, to, page, pageSize, channel, keyId, key, model, status }) =>
+    store.statsDetail({ from, to, page, pageSize, channel, keyId, key, model, status })));
   // 手动清理流水：days 缺省取设置里的保留期（实时读，改完设置不必重启），all=true 清空整表。
   // 删的是不可恢复的用户数据，所以落一条操作日志——统计页的提示只活几秒，日志才是事后能查的凭据。
   ipcMain.handle("proxy_stats_cleanup", handle(({ days, all }) => {

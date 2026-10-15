@@ -620,16 +620,90 @@ export interface ProxyUsageRow {
   error: string;
 }
 
+/** 统计区间：毫秒闭区间 + 生效粒度（auto 由后端按跨度决策后回填） */
+export interface ProxyStatsRange {
+  from: number;
+  to: number;
+  granularity: "hour" | "day";
+}
+
+/** 富字段聚合行：TOP 排行与各 Key 用量共用（tokens = prompt + completion，缓存 token 是 prompt 的子集） */
+export interface ProxyStatsAggRow {
+  name: string;
+  req: number;
+  ok: number;
+  err: number;
+  successRate: number;
+  promptTokens: number;
+  completionTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  tokens: number;
+  ttftAvg: number;
+  latencyAvg: number;
+}
+
+/** 各 Key 用量行：Key 名可改，keyId 才是身份；lastTs 供「最近使用」列 */
+export interface ProxyStatsKeyRow extends ProxyStatsAggRow {
+  keyId: string;
+  lastTs: number;
+}
+
+/** 时间序列点（后端已按粒度补零，图表 x 轴连续） */
+export interface ProxyStatsPoint {
+  t: number;
+  label: string;
+  req: number;
+  ok: number;
+  err: number;
+  successRate: number;
+  promptTokens: number;
+  completionTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  tokens: number;
+  ttftAvg: number;
+  latencyAvg: number;
+}
+
+/** 区间 KPI 汇总 */
+export interface ProxyStatsSummary {
+  req: number;
+  ok: number;
+  err: number;
+  successRate: number;
+  promptTokens: number;
+  completionTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totalTokens: number;
+  ttftAvg: number;
+  ttftP50: number;
+  latencyAvg: number;
+  channels: number;
+  models: number;
+  keys: number;
+  accounts: number;
+}
+
+export type ProxyStatsDim = "channel" | "model" | "key" | "account";
+
 export interface ProxyStatsOverview {
-  today: { req: number; tokens: number; successRate: number; ttftAvg: number };
-  trend: { day: string; req: number; tokens: number }[];
-  tops: Record<"channel" | "model" | "key" | "account", { name: string; req: number; tokens: number }[]>;
+  range: ProxyStatsRange;
+  summary: ProxyStatsSummary;
+  series: ProxyStatsPoint[];
+  tops: Record<ProxyStatsDim, ProxyStatsAggRow[]>;
+  keys: ProxyStatsKeyRow[];
+  status: { name: string; key: string; value: number }[];
+  tokenMix: { name: string; key: string; value: number }[];
 }
 
 export interface ProxyStatsDetail {
   total: number;
   page: number;
   pageSize: number;
+  /** 当前筛选命中的 token 汇总（与 total 同口径，供表尾量化筛选结果） */
+  agg: { req: number; promptTokens: number; completionTokens: number; cacheReadTokens: number; cacheCreationTokens: number; tokens: number };
   rows: ProxyUsageRow[];
 }
 
