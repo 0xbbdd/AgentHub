@@ -91,34 +91,34 @@ jobs:
 
       - name: 容器运行冒烟（API 契约 + 备份 + 优雅停机）
         run: |
-          set -euo pipefail
+          set -euxo pipefail
           docker run -d --name gw-ci \
             -e AGENTHUB_SECRET_KEY=ci-secret-0123456789 \
             -e AGENTHUB_ADMIN_TOKEN=ci-admin-token-0123456789 \
             -p 127.0.0.1:19527:9527 -p 127.0.0.1:19528:9528 \
             agenthub-gateway:ci
-          trap 'docker rm -f gw-ci >/dev/null 2>&1 || true' EXIT
+          trap 'echo "=== 容器日志（诊断）==="; docker logs gw-ci 2>&1 | tail -60 || true; docker rm -f gw-ci >/dev/null 2>&1 || true' EXIT
 
+          # 探针免凭据（Dockerfile HEALTHCHECK 同款语义：probe 不带 token）
           for i in $(seq 1 30); do
-            curl -fsS -o /dev/null http://127.0.0.1:19528/api/livez 2>/dev/null && break
+            curl -fsS -o /dev/null http://127.0.0.1:19528/api/livez && break
             sleep 1
           done
           curl -fsS http://127.0.0.1:19528/api/livez | grep -q '"ok":true'
-
-          # 空池：livez 200 而 readyz 503（两个语义必须分离）
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:19528/api/readyz)" = "503"
 
-          # 鉴权：无 token 401，带 token 签发 sk- Key
+          AUTH='authorization: Bearer ci-admin-token-0123456789'
+          # 鉴权：无 token 401；带 token 可签发 sk- Key 并读到状态
           test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:19528/api/keys -H 'content-type: application/json' -d '{}')" = "401"
           curl -fsS -X POST http://127.0.0.1:19528/api/keys \
-            -H 'authorization: Bearer ci-admin-token-0123456789' -H 'content-type: application/json' \
-            -d '{"name":"ci"}' | grep -q '"secret":"sk-'
+            -H "$AUTH" -H 'content-type: application/json' -d '{"name":"ci"}' | grep -q '"secret":"sk-'
+          curl -fsS -H "$AUTH" http://127.0.0.1:19528/api/status | grep -q '"ok":true'
 
           # 反代面模型目录
           curl -fsS http://127.0.0.1:19527/v1/models | grep -q '"object":"list"'
 
           # 备份端点产物可打开且完整
-          curl -fsS -H 'authorization: Bearer ci-admin-token-0123456789' -o /tmp/backup.db http://127.0.0.1:19528/api/backup
+          curl -fsS -H "$AUTH" -o /tmp/backup.db http://127.0.0.1:19528/api/backup
           node -e "const {DatabaseSync}=require('node:sqlite');const d=new DatabaseSync('/tmp/backup.db');if(d.prepare('PRAGMA integrity_check').get().integrity_check!=='ok')process.exit(1);console.log('backup integrity ok');d.close();"
 
           # 优雅停机：SIGTERM → drain → exit 0（宽限 25s 覆盖 15s drain 上限）

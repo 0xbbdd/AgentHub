@@ -127,6 +127,9 @@ function startAdmin() {
   app.use(express.json({ limit: "4mb" }));
 
   app.use((req, res, next) => {
+    // 存活/就绪探针必须免凭据：Dockerfile 的 HEALTHCHECK 与编排器 probe 都不带 token，
+    // 若被鉴权拦住，容器的健康状态将永远失败。两者都只回布尔状态、无敏感信息
+    if (req.path === "/api/livez" || req.path === "/api/readyz") return next();
     if (!ADMIN_TOKEN) return next();
     const hdr = String(req.headers.authorization || "");
     const bearer = hdr.startsWith("Bearer ") ? hdr.slice(7) : "";
