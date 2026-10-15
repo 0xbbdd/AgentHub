@@ -457,6 +457,8 @@ src/                 渲染层（Vue 3）
 - 攻击、爬取、扫描或干扰任何服务的正常运行
 - 其他违反当地法律法规或上游服务条款的活动
 
+上述禁止事项同时写入 [LICENSE](./LICENSE) 第二部分的「附加使用条款」，构成本项目授权与使用约定的一部分，**不是仅作呼吁**。
+
 如需在生产环境或商业场景中调用相关模型服务，请使用**官方渠道与官方 API**。
 
 ### 四、凭证与数据风险
@@ -487,12 +489,15 @@ src/                 渲染层（Vue 3）
 
 ## License
 
-本项目基于 [MIT License](./LICENSE) 开源发布。
+本项目采用 **[MIT License](./LICENSE) + 附加使用条款** 的**复合授权**，**不是纯粹的 MIT 项目**：
+
+| 部分 | 内容 |
+| --- | --- |
+| 第一部分 · MIT License | 授予软件层面的使用、复制、修改、合并、发布、分发、再许可与销售权利 |
+| 第二部分 · 附加使用条款 | 对本项目的使用场景作进一步限制：禁止商业用途、禁止二次分发牟利、禁止批量账号运营、禁止绕过上游计费与配额、禁止攻击与干扰、禁止违法用途 |
+
+两部分**不可分割**，共同构成本项目完整的授权与使用约定；仅接受其中一部分者，不得以任何形式使用、复制、修改或分发本项目。附加条款与上文[使用声明](#使用声明)第三节「禁止用途」一致，如表述有出入以 [LICENSE](./LICENSE) 为准。
+
+商业场景使用须事先联系作者另行取得书面授权。完整条款（含 MIT 全文）见 [LICENSE](./LICENSE)。
 
 Copyright (c) 2026 沐辉 (HUIdada1)
-
-> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
->
-> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
->
-> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
