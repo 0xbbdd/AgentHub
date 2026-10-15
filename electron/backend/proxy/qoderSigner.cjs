@@ -61,33 +61,71 @@ function locate(product) {
 
 /**
  * 通用提取：不认混淆名、按 wasm-bindgen 结构特征现取变量名。
- * 返回 { loaderGlue, loaderWasm, glueVar, wasmVar, initAsync, initSync, names }
+ * 返回 { loaderGlue, loaderWasm, glueVar, wasmVar, initAsync, initSync, profileEnc }
+ *
+ * 每个特征都给**多条候选正则**（按精确度降序），命中即止——客户端换打包器/加字段时，
+ * 先失配的往往是「引号类型」「空白」「容器长度上限」这类无关语义的细节，
+ * 单条正则会把整条提取链一起拖死（issue #119 的表现就是五缺四）。
+ * 候选一律**先严后宽**：宽的那条只在严的失配时才跑，故对已知结构的结果逐字不变。
  */
 function pickByStructure(text) {
-  const pick = (re) => {
-    const m = text.match(re);
-    return m ? m[1] : "";
+  const pick = (res) => {
+    for (const re of Array.isArray(res) ? res : [res]) {
+      const m = text.match(re);
+      if (m) return m[1];
+    }
+    return "";
   };
   const names = {
-    wasmVar: pick(/([A-Za-z_$][\w$]*)="AGFzbQEAAAA/),
-    loaderWasm: pick(/,\s*([A-Za-z_$][\w$]*)=b\(\(\)=>\{[A-Za-z_$][\w$]*="AGFzbQEAAAA/),
-    glueVar: pick(/er\(([A-Za-z_$][\w$]*),\s*\{[^{}]{0,800}?QoderContext:\(\)=>/),
-    profileEnc: pick(/ProfileEncryptor:\(\)=>([A-Za-z_$][\w$]*)/),
-    initSync: pick(/initSync:\(\)=>([A-Za-z_$][\w$]*)/),
+    // 内嵌 wasm 的 base64 变量：引号有 " ' ` 三种写法
+    wasmVar: pick([
+      /([A-Za-z_$][\w$]*)="AGFzbQEAAAA/,
+      /([A-Za-z_$][\w$]*)='AGFzbQEAAAA/,
+      /([A-Za-z_$][\w$]*)=`AGFzbQEAAAA/,
+    ]),
+    // wasm 懒加载器 `,X=b(()=>{X="AGFzbQE…`：宽松版允许闭包体内先有别的东西
+    loaderWasm: pick([
+      /,\s*([A-Za-z_$][\w$]*)=b\(\(\)=>\{[A-Za-z_$][\w$]*="AGFzbQEAAAA/,
+      /,\s*([A-Za-z_$][\w$]*)=b\(\(\)=>\{[\s\S]{0,400}?AGFzbQEAAAA/,
+    ]),
+    // 胶水容器 er(X,{…QoderContext:()=>…})：键名跨版本稳定，但容器字段会变多——
+    // 原 800 字符上限在字段增加时会失配，宽松版放到 3000 并允许 er( 后有空白
+    glueVar: pick([
+      /er\(([A-Za-z_$][\w$]*),\s*\{[^{}]{0,800}?QoderContext:\(\)=>/,
+      /er\(\s*([A-Za-z_$][\w$]*)\s*,\s*\{[\s\S]{0,3000}?QoderContext\s*:\s*\(\)\s*=>/,
+    ]),
+    profileEnc: pick(/ProfileEncryptor:\s*\(\)\s*=>\s*([A-Za-z_$][\w$]*)/),
+    initSync: pick(/initSync:\s*\(\)\s*=>\s*([A-Za-z_$][\w$]*)/),
   };
-  // default（async init）在 glue 的 er 调用段内取
-  const erStart = text.search(/er\([A-Za-z_$][\w$]*,\s*\{[^{}]{0,800}?QoderContext:/);
-  if (erStart >= 0) {
-    const m = text.slice(erStart, erStart + 1400).match(/default:\(\)=>([A-Za-z_$][\w$]*)/);
+  // default（async init）在 glue 的 er 调用段内取；窗口同步放宽到 3000（字段变多时 default 更靠后）
+  const erAt = text.search(/er\(\s*[A-Za-z_$][\w$]*\s*,\s*\{[\s\S]{0,3000}?QoderContext\s*:\s*\(\)\s*=>/);
+  if (erAt >= 0) {
+    const m = text.slice(erAt, erAt + 3000).match(/default:\s*\(\)\s*=>\s*([A-Za-z_$][\w$]*)/);
     if (m) names.initAsync = m[1];
   }
-  // 胶水懒加载器：ProfileEncryptor 实现类的 =class 定义前
+  // 胶水懒加载器（两条路径，命中即止）：
+  //   ① ProfileEncryptor 实现类的 =class 定义前 400 字符（原路径）
+  //   ② 从 glueVar 反查——包含 `er(glueVar,` 的那个 `X=b(()=>{` 闭包就是胶水模块的懒加载器。
+  //      ②是①的兜底：客户端删掉/改名 ProfileEncryptor 时①必然失配，而 er(glueVar 这个锚点
+  //      由 glueVar 的成功提取保证存在，不依赖任何易变的类名
   if (names.profileEnc) {
     const at = text.indexOf(names.profileEnc + "=class");
     if (at > 0) {
       const before = text.slice(Math.max(0, at - 400), at);
       const m = before.match(/,([A-Za-z_$][\w$]*)=b\(\(\)=>\{$/) || before.match(/([A-Za-z_$][\w$]*)=b\(\(\)=>\{/);
       if (m) names.loaderGlue = m[1];
+    }
+  }
+  if (!names.loaderGlue && names.glueVar) {
+    // er(glueVar, 的位置：兼容 `er(X,{` 与 `er( X , {` 两种空白写法
+    const at = text.search(new RegExp(`er\\(\\s*${names.glueVar.replace(/\$/g, "\\$")}\\s*,`));
+    if (at > 0) {
+      const before = text.slice(0, at);
+      const idx = before.lastIndexOf("=b(()=>{");
+      if (idx > 0) {
+        const m = before.slice(0, idx).match(/([A-Za-z_$][\w$]*)$/);
+        if (m) names.loaderGlue = m[1];
+      }
     }
   }
   return names;
