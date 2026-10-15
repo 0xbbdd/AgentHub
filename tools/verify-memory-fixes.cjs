@@ -271,9 +271,37 @@ async function runTests() {
     idx9.removeByPath("notes/link-probe.md");
     console.log("  ✓ [Test 9 通过] file: 引用不再被误报为断链，真悬空链接仍能检出！");
 
+    // ----------------------------------------------------
+    // 测试 10: 验证 service.cjs init 的一次性迁移 (FIX-09 配套: 存量误标行启动自愈)
+    // ----------------------------------------------------
+    console.log("\n[Test 10] 验证存量 file: 误标行在 service.init 时一次性改标...");
+    // 造一行「旧版误标」数据：kind='mem' 但 dst 是 file: 前缀（真实库里全是这么误标出来的）
+    idx9.setMeta("mem_link_file_kind_v1", ""); // 清掉闸门，让迁移在下面的新实例里能跑
+    idx9.db.prepare("INSERT OR REPLACE INTO mem_link (src, dst, kind) VALUES ('mem_stale_probe', 'file:stale.tex', 'mem')").run();
+    const staleBefore = idx9.db.prepare("SELECT kind FROM mem_link WHERE src = 'mem_stale_probe' AND dst = 'file:stale.tex'").get();
+    assert.strictEqual(staleBefore.kind, "mem", "前置状态必须是旧版误标的 kind='mem'");
+    svc.close();
+    // 重新开一个 service 实例：init() 里的一次性迁移必须把这行改标
+    const svc2 = new MemoryService(tmpDir, dummyCfg, { deviceId: "unit-test-dev" }).init();
+    const staleAfter = svc2.index.db.prepare("SELECT kind FROM mem_link WHERE src = 'mem_stale_probe' AND dst = 'file:stale.tex'").get();
+    assert.strictEqual(staleAfter.kind, "file", "启动时的一次性迁移必须把 file: 误标行改判为 kind='file'");
+    assert.strictEqual(svc2.index.getMeta("mem_link_file_kind_v1"), "done", "迁移完成后必须落下 meta 闸门，避免每次启动重复执行");
+    // 迁移之后再写入的新链接必须直接就是正确分型（走源码修复路径，不靠迁移兜底）
+    svc2.index.upsertOne({
+      id: "mem_link_probe2", path: "notes/link-probe2.md", title: "Link Probe 2",
+      refs: ["file:Tex/y.tex", "mem_still_absent"],
+    });
+    const freshKinds = Object.fromEntries(
+      svc2.index.db.prepare("SELECT dst, kind FROM mem_link WHERE src = 'mem_link_probe2'").all().map((r) => [r.dst, r.kind]),
+    );
+    assert.strictEqual(freshKinds["file:Tex/y.tex"], "file", "迁移后的新数据直接走修复后的分型");
+    assert.strictEqual(freshKinds["mem_still_absent"], "mem", "无前缀引用仍按记忆间链接处理");
+    svc2.close();
+    console.log("  ✓ [Test 10 通过] 存量误标行启动自愈，meta 闸门防重复，新数据直接正确分型！");
+
     svc.close();
     console.log("\n=========================================");
-    console.log("🎉 全部 9 项纯代码自动化回归测试 100% 通过！");
+    console.log("🎉 全部 10 项纯代码自动化回归测试 100% 通过！");
     console.log("=========================================\n");
   } finally {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
