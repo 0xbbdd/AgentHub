@@ -828,7 +828,12 @@ function importCandidate(candidate, channelOverride) {
       token: candidate.token,
       refreshToken: candidate.refreshToken || undefined,
       expiresAt: candidate.expiresAt || undefined,
-      meta: { ...curMeta, ...meta, deviceId: curMeta.deviceId || meta.deviceId },
+      // 设备标识一律「旧值优先」：machineId 是**该账号登录时**客户端生成并落盘的，
+      // 而读取端（~/.qoder{,-cn}/.auth/machine_id）永远只能读到「当前登录的那个账号」的。
+      // 重新导入别的账号时若直接覆盖，两个账号会共用同一个设备标识——上游按设备去重时，
+      // 第二个账号永远领不到（issue #118：多账号只有一个能签到）。
+      // raccoon 的 deviceId 早就是这么处理的，qoder 这边漏了
+      meta: { ...curMeta, ...meta, deviceId: curMeta.deviceId || meta.deviceId, machineId: curMeta.machineId || meta.machineId },
       status: "online",
       coolUntil: 0,
       coolReason: "",
@@ -1716,7 +1721,10 @@ async function saveQoderAccount(channel, cred) {
       token,
       refreshToken,
       expiresAt: expiresAt || undefined,
-      meta: { ...oldMeta, ...meta },
+      // machineId 旧值优先：同 importCandidate 的注释（issue #118）——重新登录/续期时
+      // 当前机器上读到的是「正在登录的那个账号」的 machine_id，直接覆盖会把同渠道
+      // 其它账号的设备标识一起改掉，多账号从此共用一个身份
+      meta: { ...oldMeta, ...meta, machineId: oldMeta.machineId || meta.machineId },
       status: "online",
       coolUntil: 0,
       coolReason: "",
