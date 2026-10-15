@@ -79,6 +79,13 @@ console.log("\n② 模型清单 / 别名 / 档位 / 自定义头与 body");
   ok(!("defaultEffort" in rs.models[0].reasoning), "「默认但选不到」的档位丢掉，不留一个界面点不出来的默认值", rs.models[0].reasoning);
 
   ok(provider.normalizeModels([{ model: "a", unknownField: 1 }]).ok && !("unknownField" in provider.normalizeModels([{ model: "a", unknownField: 1 }]).models[0]), "白名单之外的键一律丢掉：留着只会让人以为生效了");
+
+  // 模型名与别名必须各记一份集合：合成一个时，后一个模型的**名字**恰好等于前一个模型的
+  // **别名**会被去重分支静默吃掉（条目消失、没有任何提示），用户只看到「配了却没生效」
+  const nameHitsAlias = provider.normalizeModels([{ model: "glm", aliases: ["glm-air"] }, { model: "glm-air" }]);
+  ok(nameHitsAlias.ok === false && /别名/.test(nameHitsAlias.message || ""), "模型名撞前面某条目的别名 → 拒（不静默丢条目）", nameHitsAlias);
+  ok(provider.normalizeModels([{ model: "glm", aliases: ["glm-air"] }, { model: "GLM" }]).ok === true, "同一个模型写两遍（大小写不同）仍是宽容去重，不是错误");
+  ok(provider.normalizeModels([{ model: "glm", aliases: ["glm-air"] }, { model: "glm-air-2" }]).ok === true, "只是前缀相同不算撞车（判据是整体相等，不是包含）");
 }
 {
   const base = { id: "rel1", baseUrl: `http://127.0.0.1:${UP}/v1`, models: ["gpt-x"] };
@@ -440,6 +447,25 @@ function listModels() {
   provider.remove("nom");
   ok(store.listProviders().length === 0, "清理后没有残留提供商", store.listProviders().map((x) => x.id));
   ok(store.channelList().every((c) => c.kind === "builtin"), "提供商删干净后路由视图回到内置集合", store.channelList().map((c) => c.id));
+
+  // ===== 补充·上游错误分类：限流与欠费必须分开 =====
+  // 原来只按裸 "quota" 判 402，把 "rate limit quota exceeded" 这类限流也算成欠费 →
+  // planLimit → pool.coolAccount("credit") 把账号冷却到次日 04:00。一个只是被限流的好号
+  // 被按「没余额」静默跳过一整天，池子可用容量骤降。中转站大量用这种措辞。
+  console.log("\n补充·上游错误分类：限流（429）与欠费（402）必须分开");
+  {
+    const st = adapters.statusFromCompatError;
+    ok(st({ message: "Rate limit exceeded, please retry later" }) === 429, "rate limit 措辞 → 429（短退避换号）", st({ message: "Rate limit exceeded" }));
+    ok(st({ message: "rate limit quota exceeded" }) === 429, "「rate limit quota exceeded」是限流不是欠费（裸 quota 判据的误伤点）");
+    ok(st({ message: "Requests per minute quota exceeded" }) === 429, "RPM 配额用尽也是限流");
+    ok(st({ message: "Too many requests" }) === 429, "Too many requests → 429");
+    ok(st({ message: "请求过于频繁，请稍后再试" }) === 429, "中文限流措辞 → 429");
+    ok(st({ message: "You exceeded your current quota, please check your plan" }) === 402, "OpenAI 官方的 insufficient quota 措辞 → 402（真欠费）");
+    ok(st({ message: "Insufficient balance" }) === 402, "余额不足 → 402");
+    ok(st({ message: "账户欠费，请充值" }) === 402, "中文欠费 → 402");
+    ok(st({ message: "invalid api key" }) === 401, "鉴权类仍判 401（顺序调整没把这条挤掉）");
+    ok(st({ message: "something unknown happened" }) === 502, "认不出的仍按 502（可换号）");
+  }
 
   up.srv.close();
   up2.srv.close();

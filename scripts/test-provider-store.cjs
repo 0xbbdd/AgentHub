@@ -151,6 +151,28 @@ console.log("\n⑧ channelDisplay 的四条路");
   ok(store.listAgents().every((a) => "kind" in a && "enabled" in a), "listAgents 带 kind/enabled（号池页要区分内置与提供商）");
 }
 
+console.log("\n⑤ 账号 meta：空对象与缺省同义（不许把设备绑定元数据清空）");
+{
+  // 空对象是 truthy，原判据会让它整份替换 meta，把库里的设备绑定元数据（machineId/deviceId/
+  // deviceMid/sid）与备注一并清空——表现是跨机同步后 Qoder 签名失败、小浣熊 200003 串号，
+  // 而那正是这几列存在的意义。`{}` 与「不传 meta」必须同义
+  const id = store.addAccount({
+    channel: "raccoon", uid: "u-meta", name: "meta 测试号", token: "tok-1", refreshToken: "ref-1",
+    source: "paste", expiresAt: 0,
+    meta: { machineId: "m-1", deviceId: "d-1", note: "旧备注" },
+  });
+  const metaOf = () => JSON.parse((store.accountRows("raccoon").find((r) => r.id === id) || {}).meta || "{}");
+  ok(metaOf().machineId === "m-1", "初始 meta 落库", metaOf());
+  store.updateAccount(id, { status: "online", meta: {} });
+  ok(metaOf().machineId === "m-1" && metaOf().note === "旧备注", "传 meta: {} 不清空已有 meta（空对象与缺省同义）", metaOf());
+  store.updateAccount(id, { meta: { ...metaOf(), note: "新备注" } });
+  ok(metaOf().note === "新备注", "传带键的 meta 照常写入", metaOf());
+  ok(metaOf().machineId === "m-1", "改备注不动设备绑定元数据", metaOf());
+  store.updateAccount(id, { status: "cooling" });
+  ok(metaOf().machineId === "m-1" && metaOf().note === "新备注", "只改状态时 meta 原样保留", metaOf());
+  store.removeAccount(id);
+}
+
 store.close();
 console.log(`\n${pass} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

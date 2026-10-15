@@ -60,7 +60,13 @@ function post(body, headers) {
   ok(server.nearModelIds("nope-xyz", all).length === 0, "完全不像 → 空（不乱猜）");
   ok(server.nearModelIds("", all).length === 0, "空串 → 空");
   ok(server.nearModelIds("model", []).length === 0, "目录为空 → 空");
-  ok(server.nearModelIds("a", [{ id: "a-b" }, { id: "a-c" }, { id: "a-d" }, { id: "a-e" }]).length === 3, "最多只给 3 个（不刷屏）");
+  // 短名的误报：归一后 <4 时不做「包含」判定——一个 "a" 会命中目录里所有含 a 的模型，
+  // 三个名额被毫无关系的名字占满，提示反而变成噪音（比不提示更误导）
+  ok(server.nearModelIds("a", [{ id: "a-b" }, { id: "a-c" }, { id: "a-d" }, { id: "a-e" }]).length === 0, "归一后过短（<4）不做包含判定：一个 \"a\" 不该把无关模型全列出来");
+  ok(server.nearModelIds("gpt-5", [{ id: "gpt5" }, { id: "zzz" }]).join() === "gpt5", "归一后完全相同仍命中（只差分隔符的误用照旧提示）");
+  ok(server.nearModelIds("gpt5", [{ id: "gpt5-a" }, { id: "gpt5-b" }, { id: "gpt5-c" }, { id: "gpt5-d" }]).length === 3, "最多只给 3 个（不刷屏）");
+  // 目录顺序随机，不排序时更接近的名字可能被挤在三个名额之外
+  ok(server.nearModelIds("claude-sonnet", [{ id: "claude-sonnet-4.5-20260101" }, { id: "claude-sonnet-4.5" }])[0] === "claude-sonnet-4.5", "更接近的排前面（长度差小者优先）");
 
   // ===== ② 端到端：真 HTTP 打进真调度核心 =====
   console.log("\n② 端到端·未知模型提示:");

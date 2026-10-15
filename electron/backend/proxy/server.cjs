@@ -252,16 +252,22 @@ function nearModelIds(model, all) {
   const norm = (s) => String(s || "").toLowerCase().replace(/[-_.]/g, "");
   const key = norm(model);
   if (!key) return [];
-  const out = [];
+  // 归一后太短（<4）时不做「包含」判定：一个 "a" 会命中目录里所有含 a 的模型，三个名额
+  // 瞬间被毫无关系的名字占满，提示本身变成噪音（比不提示更误导）。这一档只留「归一后
+  // 完全相同」——那正是「只差分隔符」的误用（gpt5 vs gpt-5），且请求一定走到了这里
+  // （说明按原文查不到），提示它恰恰是对的
+  const loose = key.length >= 4;
+  const hits = [];
   for (const m of all || []) {
     const k = norm(m && m.id);
-    // 不排除 k === key：归一后相同、原文不同正是「只差分隔符」的误用（gpt5 vs gpt-5），
-    // 而这种请求一定走到了这里（说明按原文查不到），提示它恰恰是对的
     if (!k) continue;
-    if (k.includes(key) || key.includes(k)) out.push(m.id);
-    if (out.length >= 3) break;
+    if (k === key) hits.push({ id: m.id, d: 0 });
+    else if (loose && (k.includes(key) || key.includes(k))) hits.push({ id: m.id, d: Math.abs(k.length - key.length) });
   }
-  return out;
+  // 越接近的排前面（长度差小者优先）：目录顺序是随机的，不排序时更接近的名字可能被挤在
+  // 三个名额之外，用户拿到的仍是没用的三条
+  hits.sort((a, b) => a.d - b.d);
+  return hits.slice(0, 3).map((h) => h.id);
 }
 
 /** 按生效档取最优渠道（resolveChannel 智能分支）；sort 稳定，同分保持 modelOwners 返回序 */

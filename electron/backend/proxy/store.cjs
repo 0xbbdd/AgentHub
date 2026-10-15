@@ -893,7 +893,11 @@ function updateAccount(id, patch) {
   // meta 只写一次：调用方给的整份（上游既有调用方都是读-改-写来的）与上面补的编辑时钟合并。
   // 编辑时钟优先——它是本次写入的意图，不能被调用方手里的旧快照盖掉；patch.meta 缺省时
   // 以库里的 meta 为底，避免「只改名」把别人写过的 meta 清掉。
-  const metaIn = patch.meta != null && typeof patch.meta === "object" ? patch.meta : null;
+  // **空对象与缺省同义**（都表示「本次不改 meta」）：`{}` 是 truthy，原判据会让它整份替换，
+  // 把库里的设备绑定元数据（machineId / deviceId / deviceMid / sid）与备注一并清空——
+  // 表现是跨机同步后 Qoder 签名失败、小浣熊 200003 串号，而那正是这几列存在的意义。
+  // 真想清空请显式写一个不含敏感键的对象（stripSensitiveMeta 负责过滤），别用空对象表达
+  const metaIn = patch.meta && typeof patch.meta === "object" && Object.keys(patch.meta).length ? patch.meta : null;
   if (metaIn || Object.keys(editClock).length) {
     put("meta", JSON.stringify(stripSensitiveMeta({ ...(metaIn || parseMeta(cur.meta)), ...editClock })));
   }

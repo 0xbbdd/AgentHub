@@ -78,7 +78,11 @@ function normalizeBaseUrl(raw) {
 function normalizeModels(raw) {
   const list = Array.isArray(raw) ? raw : String(raw || "").split(/[\n,]/);
   const out = [];
-  const seen = new Set();
+  // 模型名与别名各记一份：合成一个集合会让「后一个模型的名字恰好等于前一个模型的别名」
+  // 被下面那条去重 continue 静默吃掉（条目消失、没有任何提示），而同一个模型写两遍
+  // 是用户手滑、该宽容去重。两个集合才分得清这两种情况
+  const seenModels = new Set();
+  const seenAliases = new Set();
   for (const item of list) {
     const e = typeof item === "string" ? { model: item } : item;
     if (!e || typeof e !== "object" || Array.isArray(e)) continue;
@@ -86,9 +90,11 @@ function normalizeModels(raw) {
     if (!model) continue;
     if (model.includes("/")) return { ok: false, message: `模型名 "${model}" 含 /：斜杠是 provider/model 的分隔符，模型本身不能有` };
     const key = model.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const aliases = normalizeAliases(e.aliases, model, seen);
+    if (seenModels.has(key)) continue; // 同一个模型写两遍：去重（宽容，不是错误）
+    // 撞上前面某个别名则必须报错：两个名字就说不清该映射到哪个上游真名，静默丢条目更糟
+    if (seenAliases.has(key)) return { ok: false, message: `模型名 "${model}" 与本提供商的另一个模型的别名重复` };
+    seenModels.add(key);
+    const aliases = normalizeAliases(e.aliases, model, seenModels, seenAliases);
     if (aliases.error) return { ok: false, message: aliases.error };
     const reasoning = normalizeReasoning(e.reasoning);
     out.push({
@@ -110,7 +116,7 @@ const ALIAS_MAX = 8;
 
 /** 别名与模型名同规则（不含 /），且不能与本提供商内任何其他名字撞——撞了两个名字就说不清
  *  该映射到哪个上游真名。撞内置模型名不在此拦：裸名解析本来就是内置优先，结构上遮蔽不了。 */
-function normalizeAliases(raw, model, seen) {
+function normalizeAliases(raw, model, seenModels, seenAliases) {
   const arr = Array.isArray(raw) ? raw : typeof raw === "string" ? raw.split(/[\n,]/) : [];
   const out = [];
   for (const a of arr) {
@@ -119,8 +125,9 @@ function normalizeAliases(raw, model, seen) {
     if (s.includes("/")) return { error: `别名 "${s}" 含 /，不能用作别名` };
     if (out.length >= ALIAS_MAX) return { error: `模型 "${model}" 的别名超过 ${ALIAS_MAX} 个` };
     const k = s.toLowerCase();
-    if (seen.has(k)) return { error: `别名 "${s}" 与本提供商的另一个模型/别名重复` };
-    seen.add(k);
+    if (seenAliases.has(k)) return { error: `别名 "${s}" 与本提供商的另一个别名重复` };
+    if (seenModels.has(k)) return { error: `别名 "${s}" 与本提供商的另一个模型名重复` };
+    seenAliases.add(k);
     out.push(s.slice(0, 128));
   }
   return { list: out };

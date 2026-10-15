@@ -4215,13 +4215,27 @@ function providerCatalogMap(row) {
   return map;
 }
 
+/** 限流措辞（429 语义：现在慢一点，短退避换号即可）。刻意**不含裸 quota**——
+ *  中转站大量用 "rate limit quota exceeded" / "requests per minute quota exceeded" 报限流。 */
+const RATE_LIMIT_HINT = /rate[_ ]?limit|too many requests|requests per (minute|second)|请求过于频繁|限流|\brpm\b|\btpm\b/i;
+/** 欠费措辞（402 语义：这个号没钱了，才该 coolAccount("credit") 冷却到次日）。
+ *  OpenAI 官方的 insufficient_quota 与「You exceeded your current quota」配的是 429 码，
+ *  但语义确实是欠费，故按措辞收在这里——所以判序必须是「先限流措辞、再欠费措辞」。 */
+const BILLING_HINT = /insufficient_quota|insufficient[_ ]?balance|quota[_ ]?exhausted|quota[_ ]?exceeded|exceeded[^.]{0,24}quota|out of credits|no credits|balance|exhausted|欠费|余额|积分不足|积分耗尽/i;
+
 /** 上游错误 → HTTP 语义。中转站的错误体形状远比内置渠道散，这里只认 OpenAI 形状 + 常见措辞：
  *  余额/配额类判 402（换号）、鉴权类判 401（冷却该 Key）、其余按码透传，认不出的一律 502（可换号）。 */
 function statusFromCompatError(errObj, data) {
   const raw = String((errObj && (errObj.type || errObj.code)) || "");
   const msg = String((errObj && errObj.message) || (data && data.message) || "");
-  if (/insufficient_quota|quota|balance|exhausted|欠费|余额|积分/i.test(raw + " " + msg)) return 402;
-  if (/auth|api[_ ]?key|invalid[_ ]?key|unauthorized/i.test(raw + " " + msg)) return 401;
+  const text = `${raw} ${msg}`;
+  // 限流必须排在欠费之前：原来只按裸 "quota" 判 402，把 "rate limit quota exceeded" 这类
+  // 限流也算成欠费 → planLimit → pool.coolAccount("credit") 把账号冷却到次日 04:00，
+  // 一个好号被按「没余额」静默跳过一整天，池子可用容量骤降（本 PR 复查发现）。
+  // 两条正则互斥：限流那条不含裸 quota，欠费那条含 insufficient_quota
+  if (RATE_LIMIT_HINT.test(text)) return 429;
+  if (BILLING_HINT.test(text)) return 402;
+  if (/auth|api[_ ]?key|invalid[_ ]?key|unauthorized/i.test(text)) return 401;
   const n = Number(errObj && errObj.code);
   if (n === 429 || n === 401 || n === 404 || n === 400 || n === 402 || (n >= 500 && n < 600)) return n;
   return 502;
