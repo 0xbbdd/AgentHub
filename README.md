@@ -6,21 +6,23 @@
 
 > 把「技能、用量、额度、记忆」四件事收进一个 Windows 桌面应用。
 
-AgentHub 是一个**本地运行**的中控台（Electron + Vue 3 + TypeScript）。它自己不带任何模型，做的是把你在各家 AI 编程工具里的东西统一管起来：技能在哪个工具里重复安装、这个月 token 花在哪儿、订阅额度能不能给别的客户端用、Agent 记不住项目——这四类日常麻烦，对应下面四个板块。
+AgentHub 是本地运行的中控台（Electron + Vue 3 + TypeScript），自身不带模型，只把你散在各家 AI 编程工具里的东西管起来：Skill 重复安装、这个月 token 花在哪儿、订阅额度能不能给别的客户端用、Agent 记不住项目。这四件事对应下面四个板块。
+
+它有两个形态：**Windows 桌面版**（四个板块全功能，见 [Windows 版下载与安装](#windows-版下载与安装)）和 **Docker 版**（只含反代网关，适合放到服务器上常驻，见 [Docker 版下载与安装](#docker-版下载与安装)）。
 
 | 板块 | 一句话 | 适合谁 |
 | --- | --- | --- |
-| **技能仓库** | 把散落在各工具的 Skill 收进中央库，一处维护、一键分发 | 同时用 Codex / Claude Code / ZCode / Cursor 等多个工具的人 |
-| **用量统计** | 汇总 20 个数据源的 token 用量与费用，按天/项目/模型看趋势 | 想知道「这个月到底烧了多少」的人 |
-| **反代网关** | 把已登录的订阅额度包成 OpenAI 兼容 API，给任何客户端用 | 有 Trae / WorkBuddy / 商汤小浣熊 / ModelScope（魔搭）/ LobsterAI / ZCode / CatPaw / Qoder / AutoClaw / Cline 任一渠道的订阅额度、想让其他软件也能调用的人 |
-| **记忆中枢** | 本地 Markdown 记忆库 + MCP 服务，让 Agent 记住项目与偏好 | 不想每次开新会话都重新交代背景的人 |
+| **技能仓库** | 各工具的 Skill 收进一个中央库，一处维护、一键挂回 | 同时用 Codex / Claude Code / ZCode / Cursor 等多个工具的人 |
+| **用量统计** | 汇总 20 个数据源的 token 用量与费用，按天 / 项目 / 模型看趋势 | 想知道这个月到底烧了多少的人 |
+| **反代网关** | 把本机已登录的订阅额度包成标准 API，任何客户端都能调 | 手里有订阅额度（Trae / WorkBuddy / 小浣熊 / 魔搭 / ZCode / Qoder / Cline 等 14 个渠道）、想让别的软件也用上的人 |
+| **记忆中枢** | 本地 Markdown 记忆库 + MCP 服务，让 Agent 记住项目和偏好 | 不想每次开新会话都重新交代背景的人 |
 
 ---
 
 ## 目录
 
-- [下载与安装](#下载与安装)
-- [界面总览](#界面总览)
+- [Windows 版下载与安装](#windows-版下载与安装)
+- [Docker 版下载与安装](#docker-版下载与安装)
 - [板块一：技能仓库](#板块一技能仓库)
 - [板块二：用量统计](#板块二用量统计)
 - [板块三：反代网关](#板块三反代网关)
@@ -31,7 +33,7 @@ AgentHub 是一个**本地运行**的中控台（Electron + Vue 3 + TypeScript�
 
 ---
 
-## 下载与安装
+## Windows 版下载与安装
 
 ### 安装版（推荐）
 
@@ -58,12 +60,38 @@ AgentHub 是一个**本地运行**的中控台（Electron + Vue 3 + TypeScript�
 
 ---
 
-## 界面总览
+## Docker 版下载与安装
 
-- **左侧**：四个板块卡片（可拖动排序），卡片上直接显示该板块的关键状态；最左下角是设置齿轮、版本号、亮暗主题切换
-- **顶部横条**：当前板块的子页面切换；最右侧「配置」按钮进入该板块的配置页
-- **页面红点**：某个页签右上角出现小红点，表示那一页有东西等你处理（如技能冲突裁决、记忆待确认），处理完自动消失
-- **托盘**：双击唤回窗口；右键可暂停同步、手动同步、查看今日用量
+Docker 版只含**反代网关**（没有桌面端的技能 / 用量 / 记忆三个板块），适合把网关丢到服务器上常驻。渠道代码与桌面版同一套，账号通过 WebDAV/S3 号池同步互通。
+
+前提：Docker 20.10+ 与 Compose v2，Linux 服务器 1 核 512MB 起。
+
+```bash
+git clone https://github.com/HUIdada1/AgentHub.git && cd AgentHub
+
+# 凭据加密密钥，务必留存好：丢了以后已加密的凭据不可恢复
+export AGENTHUB_SECRET_KEY=$(openssl rand -base64 32)
+
+# 容器内以 uid 1000 运行，宿主数据目录属主要对齐
+mkdir -p gateway-data && sudo chown 1000:1000 gateway-data
+
+docker compose -f gateway/docker-compose.yml up -d --build
+```
+
+起来后自检：
+
+```bash
+curl -s http://127.0.0.1:9528/api/livez     # {"ok":true}，进程活着
+curl -s http://127.0.0.1:9528/api/readyz    # 503 = 池里还没账号，正常
+```
+
+- 客户端连 `http://<服务器>:9527/v1`，Key 用管理 API 创建（`POST /api/keys`）
+- 管理 API 默认只绑宿主 `127.0.0.1:9528`；设了 `AGENTHUB_ADMIN_TOKEN` 才能远程访问
+- 账号来源：桌面版配好 WebDAV 后同步过去（推荐），或 `POST /api/accounts/import` 导入 JSON
+- 容器里没有桌面客户端，**本机软件导入、切到 IDE、Qoder 双区**这些依赖 Windows 客户端的能力用不了
+- 别把桌面版的数据目录挂给容器：那边凭据是 DPAPI 密文，Linux 侧解不开
+
+端口、备份、密钥轮换、WebDAV 与容器同机部署、排障等完整说明见 [gateway/README.md](./gateway/README.md)。
 
 ---
 
@@ -71,7 +99,7 @@ AgentHub 是一个**本地运行**的中控台（Electron + Vue 3 + TypeScript�
 
 ### 它解决什么问题
 
-同一个 Skill 你可能在 Codex、Claude Code、ZCode、Cursor 里各装了一份，改一处忘一处。技能仓库的做法是：**把所有工具的 Skill 目录收进一个中央仓库，再由中央仓库挂载回各工具**——之后只在中央仓库维护，一处更新，处处生效。
+同一个 Skill 你在 Codex、Claude Code、ZCode、Cursor 里各装了一份，改一处忘三处。技能仓库把所有工具的 Skill 目录收进一个中央仓库，再挂载回各工具：以后只在中央库维护，一处更新，处处生效。
 
 ### 页面构成
 
@@ -97,7 +125,7 @@ AgentHub 是一个**本地运行**的中控台（Electron + Vue 3 + TypeScript�
 
 ### 它解决什么问题
 
-各家 AI 工具的用量分散在各自的本地数据库里，没人告诉你「这个月一共花了多少」。用量统计直接读**本机客户端自己的数据文件**，把 20 个数据源归一成同一套口径，做汇总、趋势、费用与跨设备对比。
+用量散在各家工具自己的本地库里，没人告诉你这个月一共花了多少。用量统计直接读**本机客户端的数据文件**，把 20 个数据源归一到同一套口径，做汇总、趋势、费用和跨设备对比。
 
 ### 支持的数据源（20 个）
 
@@ -125,9 +153,9 @@ ZCode、商汤小浣熊、Xiaomi MiMo、Codex、DeepSeek Harness、WorkBuddy、W
 
 ## 板块三：反代网关
 
-> 这是本项目最核心的板块。它把你**本机已经登录**的订阅额度，包装成标准的 API 接口，任何支持「自定义接口」的客户端都能直接调用。
+> 这是本项目最核心的板块：把**本机已经登录**的订阅额度包成标准 API，任何支持「自定义接口」的客户端都能直接调用。
 >
-> 入站协议面共三条，**同一个地址、同一把 Key**，按客户端讲的是哪种协议自动分流：
+> 入站三条协议面，**同一个地址、同一把 Key**，按客户端讲的协议自动分流：
 >
 > | 端点 | 协议 | 谁会用 |
 > | --- | --- | --- |
@@ -135,7 +163,7 @@ ZCode、商汤小浣熊、Xiaomi MiMo、Codex、DeepSeek Harness、WorkBuddy、W
 > | `POST /v1/messages`（另有 `POST /v1/messages/count_tokens`） | Anthropic Messages | Claude Code / Anthropic SDK |
 > | `POST /v1/responses` | OpenAI Responses | Codex CLI |
 >
-> 三条面共用同一套调度：鉴权、模型别名、模型禁用、回退链、号池换号、冷却决策与记账完全一致，区别只在「怎么读网关 Key」与「写成什么字节」。所以 **Claude Code 与 Codex 现在可以直接把网关地址填进去，用到全部渠道**，不再必须经 CC Switch 做协议翻译。
+> 三条面共用同一套调度：鉴权、模型别名、模型禁用、回退链、号池换号、冷却决策与记账完全一致，区别只在「怎么读网关 Key」和「写成什么字节」。所以 **Claude Code 与 Codex 可以直接把网关地址填进去，用到全部渠道**，不必再经 CC Switch 做协议翻译。
 
 ### 支持的渠道
 
@@ -290,9 +318,9 @@ http://127.0.0.1:9527/v1
 
 ### 它解决什么问题
 
-Agent 每次开新会话都不记得你的项目背景、技术决策和踩过的坑。记忆中枢在本地维护一个 **Markdown 记忆库**，把会话中值得长期保留的事实沉淀下来，再通过 **MCP 服务**提供给各个 Agent 读写——你的记忆始终是本地一堆可读可 diff 的 md 文件。
+Agent 每次开新会话都不记得你的项目背景、技术决策和踩过的坑。记忆中枢在本地维护一个 **Markdown 记忆库**，把会话里值得长期保留的事实沉淀下来，再通过 **MCP 服务**给各个 Agent 读写——你的记忆始终是本地一堆可读、可 diff 的 md 文件。
 
-默认仓库位置：`~/AgentHub/memory`，按 `projects/<项目>/l1/<agent>/<日期>.md`（原始事实）与 `projects/<项目>/l2/...`（蒸馏出的项目汇总 / 决策 / 知识）组织。
+默认仓库在 `~/AgentHub/memory`：`projects/<项目>/l1/<agent>/<日期>.md` 存原始事实，`projects/<项目>/l2/...` 存蒸馏出的项目汇总、决策与知识。
 
 ### 页面构成
 
