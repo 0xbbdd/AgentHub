@@ -35,6 +35,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22.22.0'
+          cache: npm
+
+      - name: 安装运行时依赖（与镜像同源；lock 与 package.json 漂移时退回 install）
+        run: npm ci --omit=dev || npm install --omit=dev --no-audit --no-fund
 
       - name: 依赖闭包断言（防 Dockerfile COPY 与真实闭包漂移）
         run: node tools/gateway-closure-check.cjs
