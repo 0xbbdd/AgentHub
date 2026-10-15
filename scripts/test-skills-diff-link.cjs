@@ -230,6 +230,19 @@ function main() {
     ok(readSkill(destA) !== readSkill(destB), "两份内容各自独立，没有互相覆盖");
   }
 
+  // ---------- [10] 收纳复制失败必须自己接住 ----------
+  // 复制失败（权限 / 磁盘满 / 路径过长）时旧中央版已经进了回收站，让异常裸奔上去的话
+  // 用户只看到一条未捕获的错误，不知道内容还能从回收站还原。这条是接线守卫：
+  // 真实触发需要权限/磁盘故障，用源码锚点钉住「cpSync 被 try 包住且提示回收站」，
+  // 与仓内既有的接线守卫（如 atomic-tmp-pid 的语句锚点）同一先例
+  console.log("\n[10] adopt 的复制失败必须自己接住（旧中央版已进回收站）");
+  {
+    const src = fs.readFileSync(path.join(__dirname, "..", "electron", "backend", "syncer.cjs"), "utf8");
+    ok(/try \{\s*\n\s*fs\.cpSync\(st\.resolved, central/.test(src), "adopt 的 fs.cpSync 被 try 包住");
+    ok(/原中央版已移入回收站/.test(src), "复制失败时如实说明旧版可从回收站还原");
+    ok(/中央此前没有这份内容，未受影响/.test(src), "中央此前无内容时也给出明确说法");
+  }
+
   console.log(`\n${failed === 0 ? "OK" : "FAIL"} 技能仓库 diff-link 裁决自测：${pass} 项通过，${failed} 项失败`);
 }
 

@@ -458,7 +458,16 @@ function resolveDiffLinkConflict(item, choice, cfg) {
     if (!st.hasSkillMd) return { ok: false, message: `链接指向的位置没有 SKILL.md（${st.resolved}），不是技能目录，已拒绝收纳` };
     const central = st.centralPath;
     const oldBacked = fs.existsSync(central) ? hub.toTrash(central, skill) : "";
-    fs.cpSync(st.resolved, central, { recursive: true });
+    // 复制失败（权限 / 磁盘满 / 路径过长）必须自己接住：此时旧中央版已经进了回收站，
+    // 让异常裸奔上去的话用户只会看到一条未捕获的错误，不知道内容还能从回收站还原
+    try {
+      fs.cpSync(st.resolved, central, { recursive: true });
+    } catch (e) {
+      return {
+        ok: false,
+        message: `收纳失败：${String((e && e.message) || e)}${oldBacked ? `；原中央版已移入回收站（${path.basename(oldBacked)}），可还原` : "；中央此前没有这份内容，未受影响"}`,
+      };
+    }
     const treeHash = scanner.treeHash(central);
     const m = hub.loadManifest();
     const detail = `冲突裁决：收下链接指向的那份（${st.resolved}）覆盖中央${oldBacked ? `，旧中央版进回收站（${path.basename(oldBacked)}）` : ""}`;
