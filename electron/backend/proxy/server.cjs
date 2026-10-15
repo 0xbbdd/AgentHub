@@ -531,7 +531,7 @@ const RESPONSES_SURFACE = { name: "responses", createSink: responsesOut.create, 
  *  surface 只决定「这一串事件写成什么字节」：OpenAI / Anthropic / Responses 各一个工厂。
  *  下面的鉴权、别名、回退链、号池换号、冷却决策对所有协议共用同一份代码——
  *  这是当初定下「内部规范形 = OpenAI chat + emit 词汇不扩」的全部回报。 */
-async function handleChat(req, res, settings, surface) {
+async function handleChat(req, res, settings, surface, convNotes) {
   const startedAt = Date.now();
   const reqId = util.uuid().replace(/-/g, "").slice(0, 24);
   const body = req.body || {};
@@ -550,7 +550,11 @@ async function handleChat(req, res, settings, surface) {
     return estInputCache;
   };
   const sink = surface.createSink({ res, reqId, requestedModel: String(body.model || ""), wantStream, estInputTokens });
-  const usageRow = { ts: startedAt, reqId, keyId: "", keyName: "", channel: "", accountId: "", accountName: "", model: String(body.model || ""), status: 0 };
+  // convNotes：入站协议转换时的语义损失（thinking.signature 不回投、document 块丢弃、
+  // hosted_tool 退化为 auto 等），由路由层从 toInternal() 取到后传进来。
+  // 只进操作日志的 detail，**不落 usage_requests**——加列要走 DB 迁移，而这条信息的用途是
+  // 「这次请求丢了什么」的排查线索，日志页本来就能查（issue #126 作者给的三个选项里选 op_logs）
+  const usageRow = { ts: startedAt, reqId, keyId: "", keyName: "", channel: "", accountId: "", accountName: "", model: String(body.model || ""), status: 0, convNotes: Array.isArray(convNotes) ? convNotes.join(" | ").slice(0, 300) : "" };
 
   const record = (extra) => {
     usageRow.latencyMs = Date.now() - startedAt;
@@ -560,10 +564,12 @@ async function handleChat(req, res, settings, surface) {
     emitRequestThrottled();
     // 操作日志：每条代理请求一条（成功 info / 4xx warn / 5xx+网络 error）；
     // detail 带上游错误轨迹，message 带模型与耗时——日志页直接看，不必翻 usage_requests
+    // 转换损失（convNotes）一并挂进 detail：成功请求的 error 是空的，不拼在这里就无处可查，
+    // 而「同样的对话官方能跑、走网关差一点」正是靠它归因（issue #126）
     const st = Number(usageRow.status) || 0;
     oplog.log(st >= 500 || st === 0 ? "error" : st >= 400 ? "warn" : "info", "代理请求",
       `${usageRow.model || "-"} · HTTP ${st || "-"} · ${usageRow.latencyMs}ms${usageRow.error ? " · " + String(usageRow.error).slice(0, 120) : ""}`,
-      { channel: usageRow.channel, target: [usageRow.keyName, usageRow.accountName].filter(Boolean).join(" / "), detail: usageRow.error || "" });
+      { channel: usageRow.channel, target: [usageRow.keyName, usageRow.accountName].filter(Boolean).join(" / "), detail: [usageRow.error, usageRow.convNotes].filter(Boolean).join(" · ") });
   };
 
   // ===== 鉴权：库中只存哈希，实时查表（启停/删除即时生效）。Key 从哪个头读由协议面定 =====
@@ -1163,11 +1169,12 @@ function buildApp(settings) {
     }
     if (r.notes && r.notes.length) {
       // 转换中的语义损失（thinking.signature 不回投、document/图片 file 源丢弃等）必须留痕：
-      // 用户看到的是"同样的对话在 Anthropic 官方能跑、走网关差一点"，无线索就无法归因
+      // 用户看到的是"同样的对话在 Anthropic 官方能跑、走网关差一点"，无线索就无法归因。
+      // 落两处：终端（本地调试直接看）+ 该请求的操作日志行 detail（界面可查，见 handleChat 的 record）
       console.warn(`[gateway] /v1/messages 转换损失: ${r.notes.join(" | ")}`);
     }
     req.body = r.body;
-    return handleChat(req, res, settings(), ANTHROPIC_SURFACE).catch((e) => {
+    return handleChat(req, res, settings(), ANTHROPIC_SURFACE, r.notes).catch((e) => {
       if (!res.headersSent) res.status(500).json({ type: "error", error: { type: "api_error", message: String((e && e.message) || e) } });
     });
   });
@@ -1189,10 +1196,11 @@ function buildApp(settings) {
       return undefined;
     }
     if (r.notes && r.notes.length) {
+      // 同 /v1/messages：终端与操作日志行 detail 各留一份
       console.warn(`[gateway] /v1/responses 转换损失: ${r.notes.join(" | ")}`);
     }
     req.body = r.body;
-    return handleChat(req, res, settings(), RESPONSES_SURFACE).catch((e) => {
+    return handleChat(req, res, settings(), RESPONSES_SURFACE, r.notes).catch((e) => {
       if (!res.headersSent) res.status(500).json({ error: { message: String((e && e.message) || e), type: "api_error", param: null, code: null } });
     });
   });
