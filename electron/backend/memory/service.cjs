@@ -51,6 +51,18 @@ class MemoryService {
     ensureSynonyms(this.root);
     this.index.open();
     if (!this.index.readOnly) this.index.setMeta("lastScanAt", String(Date.now()));
+    // 一次性迁移：file: 引用误标 kind='mem' 的存量行改标（2026-10-15）。
+    // 旧版 _replaceLinks 不认 file: 前缀，文件锚定引用全部落成 kind='mem'，而断链口径
+    // 「kind='mem' 且 dst 不在 mem 表」把每条文件链接都数成断链——仪表盘断链数虚高。
+    // src 分型修复只断新数据，存量行在这里启动时一次性收口；mem id 不会是 file: 开头，
+    // 这条 UPDATE 只会命中确实误标的行。meta 闸门保证只跑一次，失败不设闸门（下次启动
+    // 重试）；只读模式（库版本比本程序新）下跳过。
+    if (!this.index.readOnly && this.index.getMeta("mem_link_file_kind_v1") !== "done") {
+      try {
+        this.index.db.prepare("UPDATE mem_link SET kind = 'file' WHERE kind = 'mem' AND dst LIKE 'file:%'").run();
+        this.index.setMeta("mem_link_file_kind_v1", "done");
+      } catch { /* 迁移失败不阻塞启动，下次启动重试 */ }
+    }
     const projectFile = path.join(this.root, "projects", "_index.json");
     if (!fs.existsSync(projectFile)) {
       const r = this.registry;
