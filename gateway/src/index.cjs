@@ -126,13 +126,20 @@ async function main() {
 
 // ===== 管理 API =====
 
-/** 路由包装：异常收敛为 JSON 错误（与桌面 IPC 层的 handle() 同款形状） */
+/** 路由包装：异常收敛为 JSON 错误（与桌面 IPC 层的 handle() 同款形状）。
+ *  同步抛错与异步拒绝都兜住——async handler 的拒绝不会被 try 捕获，漏掉会变成
+ *  unhandledRejection 且客户端永远等不到响应 */
 function handle(fn) {
+  const fail = (res, e) => {
+    if (!res.headersSent) res.status(500).json({ ok: false, message: String((e && e.message) || e) });
+  };
   return (req, res) => {
     try {
-      return fn(req, res);
+      const out = fn(req, res);
+      if (out && typeof out.then === "function") out.catch((e) => fail(res, e));
+      return out;
     } catch (e) {
-      res.status(500).json({ ok: false, message: String((e && e.message) || e) });
+      fail(res, e);
     }
   };
 }
