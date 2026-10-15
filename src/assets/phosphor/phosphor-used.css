@@ -184,6 +184,9 @@
 .ph.ph-git-merge:before {
   content: "\e280";
 }
+.ph.ph-github-logo:before {
+  content: "\e576";
+}
 .ph.ph-hand-tap:before {
   content: "\ec90";
 }

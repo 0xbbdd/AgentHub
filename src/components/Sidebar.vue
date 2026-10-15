@@ -1,7 +1,7 @@
 <!-- 左栏双卡片：上 = 品牌 + 四大模块切换；下 = 当前模块的总览概况
      概况数据全部来自真实统计：skills 走轻量 IPC（skills_side_stats）、sync 走 usage store、
      proxy 走号池/Keys/网关状态、memory 走记忆中枢统计 IPC；模块顺序自定义在「设置 · 通用」
-     版本 / 署名 / 亮暗 / 设置入口统一收在最左下角 -->
+     版本 / 署名 / GitHub / 亮暗 / 设置入口统一收在最左下角 -->
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { ElMessageBox } from "element-plus";
@@ -44,6 +44,10 @@ function refreshStatsForEnabled(only?: string) {
   if (want("skills") && modOn("skills")) refreshSkillsStats();
   if (want("memory") && modOn("memory")) refreshMemoryStats();
   if (want("usage") && modOn("usage")) ensureUsageSummary();
+}
+/** 侧栏 GitHub 入口：交由主进程 shell.openExternal 用默认浏览器打开仓库 */
+function openRepo() {
+  api.openRepoPage().catch(() => {});
 }
 onMounted(async () => {
   refreshStatsForEnabled();
@@ -576,7 +580,7 @@ const TOOLS = computed<{ name: string; meta: string; label: string; ok: boolean 
         </template>
       </div>
 
-      <!-- 左下角全局操作：版本 / 署名 / 亮暗 / 设置 -->
+      <!-- 左下角全局操作：版本 / 署名 / GitHub / 亮暗 / 设置 -->
       <div class="side-foot">
         <div class="foot-meta">
           <div class="foot-ver">{{ version }}</div>
@@ -584,6 +588,11 @@ const TOOLS = computed<{ name: string; meta: string; label: string; ok: boolean 
             <div class="foot-author"><i class="ph ph-user"></i><b>沐辉</b></div>
           </el-tooltip>
         </div>
+        <el-tooltip content="Star 支持" placement="top">
+          <button class="btn btn-ghost" @click="openRepo()">
+            <i class="ph ph-github-logo"></i>
+          </button>
+        </el-tooltip>
         <el-tooltip content="切换亮暗主题" placement="top">
           <button class="btn btn-ghost" @click="app.toggleTheme()">
             <i class="ph" :class="app.isDark ? 'ph-moon' : 'ph-sun'"></i>

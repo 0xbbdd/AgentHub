@@ -7,7 +7,7 @@ import "element-plus/es/components/message-box/style/css";
 // dark css-vars 绑定 html.dark，须在 element.css 之前引入，让项目主题变量赢
 import "element-plus/theme-chalk/dark/css-vars.css";
 import App from "./App.vue";
-// Phosphor 子集：只保留全库真正用到的 97 条字形规则（全量 1530 条 / 82 KB）
+// Phosphor 子集：只保留全库真正用到的 98 条字形规则（全量 1530 条 / 82 KB）
 // 图标增删后重跑 node tools/gen-phosphor-subset.cjs 再生成
 import "./assets/phosphor/phosphor-used.css";
 import "./styles/global.css";
