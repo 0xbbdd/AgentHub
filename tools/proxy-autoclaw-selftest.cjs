@@ -437,7 +437,10 @@ async function e2e() {
     assert(!partial.autoclaw_intl && /解密失败/.test(partial.errors.autoclaw_intl || ""), "失败地区单独记入 errors，不影响成功地区");
 
     // e2e（仅 win32）：真 DPAPI 包密钥写 Local State，走完整 scanAutoclaw → importCandidate
-    if (process.platform === "win32") {
+    // 沙箱/CI 里 powershell.exe 可能起不来（DPAPI 要靠它 Protect），给一条跳过路径：
+    // 只跳过这一段的桌面导入断言，其余 e2e（含 #107 的首字节预算解除）照跑——
+    // 否则一个环境限制会把整条闸红掉，真正的回归信号被淹没。
+    if (process.platform === "win32" && process.env.AGENTHUB_SKIP_DPAPI !== "1") {
       const { execFileSync } = require("node:child_process");
       const protect = (key) => {
         const script = [
