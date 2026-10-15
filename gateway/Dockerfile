@@ -1,0 +1,55 @@
+# AgentHub 反代网关 Docker 镜像（headless 形态）
+#
+# 构建（在仓库根执行，build context = 仓库根）：
+#   docker build -f gateway/Dockerfile -t agenthub-gateway .
+# 运行：docker compose -f gateway/docker-compose.yml up -d
+#
+# 排除规则在仓库根 .dockerignore（build context 是仓库根，gateway/ 下的同名文件对它无效）
+
+# ── 依赖层（仅依赖清单变更时重建）──────────────────────────
+FROM node:22.22.0-bookworm-slim AS deps
+# 锁 patch 版：node:sqlite 自 Node 22.5.0 提供，浮动 tag 会漂移到不满足的版本（容器启动即崩）
+WORKDIR /app
+# 不带通配符：lock 缺失时在此直接报错，比 npm ci 阶段失败更早、原因更清晰
+COPY gateway/package.json gateway/package-lock.json ./
+RUN npm ci --omit=dev
+
+# ── 运行时 ────────────────────────────────────────────────
+FROM node:22.22.0-bookworm-slim
+
+# tzdata：TZ 生效（签到时刻与日额度重置都按本地时间）；curl：HEALTHCHECK；tini：PID 1 信号转发
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl tzdata tini \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV TZ=Asia/Shanghai
+WORKDIR /app
+
+COPY --from=deps /app/node_modules ./node_modules
+
+# electron/ 整目录：静态闭包 105 个文件横跨 proxy 与 backend 根（24 个用量适配器、
+# sqlcipher 链、config/sync 等），白名单会随新增渠道与模块持续漂移；整目录约 2.7MB，
+# 换「以后新增依赖零改动」
+COPY electron/backend ./electron/backend
+COPY gateway/src ./gateway/src
+COPY gateway/package.json ./gateway/
+COPY package.json ./
+
+ENV AGENTHUB_DATA_DIR=/data \
+    AGENTHUB_HOST=0.0.0.0 \
+    AGENTHUB_PROXY_PORT=9527 \
+    AGENTHUB_ADMIN_PORT=9528
+
+EXPOSE 9527 9528
+
+# 不声明 VOLUME：与 compose bind mount 并用会产生「匿名卷幻影」（数据落在匿名卷而非宿主目录）
+RUN mkdir -p /data && chown node:node /data
+USER node
+
+# 健康检查指向进程存活（/api/status 是纯状态读取，恒可用）；
+# 业务就绪度（有可用账号）走 /api/readyz，不参与容器健康判定——空池是合法状态
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl -fsS "http://127.0.0.1:${AGENTHUB_ADMIN_PORT}/api/status" || exit 1
+
+# 入口在 /app/gateway/src/index.cjs（入口内 PROJECT_ROOT 取其上两级 = /app）
+ENTRYPOINT ["/usr/bin/tini", "--", "node", "gateway/src/index.cjs"]
