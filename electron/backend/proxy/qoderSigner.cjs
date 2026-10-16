@@ -74,13 +74,15 @@ function locate(product) {
  * 候选一律**先严后宽**：宽的那条只在严的失配时才跑，故对已知结构的结果逐字不变。
  *
  * v3 补救（issue #119，适配 0.4.8 结构变化）：0.4.8 失效模式是**懒加载器包装形态变化**
- * （`X=b(()=>{` 不再是唯一形式）与 **er 容器字段增多/键名变化**（QoderContext 不再是
- * 可靠锚点）。profileEnc / initSync 是导出注册段内的键值对，只要段还在就命中——
- * 用它反查 er 容器，不依赖任何易变键名：
- *   · glueVar / initAsync：profileEnc 键之前最近的 `er(` 开括号（双验证：段内同时含
- *     `default:()=>` 与 `initSync:()=>`，防误匹配到其他 er 调用）
+ * （`X=b(()=>{` 不再是唯一形式）、**注册函数改名**（0.3.3=er、0.4.8=dn，全文 er( 有
+ * 六千余次无关调用）与 **er 容器字段增多/键名变化**（QoderContext 不再是可靠锚点）。
+ * profileEnc / initSync 是导出注册段内的键值对，只要段还在就命中——用它反查注册调用，
+ * 不依赖任何易变的函数名/键名：
+ *   · 注册调用定位：profileEnc 键之前最近的「注册函数(容器变量,{」结尾（双验证：段内
+ *     同时含 `default:()=>` 与 `initSync:()=>`，防误匹配到其他调用）
+ *   · glueVar / initAsync：由上述注册调用定位（glueVar=首参容器变量，initAsync=段内 default）
  *   · loaderWasm：wasmVar 声明处向前找最近的懒加载赋值（结尾锚定 `{`，任意包装形态）
- *   · loaderGlue：主路径（类定义前扫）放宽窗口；兜底从 er 容器开括号向前找懒加载赋值
+ *   · loaderGlue：主路径（类定义前扫）放宽窗口；兜底从注册调用开括号向前找懒加载赋值
  */
 function pickByStructure(text) {
   const pick = (res) => {
@@ -149,32 +151,34 @@ function pickByStructure(text) {
   }
 
   // ===== v3 补救（profileEnc 反查，不依赖 QoderContext 键名/距离）=====
-  // er 容器开括号：ProfileEncryptor 键之前最近的 er(（wasm-bindgen 导出注册的标准格式是
-  // `er(Z,{ProfileEncryptor:()=>…,…})`，ProfileEncryptor 通常紧跟开括号；双验证兜底）
+  // 注册调用定位：ProfileEncryptor 键之前最近的「注册函数(容器变量,{」结尾。
+  // 注册函数名跨版本可变（0.3.3=er、0.4.8=dn，且全文 er( 有 6 千余次无关调用），
+  // 故不认名字认结构：结尾锚定「<标识符>(<标识符>,{」，配合段内双验证防误匹配。
   const peKeyAt = names.profileEnc ? text.indexOf("ProfileEncryptor:()=>" + names.profileEnc) : -1;
-  const erOpenAt = peKeyAt > 0 ? text.lastIndexOf("er(", peKeyAt) : -1;
+  const regCall = (() => {
+    if (peKeyAt <= 0) return null;
+    const m = text.slice(0, peKeyAt).match(/([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),\s*\{$/);
+    return m ? { fn: m[1], varName: m[2], at: peKeyAt - m[0].length } : null;
+  })();
   // wasm 声明位置（loaderWasm 补救用）
   const wasmDeclAt = (() => {
     const m = text.match(/([A-Za-z_$][\w$]*)="AGFzbQEAAAA/);
     return m ? m.index : -1;
   })();
-  if (erOpenAt >= 0) {
-    const seg = text.slice(erOpenAt, erOpenAt + 8000);
+  if (regCall) {
+    const seg = text.slice(regCall.at, regCall.at + 8000);
     const isGlueSeg = /default:\s*\(\)\s*=>/.test(seg) && new RegExp("initSync:\\s*\\(\\)\\s*=>").test(seg);
-    // ③ glueVar：er 开括号首参
-    if (!names.glueVar && isGlueSeg) {
-      const m = seg.match(/^er\(\s*([A-Za-z_$][\w$]*)\s*,/);
-      if (m) names.glueVar = m[1];
-    }
+    // ③ glueVar：注册调用首参（容器变量）
+    if (!names.glueVar && isGlueSeg) names.glueVar = regCall.varName;
     // ④ initAsync：容器段内找 default:()=>（QoderContext 改名/挪远后原路径失配）
     if (!names.initAsync && isGlueSeg) {
       const m = seg.match(/default:\s*\(\)\s*=>\s*([A-Za-z_$][\w$]*)/);
       if (m) names.initAsync = m[1];
     }
-    // ⑥ loaderGlue 兜底③：er 容器开括号向前找最近的懒加载赋值（任意包装形态）。
+    // ⑥ loaderGlue 兜底③：注册调用开括号向前找最近的懒加载赋值（任意包装形态）。
     //    字符类只排 { }（不排 =）：箭头函数的 `=>` 含 =，排掉会断匹配。
     if (!names.loaderGlue) {
-      const m = text.slice(0, erOpenAt).match(/([A-Za-z_$][\w$]*)=[^{}]{0,200}\{$/);
+      const m = text.slice(0, regCall.at).match(/([A-Za-z_$][\w$]*)=[^{}]{0,200}\{$/);
       if (m) names.loaderGlue = m[1];
     }
   }
