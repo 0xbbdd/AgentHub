@@ -121,7 +121,16 @@ class MemorySearch {
     // 热度记账（best-effort）：命中的记忆 +1。失败绝不能影响检索结果。
     try {
       this.index.recordHits(finalRows.map((r) => r.id));
-    } catch { /* 热度失败不影响检索 */ }
+      // 检索审计（best-effort）：一行一次检索，供体检报告与「搜了什么没搜到」分析
+      this.index.logRecall({
+        query,
+        agent: opts.agent,
+        hits: finalRows.length,
+        total: hitTotal || rows.length,
+        hitIds: finalRows.map((r) => r.id),
+        latencyMs: Date.now() - t0,
+      });
+    } catch { /* 热度/审计失败不影响检索 */ }
 
     return {
       fallback: lastFallbackReason || undefined,

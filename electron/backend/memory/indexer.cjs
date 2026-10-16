@@ -155,6 +155,21 @@ CREATE TABLE IF NOT EXISTS review_queue (
   resolution TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_review_status ON review_queue(status, kind);
+
+-- 检索审计（2026-10-16 借鉴 causal-memory 的 recall_audit）：每次检索一行，
+-- 用于回答「搜了什么没搜到」「哪些记忆从未被命中」。写入 best-effort：
+-- 失败绝不影响检索。保留 90 天，写入时顺手清理。
+CREATE TABLE IF NOT EXISTS recall_log (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts         INTEGER NOT NULL,
+  query      TEXT NOT NULL,
+  agent      TEXT,
+  hits       INTEGER NOT NULL DEFAULT 0,
+  total      INTEGER NOT NULL DEFAULT 0,
+  hit_ids    TEXT,
+  latency_ms INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_recall_log_ts ON recall_log(ts);
 `;
 
 const MEM_COLS = [
@@ -434,6 +449,33 @@ class MemoryIndex {
       return 0;
     }
     return ids.length;
+  }
+
+  /**
+   * 检索审计（best-effort）：一行一次检索。纪律与 recordHits 相同——失败不影响检索。
+   * 顺手清理 90 天前的旧日志（命中 ts 索引，代价可忽略），防止表无限增长。
+   */
+  logRecall(entry) {
+    if (this.readOnly) return false;
+    try {
+      const hitIds = Array.isArray(entry.hitIds) ? entry.hitIds : [];
+      this.db.prepare(
+        "INSERT INTO recall_log (ts, query, agent, hits, total, hit_ids, latency_ms) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        entry.ts || Date.now(),
+        String(entry.query || "").slice(0, 500),
+        entry.agent ? String(entry.agent).slice(0, 64) : null,
+        Number(entry.hits) || 0,
+        Number(entry.total) || 0,
+        hitIds.length ? JSON.stringify(hitIds.slice(0, 100)) : null,
+        Number(entry.latencyMs) || 0,
+      );
+      // 90 天留存：DELETE 走 idx_recall_log_ts，单次检索路径上多这一次也远不到 1ms
+      this.db.prepare("DELETE FROM recall_log WHERE ts < ?").run(Date.now() - 90 * 86400000);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   counts() {
