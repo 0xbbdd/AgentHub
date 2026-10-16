@@ -364,8 +364,27 @@ function routeOrderOk(order) {
   return order === "" || order === "score" || order === "cost-first";
 }
 
+/** Key 参数整单校验（参考 agent2api retry_api 语义：任一字段非法整体拒绝，不落半套配置）。
+ *  isPatch=true 时只校验出现的字段（updateKey 的部分更新）；返回非法原因（空串 = 通过） */
+function validateKeyParams(p, isPatch) {
+  if (!isPatch || p.name != null) {
+    if (p.name != null && typeof p.name !== "string") return "name 必须是字符串";
+  }
+  if (!isPatch || p.dailyQuota != null) {
+    if (p.dailyQuota != null && (!Number.isFinite(Number(p.dailyQuota)) || Number(p.dailyQuota) < 0))
+      return "dailyQuota 必须是非负数字";
+  }
+  if (!isPatch || p.rateLimit != null) {
+    if (p.rateLimit != null && (!Number.isFinite(Number(p.rateLimit)) || Number(p.rateLimit) < 0))
+      return "rateLimit 必须是非负数字";
+  }
+  return "";
+}
+
 function createKey({ name, route, routeOrder, dailyQuota, rateLimit }) {
   open();
+  const v = validateKeyParams({ name, route, routeOrder, dailyQuota, rateLimit });
+  if (v) throw new Error(v);
   const secret = "sk-" + crypto.randomBytes(24).toString("hex"); // 48 hex
   const id = crypto.randomUUID();
   db.prepare(
@@ -495,6 +514,8 @@ function updateKey(id, patch) {
   open();
   const cur = db.prepare("SELECT * FROM keys WHERE id = ?").get(String(id));
   if (!cur) return false;
+  const v = validateKeyParams(patch, true);
+  if (v) throw new Error(v);
   const name = patch.name != null ? String(patch.name).slice(0, 64) : cur.name;
   const route = patch.route != null && routeOk(patch.route) ? patch.route : cur.route;
   const routeOrder = patch.routeOrder != null && routeOrderOk(patch.routeOrder) ? patch.routeOrder : cur.route_order;
@@ -1582,6 +1603,7 @@ module.exports = {
   channelDisplay,
   listProviders, getProvider, saveProvider, deleteProvider, accountRows,
   createKey, importKey, listKeys, findKeyBySecret, updateKey, deleteKey, keyTodayReq,
+  validateKeyParams,
   listAgents, setPoolStrategy, setAgentCostTier,
   listAccounts, getAccount, accountSecrets, addAccount, updateAccount, bumpAccountUsage, removeAccount, noteError, clearError, noteCheckin, noteOnboardingGrant, noteAccount,
   setCreditPackages, listCreditPackages, listAllCreditPackages,
