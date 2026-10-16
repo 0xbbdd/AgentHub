@@ -210,6 +210,30 @@ function normalizeChannelFailoverMax(v) {
   return Math.min(CHANNEL_FAILOVER_MAX_CAP, Math.max(1, Math.round(n)));
 }
 
+// ===== 瞬时错误原地重发（同账号重试，参考 agent2api retry_api 语义）=====
+// 5xx/网络/超时这类瞬时错误，同一账号先原地重发 N 次吸收抖动，用尽再换号。
+// 与 401 刷新重试、429 退避重试并列的第三档重试。
+const RETRY_SAME_MAX_COUNT = 5;          // 同账号原地重发次数上限（配置可覆盖）
+const RETRY_SAME_DEFAULT_COUNT = 1;      // 默认重发 1 次
+const RETRY_SAME_DEFAULT_INTERVAL_MS = 1000; // 默认退避间隔 1s
+const RETRY_SAME_MIN_INTERVAL_MS = 200;  // 间隔下限（防 0ms 忙等）
+const RETRY_SAME_MAX_INTERVAL_MS = 10000; // 间隔上限
+
+/** 同账号原地重发次数：settings.retrySameAccountCount > 0 时按配置（封顶 RETRY_SAME_MAX_COUNT），
+ *  否则 RETRY_SAME_DEFAULT_COUNT。Math.round 整数化（与 normalizeChannelFailoverMax 同口径） */
+function retrySameAccountCount(settings) {
+  const n = Number(settings && settings.retrySameAccountCount);
+  if (!Number.isFinite(n) || n <= 0) return RETRY_SAME_DEFAULT_COUNT;
+  return Math.min(RETRY_SAME_MAX_COUNT, Math.round(n));
+}
+
+/** 同账号原地重发退避间隔（毫秒）：settings.retrySameAccountIntervalMs，默认 1000ms */
+function retrySameAccountIntervalMs(settings) {
+  const n = Number(settings && settings.retrySameAccountIntervalMs);
+  if (!Number.isFinite(n) || n <= 0) return RETRY_SAME_DEFAULT_INTERVAL_MS;
+  return Math.min(RETRY_SAME_MAX_INTERVAL_MS, Math.max(RETRY_SAME_MIN_INTERVAL_MS, Math.round(n)));
+}
+
 /** 每模型上游尝试预算：failover 关 → 固定 6；否则 max(6, 上限 + 1)。
  *  +1 沿用旧配比（5 渠道 + 1 = 6）：预算恰等于候选数时，末个渠道会被预算收尾排除在轨迹外，
  *  报错条数将比设置值少 1——用户会再次怀疑「设置没生效」 */
@@ -879,6 +903,7 @@ async function handleChat(req, res, settings, surface, convNotes) {
         const tried = new Set();
         const triedAccountNames = []; // 本渠道实际选中的账号名（最终错误文案用；去重保序）
         const rateRetried = new Set(); // 无明示时间的 429 同号退避重试标记（每号限一次）
+        const transientRetried = new Map(); // 瞬时错误（5xx/网络/超时）同账号原地重发计数：accId → 已重发次数
         // 每账号并发租约：expire_first 排序与并发无关，同窗口并发会话否则全打同一账号（参考项目租约语义）
         const perAccountLimit = Number(settings.concurrencyPerAccount) > 0 ? Number(settings.concurrencyPerAccount) : 3;
         let poolEmpty = false; // 号池无可用账号（全冷却/耗尽/负缓存打光）
@@ -1027,6 +1052,25 @@ async function handleChat(req, res, settings, surface, convNotes) {
             }
             const cls = classifyUpstream(e, false, chan);
             humanizeAccountBlocked(e, cls);
+            // 瞬时错误（5xx/网络/超时）同账号原地重发：先在这个账号上按配置次数重发吸收抖动，
+            // 用尽才走换号。首字节超时（firstByteTimeout）虽是"慢"不是"账号故障"，
+            // 但原地重发同一份 body 结果不会变（上游这一刻就是慢），故不重发、只换号（agent2api 同口径）。
+            // 429 与 401 有专属动作（429 短退避重试 / 401 刷新凭证重试），不走本档（见下方各自分支）。
+            if (cls.kind === "server" && !e.firstByteTimeout) {
+              const maxSame = retrySameAccountCount(settings);
+              const usedSame = transientRetried.get(acc.id) || 0;
+              if (usedSame < maxSame) {
+                transientRetried.set(acc.id, usedSame + 1);
+                tried.delete(acc.id); // 允许重新选中本号
+                attempt--; // 不消耗换号次数
+                const delayMs = retrySameAccountIntervalMs(settings);
+                oplog.log("warn", "代理重试",
+                  `上游瞬时错误（${String((e && e.message) || "").slice(0, 80)}），${delayMs}ms 后同账号重发（第 ${usedSame + 1}/${maxSame} 次）`,
+                  { channel: chan, target: acc.name });
+                await new Promise((r) => setTimeout(r, delayMs));
+                continue;
+              }
+            }
             // 无明示重置时间的 429：上游多为 1~3s 短窗限流，退避 1s 重试一次再落冷却换号
             // （参考项目 RetrySame 语义）；有墙钟/Retry-After 的 429 重试必白费，直接冷却。
             // 单号池场景下这一跳决定 429 是就地消化还是直接抛给客户端
@@ -1393,4 +1437,6 @@ module.exports = { start, stop, stopAsync, drainAndStop, status, channelHealthSn
   // 候选队列耗尽文案（scripts/test-concurrency-message.cjs 行为断言用）
   concurrencyBlockedMessage,
   // 模型名形近提示（scripts/test-model-hint.cjs 行为断言用）
-  nearModelIds };
+  nearModelIds,
+  // 瞬时错误原地重发纯函数（自测断言用）
+  retrySameAccountCount, retrySameAccountIntervalMs };
