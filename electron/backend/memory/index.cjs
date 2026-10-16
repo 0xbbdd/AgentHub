@@ -621,13 +621,16 @@ function register(ipcMain) {
   ipcMain.handle("memory_index_rebuild", handle(() => need().withWrite(async () => {
     const total = need().store.walkMemoryFiles().length;
     emit({ type: "index", running: true, done: 0, total });
+    // sidecar 路径提到 try 外：catch 的失败清理要引用它，若声明在 try 内，
+    // require 失败时 catch 里会先抛 ReferenceError（TDZ），把「worker 不可用」的
+    // 真实原因盖掉，退化路径的 fallbackReason 变成无意义的 "sidecar is not defined"
+    const sidecar = path.join(configMod.dataDir(), "memory-rebuild-sidecar.sqlite");
     // 优先走 worker 建旁路库 + 事务换入：全量重建是几十秒的同步 CPU/IO，跑在主进程会把
     // 界面、记忆中枢本地 API 与 9527 模型网关一起冻住（实测 43~56s）。worker 期间主进程
     // 照常服务读写，只有最后的换入需要独占写（实测 ~1.5s，且是单事务）。
     try {
       const { rebuildInWorker, snapshotDb, checkpointWithRetry } = require("./rebuild-worker.cjs");
       const dbFile = path.join(rootDir, "index", "memory.sqlite");
-      const sidecar = path.join(configMod.dataDir(), "memory-rebuild-sidecar.sqlite");
       // 先把主库 WAL 落盘再复制，保证旁路库拿到的是完整快照（占用时重试后放弃，拿陈旧快照兜底）
       checkpointWithRetry(need().index.db);
       snapshotDb(dbFile, sidecar);
