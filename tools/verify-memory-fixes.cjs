@@ -42,8 +42,9 @@ async function runTests() {
         if (id === "mem_new") return { id: "mem_new", body: "新记忆补充正文内容", agent: "zcode" };
         return null;
       },
-      updateMemory: async (id, patch) => { updatedPayload = patch.body; },
-      deleteMemory: async (id) => { deletedId = id; },
+      // 生产代码 keepOld 走「两步都必须校验」：mock 必须回 {ok:true}，否则 !ur.ok 会抛 TypeError
+      updateMemory: async (id, patch) => { updatedPayload = patch.body; return { ok: true }; },
+      deleteMemory: async (id) => { deletedId = id; return { ok: true }; },
     };
 
     const dedup = new DedupEngine({ service: mockService, client: null });

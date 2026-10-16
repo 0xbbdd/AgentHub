@@ -230,15 +230,17 @@ class MemoryService {
           .catch(() => {});
       } else if (kind === "classify" && cfg["review.autoConfirmClassify"]) {
         if (payload.slug) {
+          // 与 supersede 分支同口径：执行结果不 ok 就不 resolve，建议回落收件箱
+          // （失败返回 {ok:false} 不是 reject，.then 里不判会静默吞掉）
           void this.projectAssign([payload.memoryId], payload.slug)
-            .then(() => this.index.reviewResolve(queueId, `assign:${payload.slug}`))
+            .then((r) => { if (r && r.ok !== false) this.index.reviewResolve(queueId, `assign:${payload.slug}`); })
             .catch(() => {});
         } else {
           this.index.reviewResolve(queueId, "dismissed");
         }
       } else if (kind === "dedup" && cfg["review.autoConfirmDedup"]) {
         void this.markSuperseded(payload.targetId, payload.newId, payload.reason || "自动按推荐采纳新记忆")
-          .then(() => this.index.reviewResolve(queueId, "adoptNew"))
+          .then((r) => { if (r && r.ok) this.index.reviewResolve(queueId, "adoptNew"); })
           .catch(() => {});
       }
     } catch { /* 开关判定或执行异常不影响建议入队 */ }

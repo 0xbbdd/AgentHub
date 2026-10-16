@@ -689,7 +689,8 @@ export const memoryProfileSave = (name: string, text: string) => call<{ ok: bool
 export const memoryReviewList = (kind: "supersede" | "classify" | "dedup" | "supersede-done") =>
   call<{ items: { id: string; kind: string; payload: Record<string, any>; created: number }[] }>("memory_review_list", { kind });
 export const memoryReviewResolve = (id: string, action: "confirm" | "dismiss" | "merge" | "assign" | "newProject" | "general", payload?: Record<string, unknown>) =>
-  call<{ ok: boolean }>("memory_review_resolve", { id, action, payload });
+  // stale：引用记忆已不存在，后端已自动作废该建议（message 为可读原因）
+  call<{ ok: boolean; stale?: boolean; message?: string }>("memory_review_resolve", { id, action, payload });
 
 // ===== 记忆中枢：WebDAV 同步 =====
 export const memorySyncStatus = () =>
@@ -721,7 +722,7 @@ export const memoryDedupScan = (useModel = true) =>
   call<{ scanned: number; merged: number; queued: number; acted: number; tokens: number }>("memory_dedup_scan", { useModel }, 0);
 export const memoryDedupReviewList = () => call<{ items: { id: string; payload: Record<string, any> }[] }>("memory_dedup_review_list");
 export const memoryDedupReviewResolve = (id: string, action: "adoptNew" | "keepOld" | "keepBoth" | "merge" | "dismiss", payload?: Record<string, unknown>) =>
-  call<{ ok: boolean; message?: string }>("memory_dedup_review_resolve", { id, action, payload });
+  call<{ ok: boolean; stale?: boolean; message?: string }>("memory_dedup_review_resolve", { id, action, payload });
 export const memoryDedupPairsGet = () => call<{ pairs: { a: string; b: string; aTitle: string; bTitle: string }[] }>("memory_dedup_pairs_get");
 export const memoryDedupPairsClear = (pair?: string) => call<{ ok: boolean }>("memory_dedup_pairs_clear", { pair });
 export const memoryDedupLayerToggle = (layer: "l1" | "l2" | "l4", enabled: boolean) => call<{ ok: boolean }>("memory_dedup_layer_toggle", { layer, enabled });

@@ -275,6 +275,7 @@ class MemoryTasks {
     const autoApply = (this.flat()["auto.tasks"]?.supersede || {}).autoApplyConfidence;
     let suggestions = 0;
     let applied = 0;
+    let dropped = 0;
     let tokens = 0;
     // 组内取数 SQL 备好复用（5 组 × 每次 prepare = 5 次无谓编译）
     const rowsStmt = db.prepare(`
@@ -289,6 +290,7 @@ class MemoryTasks {
       this._progress(12 + Math.round((gi / groups.length) * 72), `判定第 ${gi + 1}/${groups.length} 组（${g.project || "通用"}）`);
       const rows = rowsStmt.all(g.project, Math.min(batchSize || 20, 12));
       if (rows.length < 2) continue;
+      const knownIds = new Set(rows.map((r) => r.id));
       const prompt = [
         "以下是同一项目下的若干条事实记录。请判断是否存在「后者推翻前者」的关系。",
         "只在事实明确矛盾时判定为推翻；时间不同但都成立的不要判。",
@@ -309,6 +311,9 @@ class MemoryTasks {
       const pairs = Array.isArray(parsed.pairs) ? parsed.pairs : [];
       for (const p of pairs) {
         if (!p.oldId || !p.newId || p.oldId === p.newId) continue;
+        // 模型复述长 id 会偶发漂移（mem_20260822_xxx 写成 mem_20260817_xxx 这类日期错位，后缀却是对的）：
+        // 错 id 入队后既查不到记忆也无法裁决，只会在收件箱堆成"处理必失败"的死项。必须逐字命中本轮素材才收。
+        if (!knownIds.has(p.oldId) || !knownIds.has(p.newId)) { dropped++; continue; }
         const conf = Number(p.confidence) || 0.5;
         if (!requireConfirm && autoApply && conf >= Number(autoApply)) {
           const r = await this.service.markSuperseded(p.oldId, p.newId, p.reason || "AI 高置信判定");
@@ -326,7 +331,7 @@ class MemoryTasks {
       }
     }
     this.emit({ type: "supersede-suggest", count: suggestions });
-    return { processed: groups.length, updated: suggestions + applied, tokens, detail: `产出 ${suggestions} 条待确认 + 自动应用 ${applied} 条` };
+    return { processed: groups.length, updated: suggestions + applied, tokens, detail: `产出 ${suggestions} 条待确认 + 自动应用 ${applied} 条${dropped ? `，丢弃 ${dropped} 条引用不存在的无效建议` : ""}` };
   }
 
   // ---------- 任务 6：L2 蒸馏（按项目，增量优先） ----------
@@ -350,6 +355,7 @@ class MemoryTasks {
     let written = 0;
     let writtenBefore = 0;
     let done = 0;
+    let dropped = 0;
     const reports = [];
 
     for (let pi = 0; pi < projects.length; pi++) {
@@ -361,6 +367,7 @@ class MemoryTasks {
         ORDER BY importance DESC, created DESC LIMIT ?
       `).all(p.project, Date.now(), maxPerProject);
       if (rows.length < 5) continue; // 少于 5 条素材蒸馏不出稳定结论
+      const knownIds = new Set(rows.map((r) => r.id));
       const prompt = [
         "你是知识蒸馏器。以下是某项目最近的原始记忆记录。",
         "请输出严格 JSON：",
@@ -417,6 +424,9 @@ class MemoryTasks {
       }
       for (const s of Array.isArray(parsed.supersedeSuggestions) ? parsed.supersedeSuggestions : []) {
         if (!s.oldId) continue;
+        // 同 runSupersede：模型复述长 id 会漂移（日期位数错位、后缀却对），
+        // 必须逐字命中本轮素材，否则入队就是一条查不到、点不动的死建议
+        if (!knownIds.has(s.oldId)) { dropped++; continue; }
         const supPayload = { oldId: s.oldId, newId: null, confidence: 0.6, reason: s.reason || "蒸馏时的矛盾提示", project: p.project };
         this.service.autoConfirmReview("supersede", this.service.index.reviewAdd("supersede", supPayload), supPayload);
       }
@@ -427,7 +437,7 @@ class MemoryTasks {
 
     this.service.index.setMeta("lastDistillAt", String(Date.now()));
     const reportFile = this._writeReport("distill", "蒸馏报告", ["## 各项目处理结果", ...reports.map((r) => `- ${r}`), "", `token 消耗：${tokens}`]);
-    return { processed: done, updated: written, tokens, detail: `蒸馏 ${done} 个项目，新增 L2 ${written} 条`, report: reportFile };
+    return { processed: done, updated: written, tokens, detail: `蒸馏 ${done} 个项目，新增 L2 ${written} 条${dropped ? `，丢弃 ${dropped} 条引用不存在的无效建议` : ""}`, report: reportFile };
   }
 
   async _writeL2({ type, title, body, tags, project, evidence }) {

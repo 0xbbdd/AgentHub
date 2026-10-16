@@ -401,6 +401,13 @@ class DedupEngine {
     }
     if (!data || typeof data !== "object") return { ok: false, message: "队列项数据损坏，无法解析" };
     const svc = this.service;
+    // 引用记忆已消失（被删除/清理）：除「忽略」外的动作都没有可执行对象，
+    // 作废收口，不让用户在"处理失败"上反复点击（与 index.resolveReview 同口径）
+    if (action !== "dismiss" && (!data.targetId || !data.newId || !svc.getById(data.targetId) || !svc.getById(data.newId))) {
+      // 只读库写不进作废标记：如实失败，不能报"已作废"却没落库
+      if (!svc.index.reviewResolve(id, "stale")) return { ok: false, message: "索引库来自更新版本的 AgentHub，当前处于只读模式：请升级应用后再操作" };
+      return { ok: true, stale: true, message: "建议引用的记忆已不存在（可能已被删除或并入其它记忆），该建议已自动作废" };
+    }
     if (action === "adoptNew") {
       // DELETE 也需人工确认才会走到这，两臂同处理：采纳新记忆 = 把旧记忆标失效。
       // 失败不 resolve——队列项保留，用户可重试（曾经的写法直接 resolve，标记失败被静默吞掉）

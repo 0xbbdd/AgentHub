@@ -588,6 +588,28 @@ class MemoryIndex {
       .run(Date.now(), resolution, id);
     return true;
   }
+
+  /** 惰性作废：引用记忆已不存在的 pending 建议（模型输出 id 漂移、记忆被删除后残留的孤儿）。
+      待确认列表每次拉取时顺带清扫，死项不再留在收件箱里让用户"点了必失败"。
+      payload 损坏的同样作废（用户对它也无从裁决）。返回清理条数。 */
+  sweepStaleReview() {
+    if (this.readOnly) return 0;
+    const rows = this.db.prepare(
+      "SELECT id, kind, payload FROM review_queue WHERE status = 'pending' AND kind IN ('supersede', 'classify', 'dedup')",
+    ).all();
+    let cleaned = 0;
+    for (const r of rows) {
+      let p = null;
+      try { p = JSON.parse(r.payload || "{}"); } catch { p = null; }
+      let alive;
+      if (!p || typeof p !== "object") alive = false;
+      else if (r.kind === "supersede") alive = !!(p.oldId && this.getById(p.oldId));
+      else if (r.kind === "classify") alive = !!(p.memoryId && this.getById(p.memoryId));
+      else alive = !!(p.targetId && p.newId && this.getById(p.targetId) && this.getById(p.newId));
+      if (!alive) { this.reviewResolve(r.id, "stale"); cleaned++; }
+    }
+    return cleaned;
+  }
 }
 
 function startOfToday() {

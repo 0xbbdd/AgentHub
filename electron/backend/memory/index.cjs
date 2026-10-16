@@ -938,7 +938,11 @@ function register(ipcMain) {
     } catch {}
     return ok({});
   }));
-  ipcMain.handle("memory_review_list", handle(({ kind }) => ok({ items: need().index.reviewList("pending", kind) })));
+  ipcMain.handle("memory_review_list", handle(({ kind }) => {
+    // 惰性清扫：引用已消失/损坏的 pending 建议先作废，死项不再出现在收件箱里
+    need().index.sweepStaleReview();
+    return ok({ items: need().index.reviewList("pending", kind) });
+  }));
   ipcMain.handle("memory_review_resolve", handle(({ id, action, payload }) => resolveReview(need(), id, action, payload)));
 
   // ===== WebDAV 同步 =====
@@ -956,7 +960,10 @@ function register(ipcMain) {
   // ===== 记忆中枢：去重 =====
   ipcMain.handle("memory_dedup_status", handle(() => ok(dedupEngine.status())));
   ipcMain.handle("memory_dedup_scan", handle(({ useModel }) => dedupEngine.scanAll({ useModel: useModel !== false })));
-  ipcMain.handle("memory_dedup_review_list", handle(() => ok({ items: need().index.reviewList("pending", "dedup") })));
+  ipcMain.handle("memory_dedup_review_list", handle(() => {
+    need().index.sweepStaleReview();
+    return ok({ items: need().index.reviewList("pending", "dedup") });
+  }));
   ipcMain.handle("memory_dedup_review_resolve", handle(({ id, action, payload }) => dedupEngine.resolveQueue(id, action, payload)));
   ipcMain.handle("memory_dedup_pairs_get", handle(() => ok({ pairs: dedupEngine.learnedList() })));
   ipcMain.handle("memory_dedup_pairs_clear", handle(({ pair }) => dedupEngine.clearLearned(pair)));
@@ -991,6 +998,22 @@ function register(ipcMain) {
   ipcMain.handle("memory_import_map_save", handle(({ id, mapping }) => importer.mapSave(id, mapping)));
 }
 
+/** 队列项引用的记忆是否已消失（与 service 层判存在口径一致，与 indexer.sweepStaleReview 同源）。
+    这类建议没有任何可执行动作：作废收口，不能让用户在"处理失败"上反复点击。 */
+function staleRefReason(svc, kind, data) {
+  if (kind === "supersede") {
+    if (!data.oldId) return "建议缺少原记忆引用";
+    if (!svc.getById(data.oldId)) return `原记忆 ${data.oldId} 已不存在`;
+    return "";
+  }
+  if (kind === "classify") {
+    if (!data.memoryId) return "建议缺少记忆引用";
+    if (!svc.getById(data.memoryId)) return `记忆 ${data.memoryId} 已不存在`;
+    return "";
+  }
+  return "";
+}
+
 /** 待确认队列裁决：失效建议 / 归类建议 */
 async function resolveReview(svc, id, action, payload) {
   const row = svc.index.db.prepare("SELECT * FROM review_queue WHERE id = ?").get(id);
@@ -1004,6 +1027,13 @@ async function resolveReview(svc, id, action, payload) {
     return fail("待确认项数据损坏，无法解析");
   }
   if (!data || typeof data !== "object") return fail("待确认项数据损坏，无法解析");
+  // 引用的记忆已消失（被删除/合并/清理，或模型输出 id 时漂移）→ 作废并如实告知
+  const stale = staleRefReason(svc, row.kind, data);
+  if (stale) {
+    // 只读库写不进作废标记：如实失败，不能报"已作废"却没落库（与其它动作的只读口径一致）
+    if (!svc.index.reviewResolve(id, "stale")) return fail("索引库来自更新版本的 AgentHub，当前处于只读模式：请升级应用后再操作");
+    return ok({ stale: true, message: `${stale}（可能已被删除或并入其它记忆），该建议已自动作废` });
+  }
   if (row.kind === "supersede") {
     if (action === "confirm") {
       const r = await svc.markSuperseded(data.oldId, data.newId, data.reason || "人工确认失效");
@@ -1018,10 +1048,16 @@ async function resolveReview(svc, id, action, payload) {
     if (action === "merge" && data.newId) {
       const old = svc.getById(data.oldId);
       const next = svc.getById(data.newId);
-      if (old && next) {
-        await svc.updateMemory(data.newId, { body: `${next.body}\n\n---\n\n（来自 ${old.id}）\n${old.body}` });
-        await svc.markSuperseded(data.oldId, data.newId, "人工选择合并");
+      if (!old || !next) {
+        if (!svc.index.reviewResolve(id, "stale")) return fail("索引库来自更新版本的 AgentHub，当前处于只读模式：请升级应用后再操作");
+        return ok({ stale: true, message: "要合并的记忆之一已不存在（可能已被删除或并入其它记忆），该建议已自动作废" });
       }
+      // 两步都成功才收口（与 dedup.resolveQueue 的 merge 同口径）：
+      // 原先不查返回值就 resolve，只读/节丢失等失败会被静默吞成"假成功"
+      const ur = await svc.updateMemory(data.newId, { body: `${next.body}\n\n---\n\n（来自 ${old.id}）\n${old.body}` });
+      if (!ur.ok) return fail(ur.message || "合并写入失败，队列项保留");
+      const r = await svc.markSuperseded(data.oldId, data.newId, "人工选择合并");
+      if (!r.ok) return fail(r.message || "标记旧记忆失效失败，队列项保留");
       svc.index.reviewResolve(id, "merged");
       return ok({});
     }
@@ -1030,13 +1066,16 @@ async function resolveReview(svc, id, action, payload) {
   if (row.kind === "classify") {
     if (action === "assign") {
       const r = await svc.projectAssign([data.memoryId], payload && payload.slug ? payload.slug : data.slug);
+      // 失败不 resolve：原写法不查返回值就 resolve，只读等失败会被静默吞掉
+      if (r && r.ok === false) return fail(r.message || "归入失败，队列项保留");
       svc.index.reviewResolve(id, `assign:${(payload && payload.slug) || data.slug}`);
-      return ok(r);
+      return ok({});
     }
     if (action === "newProject" && payload && payload.name) {
       const r = await svc.projectAssign([data.memoryId], payload.name);
+      if (r && r.ok === false) return fail(r.message || "归入失败，队列项保留");
       svc.index.reviewResolve(id, `newProject:${payload.name}`);
-      return ok(r);
+      return ok({});
     }
     if (action === "general") {
       svc.index.reviewResolve(id, "general");
@@ -1074,6 +1113,8 @@ function copyTree(from, to, skipDirs) {
 module.exports = {
   init, boot, shutdown, register, status, settings, flatSettings, emit,
   tools, agents, runtimeFile,
+  // 自测钩子：待确认裁决入口（覆盖"引用已消失 → 自动作废"分支），svc 由调用方提供
+  resolveReview,
   get service() { return service; },
   get rootDir() { return rootDir; },
   // 自测钩子（只读）：断言调度器装配完整，如 scheduler.syncer 是否真的挂上了
