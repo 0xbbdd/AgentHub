@@ -71,8 +71,9 @@ function toImageUrl(source) {
 }
 
 /** tool_result 的 content 摊平成字符串（OpenAI role:tool 的 content 只收文本/图片数组，
- *  摊平是通行做法：文本块拼接，图片转 data URI 交给多模态分支） */
-function flattenToolResult(content) {
+ *  摊平是通行做法：文本块拼接，图片转 data URI 交给多模态分支）。
+ *  notes 透传：file 型图片与不识别的块在这里也要可追溯（与 text 分支的 image 处理同口径） */
+function flattenToolResult(content, notes) {
   if (content == null) return "";
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return JSON.stringify(content);
@@ -83,6 +84,9 @@ function flattenToolResult(content) {
     else if (b.type === "image") {
       const u = toImageUrl(b.source);
       if (u) parts.push(`[image] ${u}`);
+      else if (notes) notes.push("tool_result 内 image.source.type=file 无法转发，该图已丢弃");
+    } else if (b.type) {
+      if (notes) notes.push(`tool_result 内未识别的块类型 ${b.type}，已丢弃`);
     }
   }
   return parts.join("\n");
@@ -143,7 +147,7 @@ function toInternal(raw) {
         // input 是对象，OpenAI 侧 arguments 是 JSON 字符串：序列化保真，call id 原样带上
         toolCalls.push({ id: String(b.id || ""), type: "function", function: { name: String(b.name || ""), arguments: safeStringify(b.input) } });
       } else if (b.type === "tool_result") {
-        const tr = { role: "tool", tool_call_id: String(b.tool_use_id || ""), content: flattenToolResult(b.content) };
+        const tr = { role: "tool", tool_call_id: String(b.tool_use_id || ""), content: flattenToolResult(b.content, notes) };
         if (b.is_error) tr.content = `[error] ${tr.content}`;
         toolResults.push(tr);
       } else if (b.type === "thinking" || b.type === "redacted_thinking") {
