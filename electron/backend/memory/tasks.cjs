@@ -153,9 +153,13 @@ class MemoryTasks {
       return { processed: 0, tokens: result.usage.input + result.usage.output, detail: "模型返回的结构无法解析，本批跳过（下轮重试）" };
     }
     let done = 0;
+    // 只标记模型实际返回过的条目：漏返回的（target 为 undefined）保持 pending，
+    // 下轮重试。曾经整批标记 done，模型漏掉的条目被静默消耗、永远不再处理。
+    const processedIds = [];
     for (const entry of parsed) {
       const target = items.find((x) => Number(entry.i) === x.i);
       if (!target) continue;
+      processedIds.push(target.row.id);
       const patch = {};
       if (entry.summary && String(entry.summary).trim()) patch.summary = String(entry.summary).trim().slice(0, 240);
       const imp = Number(entry.importance);
@@ -165,7 +169,7 @@ class MemoryTasks {
         done++;
       }
     }
-    this._markProcessed(rows.map((r) => r.id));
+    this._markProcessed(processedIds);
     return { processed: rows.length, updated: done, tokens: result.usage.input + result.usage.output, detail: `处理 ${rows.length} 条，更新 ${done} 条` };
   }
 
@@ -199,16 +203,19 @@ class MemoryTasks {
       return { processed: 0, tokens: result.usage.input + result.usage.output, detail: "标签结构无法解析，本批跳过" };
     }
     let done = 0;
+    // 只标记模型实际返回过的条目（同上：漏返回的保持 pending 下轮重试）
+    const processedIds = [];
     for (const entry of parsed) {
       const target = items.find((x) => Number(entry.i) === x.i);
       if (!target || !Array.isArray(entry.tags)) continue;
+      processedIds.push(target.row.id);
       const merged = normalizeTags([...(target.row.tags ? String(target.row.tags).split(",") : []), ...entry.tags]);
       if (merged.length) {
         await this.service.updateMemory(target.row.id, { tags: merged });
         done++;
       }
     }
-    this._markProcessed(rows.map((r) => r.id));
+    this._markProcessed(processedIds);
     return { processed: rows.length, updated: done, tokens: result.usage.input + result.usage.output, detail: `打标 ${done} 条` };
   }
 
@@ -229,16 +236,17 @@ class MemoryTasks {
     `).all(Date.now());
     const threshold = Number(this.flat()["classify.fuzzyThreshold"] || 0.62);
     let suggested = 0;
+    // 判重 SQL 备好复用：循环内 prepare 等于每行重新编译
+    const dupStmt = this.service.index.db.prepare(
+      "SELECT id FROM review_queue WHERE kind = 'classify' AND status = 'pending' AND json_extract(payload, '$.memoryId') = ?",
+    );
     this._progress(15, `本地匹配 ${generalRows.length} 条未归类`);
     for (let i = 0; i < generalRows.length; i++) {
       const row = generalRows[i];
       if (i % 10 === 9 || i === generalRows.length - 1) this._progress(15 + Math.round(((i + 1) / Math.max(1, generalRows.length)) * 70), `本地匹配 ${i + 1}/${generalRows.length} 条`);
       const hit = this.service.registry.suggest(row.title, threshold);
       if (!hit) continue;
-      const dup = this.service.index.db.prepare(
-        "SELECT id FROM review_queue WHERE kind = 'classify' AND status = 'pending' AND json_extract(payload, '$.memoryId') = ?",
-      ).get(row.id);
-      if (dup) continue;
+      if (dupStmt.get(row.id)) continue;
       const clsPayload = {
         slug: hit.slug, name: hit.name, score: hit.score,
         candidate: row.title, memoryId: row.id, title: row.title, path: row.path,
@@ -262,20 +270,24 @@ class MemoryTasks {
     `).all().filter((g) => this._allowedByPrivacy({ project: g.project }));
     if (!groups.length) return { processed: 0, tokens: 0, detail: "没有可判定的 L2 记忆组" };
     const requireConfirm = this.flat()["timeline.requireConfirm"] !== false;
-    const autoApply = this.flat()["auto.tasks.supersede.autoApplyConfidence"];
+    // auto.tasks 是 map 类型整键（WHOLE_KEYS），flat() 不拆它——点路径读恒为 undefined，
+    // 曾导致「requireConfirm=false 时高置信自动应用」分支是死代码。按 map 结构取子对象。
+    const autoApply = (this.flat()["auto.tasks"]?.supersede || {}).autoApplyConfidence;
     let suggestions = 0;
     let applied = 0;
     let tokens = 0;
+    // 组内取数 SQL 备好复用（5 组 × 每次 prepare = 5 次无谓编译）
+    const rowsStmt = db.prepare(`
+      SELECT id, title, summary, created, tags FROM mem
+      WHERE layer = 'l2' AND valid_to IS NULL AND superseded_by IS NULL
+        AND COALESCE(project, '') = ?
+      ORDER BY created DESC LIMIT ?
+    `);
 
     for (let gi = 0; gi < groups.length; gi++) {
       const g = groups[gi];
       this._progress(12 + Math.round((gi / groups.length) * 72), `判定第 ${gi + 1}/${groups.length} 组（${g.project || "通用"}）`);
-      const rows = db.prepare(`
-        SELECT id, title, summary, created, tags FROM mem
-        WHERE layer = 'l2' AND valid_to IS NULL AND superseded_by IS NULL
-          AND COALESCE(project, '') = ?
-        ORDER BY created DESC LIMIT ?
-      `).all(g.project, Math.min(batchSize || 20, 12));
+      const rows = rowsStmt.all(g.project, Math.min(batchSize || 20, 12));
       if (rows.length < 2) continue;
       const prompt = [
         "以下是同一项目下的若干条事实记录。请判断是否存在「后者推翻前者」的关系。",
@@ -590,13 +602,10 @@ class MemoryTasks {
     const dir = path.join(this.rootDir, "reports");
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, `${kind}-${new Date().toISOString().slice(0, 10)}.md`);
-    fs.writeFileSync(file, `# ${title}\n\n> ${new Date().toLocaleString("zh-CN")}\n\n${lines.join("\n")}\n`, "utf8");
+    // 走原子写：报告写一半崩溃不会留下半个文件（与蒸馏/画像的写入口径一致）
+    this.service.store.writeAtomic(`reports/${kind}-${new Date().toISOString().slice(0, 10)}.md`,
+      `# ${title}\n\n> ${new Date().toLocaleString("zh-CN")}\n\n${lines.join("\n")}\n`);
     return file;
-  }
-
-  _readBody(row) {
-    const detail = this.service.getById(row.id);
-    return detail ? `${detail.body}` : "";
   }
 
   /** 一批条目的正文一次性取回：按 path 分组只读一次文件（原先逐条 = N 次读盘 + N 次解析） */
