@@ -64,6 +64,10 @@ CREATE TABLE IF NOT EXISTS mem (
   t_body        TEXT,
   t_tags        TEXT,
   w_title       TEXT,
+  -- 检索热度（2026-10-16 借鉴 causal-memory 的 Q 值机制）：被检索命中的次数与最近命中时间。
+  -- 只升不降（永不自动衰减），importance 是写入时的静态重要度，热度是「被用得越多越靠前」的动态补充。
+  access_count   INTEGER DEFAULT 0,
+  last_hit_at    INTEGER,
   PRIMARY KEY (id, path)
 );
 CREATE INDEX IF NOT EXISTS idx_mem_project ON mem(project);
@@ -159,6 +163,7 @@ const MEM_COLS = [
   "hash", "size", "mtime", "valid_from", "valid_to", "superseded_by", "refs_text",
   "dup_index", "dedup_status", "ai_processed", "pinned", "starred",
   "t_title", "t_summary", "t_body", "t_tags", "w_title",
+  "access_count", "last_hit_at",
 ];
 
 class MemoryIndex {
@@ -217,6 +222,10 @@ class MemoryIndex {
     );
     this._findBySessionTitle = this.db.prepare("SELECT id FROM mem WHERE session = ? AND title = ? LIMIT 1");
     this._getIdsByPath = this.db.prepare("SELECT id FROM mem WHERE path = ?");
+    // upsert 是 INSERT OR REPLACE：新列不写就会在重写时被重置，先取旧热度再带上
+    this._getHeat = this.db.prepare("SELECT access_count, last_hit_at FROM mem WHERE id = ? AND path = ?");
+    // 命中计数：access_count/last_hit_at 不在 mem_au 触发器的 OF 列表里，不触发 FTS 重建
+    this._hitStmt = this.db.prepare("UPDATE mem SET access_count = access_count + 1, last_hit_at = ? WHERE id = ?");
     this._clearLinks = this.db.prepare("DELETE FROM mem_link WHERE src = ?");
     this._deleteLinksByNode = this.db.prepare("DELETE FROM mem_link WHERE src = ? OR dst = ?");
     this._insertLink = this.db.prepare("INSERT OR IGNORE INTO mem_link (src, dst, kind) VALUES (?, ?, ?)");
@@ -317,6 +326,11 @@ class MemoryIndex {
   upsertOne(entry, cfg) {
     if (this.readOnly) return false;
     const boost = cfg && cfg.titleBoost ? cfg.titleBoost : 3;
+    // INSERT OR REPLACE 会整行重建，热度两列必须显式带旧值，否则每次重写都清零。
+    // entry 显式传值优先（导入/测试可覆盖），否则沿用旧行。
+    const prev = this._getHeat.get(entry.id, entry.path);
+    const accessCount = entry.accessCount != null ? entry.accessCount : (prev ? prev.access_count || 0 : 0);
+    const lastHitAt = entry.lastHitAt != null ? entry.lastHitAt : (prev ? prev.last_hit_at : null);
     const row = {
       id: entry.id,
       path: entry.path,
@@ -350,6 +364,8 @@ class MemoryIndex {
       t_body: tokenize(entry.body),
       t_tags: tokenize(Array.isArray(entry.tags) ? entry.tags.join(" ") : entry.tags),
       w_title: weightedTitle(entry.title, boost),
+      access_count: accessCount,
+      last_hit_at: lastHitAt,
     };
     this._upsert.run(...MEM_COLS.map((c) => row[c]));
     this._replaceLinks(entry.id, entry.refs);
@@ -399,6 +415,25 @@ class MemoryIndex {
 
   getById(id) {
     return this._getById.get(id) || null;
+  }
+
+  /**
+   * 检索命中计数（best-effort）：一次检索命中的记忆 id 各 +1，刷新 last_hit_at。
+   * 调用方必须自己 try/catch —— 热度记账失败绝不能影响检索结果。
+   * 返回实际更新的行数；只读模式或异常一律返回 0。
+   */
+  recordHits(ids) {
+    if (this.readOnly || !Array.isArray(ids) || !ids.length) return 0;
+    const now = Date.now();
+    this.db.exec("BEGIN");
+    try {
+      for (const id of ids) this._hitStmt.run(now, id);
+      this.db.exec("COMMIT");
+    } catch (e) {
+      try { this.db.exec("ROLLBACK"); } catch { /* 连接已坏，交给上层 */ }
+      return 0;
+    }
+    return ids.length;
   }
 
   counts() {
