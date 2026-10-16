@@ -39,12 +39,6 @@ docs
 .idea
 .box-agent
 
-# 前端（与网关运行无关）
-src
-index.html
-vite.config.ts
-tsconfig*.json
-
 # 工具与脚本
 tools
 scripts

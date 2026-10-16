@@ -14,6 +14,16 @@ WORKDIR /app
 COPY gateway/package.json gateway/package-lock.json ./
 RUN npm ci --omit=dev
 
+# ── UI 构建层（vite 单入口；产物由网关同源托管，base "./" 相对路径已适配）──────
+FROM node:22.22.0-bookworm-slim AS ui
+WORKDIR /app
+COPY package.json package-lock.json ./
+# --ignore-scripts 跳过 electron 等 postinstall（几百 MB 二进制，构建前端用不到）
+RUN npm ci --ignore-scripts
+COPY index.html vite.config.ts tsconfig.json tsconfig.node.json ./
+COPY src ./src
+RUN npx vite build
+
 # ── 运行时 ────────────────────────────────────────────────
 FROM node:22.22.0-bookworm-slim
 
@@ -33,6 +43,9 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY electron/backend ./electron/backend
 COPY gateway/src ./gateway/src
 COPY package.json ./
+
+# Web UI 产物（入口的 UI_DIR 默认 gateway/public；缺失时入口明确跳过静态托管，只提供 API）
+COPY --from=ui /app/dist ./gateway/public
 
 ENV AGENTHUB_DATA_DIR=/data \
     AGENTHUB_HOST=0.0.0.0 \

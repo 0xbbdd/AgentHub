@@ -30,6 +30,8 @@ export type {
 } from "../types";
 
 import { mock } from "./mock";
+import { denyReason, isWebTransport } from "./caps";
+import { webInvoke } from "./web-transport";
 
 type InvokeFn = (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
 
@@ -77,15 +79,26 @@ function invokeWithTimeout<T>(p: Promise<T>, cmd: string, timeoutMs: number): Pr
   });
 }
 
+/** 后端错误信封（{ok:false,message}）统一转异常：混进正常数据会把页面打花 */
+function unwrapResult<T>(cmd: string, res: unknown): T {
+  if (res && typeof res === "object" && (res as { ok?: unknown }).ok === false) {
+    const msg = (res as { message?: unknown }).message;
+    throw new Error(typeof msg === "string" && msg ? msg : `命令 ${cmd} 执行失败`);
+  }
+  return res as T;
+}
+
 async function call<T>(cmd: string, args?: Record<string, unknown>, timeoutMs: number = DEFAULT_TIMEOUT_MS): Promise<T> {
   if (isElectron()) {
-    const res = (await invokeWithTimeout(window.agenthub!.invoke(cmd, toPlain(args)), cmd, timeoutMs)) as unknown;
-    // 后端失败的返回也是对象，混进正常数据会把页面打花，这里统一拦下来转异常
-    if (res && typeof res === "object" && (res as { ok?: unknown }).ok === false) {
-      const msg = (res as { message?: unknown }).message;
-      throw new Error(typeof msg === "string" && msg ? msg : `命令 ${cmd} 执行失败`);
-    }
-    return res as T;
+    const res = await invokeWithTimeout(window.agenthub!.invoke(cmd, toPlain(args)), cmd, timeoutMs);
+    return unwrapResult<T>(cmd, res);
+  }
+  // Web 托管形态：deny 命令在调用层拦下（一个函数覆盖全部调用点），文案由服务端能力清单下发
+  if (isWebTransport()) {
+    const denied = denyReason(cmd);
+    if (denied) throw new Error(denied);
+    const res = await invokeWithTimeout(webInvoke(cmd, toPlain(args)), cmd, timeoutMs);
+    return unwrapResult<T>(cmd, res);
   }
   // 浏览器回退：直接走 mock
   return (await mock.invoke(cmd, args)) as T;

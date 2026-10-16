@@ -1,5 +1,8 @@
 import { createApp } from "vue";
 import { createPinia } from "pinia";
+import { isElectron } from "./api/ipc";
+import { probeCaps } from "./api/caps";
+import { getToken } from "./api/web-transport";
 // 服务式 API 不经模板渲染，插件接管不到它们的样式：全库只用到这两个（② 段重数）。
 // 中文 locale 的注入点随全量注册一起没了，改由 App.vue 的 <el-config-provider> 承接。
 import "element-plus/es/components/message/style/css";
@@ -32,4 +35,20 @@ root.classList.toggle("fx-off", !fxOn);
 root.classList.toggle("fx-particles-off", localStorage.getItem("agenthub.fxParticles") !== "1");
 root.classList.toggle("fx-pools-off", localStorage.getItem("agenthub.fxPools") !== "1");
 setCursorFX(cursorOn);
-app.mount("#app");
+
+// 启动形态三选一：Electron 直接挂载（IPC）；浏览器先探测网关托管（有后端走 RPC，
+// 无令牌先挂登录页）；纯静态预览（dev:web）回落挂载走 mock
+async function bootstrap() {
+  if (isElectron()) {
+    app.mount("#app");
+    return;
+  }
+  const caps = await probeCaps();
+  if (caps && !getToken()) {
+    const { default: WebLogin } = await import("./views/WebLogin.vue");
+    createApp(WebLogin).mount("#app");
+    return;
+  }
+  app.mount("#app");
+}
+void bootstrap();

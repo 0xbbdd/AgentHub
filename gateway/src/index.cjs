@@ -52,6 +52,8 @@ const ADMIN_BIND = process.env.AGENTHUB_ADMIN_HOST || (ADMIN_TOKEN ? "0.0.0.0" :
 const PUBLIC_PATHS = new Set(["/api/livez", "/api/readyz", "/api/capabilities"]);
 const BODY_LIMIT = "4mb";
 const DRAIN_TIMEOUT_MS = 15000;
+// Web UI 产物目录：镜像内由 ui 构建层 COPY 到 gateway/public；本地验证用 AGENTHUB_UI_DIR 指 dist
+const UI_DIR = process.env.AGENTHUB_UI_DIR || path.join(__dirname, "..", "public");
 
 let adminServer = null;
 let lockFile = null;
@@ -149,6 +151,10 @@ function handle(fn) {
 }
 
 function adminAuth(req, res, next) {
+  // 非 /api 前缀 = UI 静态资源与 SPA 入口（前端代码无敏感），免凭据。
+  // 注意不能用 app.use("/api", adminAuth) 表达：express 会剥掉挂载前缀，PUBLIC_PATHS
+  // 与探针判定将全部失配，HEALTHCHECK 401 会把容器判成不健康
+  if (!req.path.startsWith("/api/")) return next();
   if (PUBLIC_PATHS.has(req.path)) return next();
   if (!ADMIN_TOKEN) return next();
   const hdr = String(req.headers.authorization || "");
@@ -269,7 +275,13 @@ function registerRpcRoutes(app) {
       version: platform.version(),
       modules: ["proxy"],
       features: { serviceControl: false, sse: false, fileDialog: false },
-      commands: Object.fromEntries([...commandTable.keys()].map((cmd) => [cmd, modeOf(cmd)])),
+      // deny 的文案随清单下发（前端不重复维护提示语）
+      commands: Object.fromEntries(
+        [...commandTable.keys()].map((cmd) => {
+          const mode = modeOf(cmd);
+          return [cmd, mode === "deny" ? { mode, reason: DENY[cmd] } : { mode }];
+        })
+      ),
     });
   });
 
@@ -289,6 +301,20 @@ function registerRpcRoutes(app) {
   }));
 }
 
+// Web UI 静态托管：与 API 同源（前端 CSP connect-src 'self' 只允许同源请求）。
+// 未内置 UI 时明确跳过——只有 API 的镜像照样能用
+function registerUiRoutes(app) {
+  const indexFile = path.join(UI_DIR, "index.html");
+  if (!fs.existsSync(indexFile)) {
+    console.log(`[AgentHub Gateway] 未内置 Web UI（${UI_DIR}/index.html 不存在），仅提供管理 API`);
+    return;
+  }
+  app.use(express.static(UI_DIR, { index: false }));
+  // SPA 入口兜底：非 /api 的 GET 一律回 index.html（前端暂无路由库，保住未来加路由不被 404）
+  app.get(/^\/(?!api\/).*/, (req, res) => res.sendFile(indexFile));
+  console.log(`[AgentHub Gateway] Web UI 已挂载：${UI_DIR}`);
+}
+
 function startAdmin() {
   const app = express();
   app.use(express.json({ limit: BODY_LIMIT }));
@@ -298,6 +324,7 @@ function startAdmin() {
   registerPoolRoutes(app);
   registerConfigRoutes(app);
   registerRpcRoutes(app);
+  registerUiRoutes(app);
 
   const srv = app.listen(ADMIN_PORT, ADMIN_BIND);
   // 监听失败必须显式收口：否则 unhandled 'error' 直接崩掉整个进程（含在跑的反代网关）

@@ -62,7 +62,7 @@ AgentHub 是本地运行的中控台（Electron + Vue 3 + TypeScript），自身
 
 ## Docker 版下载与安装
 
-Docker 版只含**反代网关**（没有桌面端的技能 / 用量 / 记忆三个板块），适合把网关丢到服务器上常驻。渠道代码与桌面版同一套，账号通过 WebDAV/S3 号池同步互通。
+Docker 版只含**反代网关**（没有桌面端的技能 / 用量 / 记忆三个板块），适合把网关丢到服务器上常驻。渠道代码与桌面版同一套，账号通过 WebDAV/S3 号池同步互通；镜像自带 **Web 控制台**，浏览器打开服务器地址就能管号池、Key 和渠道。
 
 前提：Docker 20.10+ 与 Compose v2，Linux 服务器 1 核 512MB 起。
 
@@ -85,8 +85,9 @@ curl -s http://127.0.0.1:9528/api/livez     # {"ok":true}，进程活着
 curl -s http://127.0.0.1:9528/api/readyz    # 503 = 池里还没账号，正常
 ```
 
-- 客户端连 `http://<服务器>:9527/v1`，Key 用管理 API 创建（`POST /api/keys`）
-- 管理 API 默认只绑宿主 `127.0.0.1:9528`；设了 `AGENTHUB_ADMIN_TOKEN` 才能远程访问
+- 浏览器打开 `http://<服务器>:9528/` 即 **Web 控制台**（需先设 `AGENTHUB_ADMIN_TOKEN`，登录时输入的就是它）
+- 客户端连 `http://<服务器>:9527/v1`，Key 在控制台里建，也可以用管理 API（`POST /api/keys`）
+- 管理 API 与 Web 控制台默认只绑宿主 `127.0.0.1:9528`；设了 `AGENTHUB_ADMIN_TOKEN` 才能从外部访问
 - 账号来源：桌面版配好 WebDAV 后同步过去（推荐），或 `POST /api/accounts/import` 导入 JSON
 - 容器里没有桌面客户端，**本机软件导入、切到 IDE、Qoder 双区**这些依赖 Windows 客户端的能力用不了
 - 别把桌面版的数据目录挂给容器：那边凭据是 DPAPI 密文，Linux 侧解不开
