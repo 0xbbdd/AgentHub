@@ -653,7 +653,7 @@ async function handleChat(req, res, settings, surface, convNotes) {
   const keyAllowedChannels = Array.isArray(key.allowedChannels) ? key.allowedChannels : [];
   if (keyAllowedModels.length && !keyAllowedModels.includes(String(body.model || "").toLowerCase())) {
     record({ status: 403, error: "model not allowed by key" });
-    return sink.endErr(403, `该 API Key 不允许请求模型 "${body.model}"（allowedModels 白名单）`, "permission_error", "model_not_allowed");
+    return sink.endErr(403, `该 API Key 不允许请求模型 "${body.model}"（allowedModels 白名单）`, "invalid_request_error", "model_not_allowed");
   }
   // 日配额（0=不限，次日 00:00 重置）
   if (key.dailyQuota > 0 && store.keyTodayReq(key.id) >= key.dailyQuota) {

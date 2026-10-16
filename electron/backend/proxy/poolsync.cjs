@@ -877,6 +877,7 @@ const SHARED_FILE = "shared-config.json";
 const SHARED_FORMAT = "agenthub-proxy-shared@1";
 // 跨设备应当一致的配置项。设备专属的 port / bind / 并发 / 限速 / 签到开关刻意不含：
 // 同步过去会把另一台设备上按自身环境改过的端口与常开签到开关盖掉。
+// 超时与瞬时重试旋钮（firstByteBaseMs 等 / retrySameAccountCount）同属设备专属（网络环境不同），不同步。
 const SHARED_CONFIG_KEYS = ["modelAliases", "modelReverseAliases", "modelCustom",
   "modelOverrides", "modelFallback", "disabledModels"];
 /** 各键在本机配置里的形状：对端载荷按这个口径收，形状不符一律不写。
