@@ -644,6 +644,14 @@ async function handleChat(req, res, settings, surface, convNotes) {
     record({ status: 401, error: "key disabled" });
     return sink.endErr(401, "API Key 已停用", "invalid_request_error", "invalid_api_key");
   }
+  // Key 级渠道/模型白名单（参考 agent2api apiKeys allowedProviders/allowedModels，空数组 = 不限制）：
+  // 泄露影响面收敛的最小权限化措施。模型名按请求的对外模型名（body.model）判定，渠道判定在路由后。
+  const keyAllowedModels = Array.isArray(key.allowedModels) ? key.allowedModels : [];
+  const keyAllowedChannels = Array.isArray(key.allowedChannels) ? key.allowedChannels : [];
+  if (keyAllowedModels.length && !keyAllowedModels.includes(String(body.model || "").toLowerCase())) {
+    record({ status: 403, error: "model not allowed by key" });
+    return sink.endErr(403, `该 API Key 不允许请求模型 "${body.model}"（allowedModels 白名单）`, "permission_error", "model_not_allowed");
+  }
   // 日配额（0=不限，次日 00:00 重置）
   if (key.dailyQuota > 0 && store.keyTodayReq(key.id) >= key.dailyQuota) {
     record({ status: 429, error: "daily quota exceeded" });
@@ -852,7 +860,18 @@ async function handleChat(req, res, settings, surface, convNotes) {
       //（模型目录的物理边界，靠回退模型兜底）
       const owners = adapters.modelOwners(chainModel, settings).filter((c) => c !== resolved.channel);
       owners.sort(cmpByOrder(routeOrderOf(key, settings), tierGroups()));
-      const queue = [resolved.channel, ...owners];
+      // Key 白名单过滤：allowedChannels 非空时，候选队列只留白名单内的渠道（主渠道 + 备选一起过）
+      let queue = [resolved.channel, ...owners];
+      if (keyAllowedChannels.length) {
+        queue = queue.filter((c) => keyAllowedChannels.includes(String(c).toLowerCase()));
+        if (!queue.length) {
+          lastErr = Object.assign(
+            new Error(`该 API Key 的 allowedChannels 白名单不含任何承载模型 "${chainModel}" 的渠道`),
+            { status: 403 }
+          );
+          continue; // 尝试回退模型（白名单可能放行别的模型）
+        }
+      }
       queue.length = Math.min(
         queue.length,
         settings.channelFailover === false ? 1 : normalizeChannelFailoverMax(settings.channelFailoverMax)

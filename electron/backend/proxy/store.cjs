@@ -280,6 +280,15 @@ function open() {
   try {
     db.exec("ALTER TABLE agents ADD COLUMN cost_tier TEXT NOT NULL DEFAULT ''");
   } catch { /* 已存在 */ }
+  // 在线迁移：keys.allowed_channels / keys.allowed_models（Key 级渠道/模型白名单，空 = 不限制）
+  // 参考 agent2api apiKeys 的 allowedProviders/allowedModels（R9，对齐 OmniProxy）：
+  // 存量行空串 = 不限制（升级绝不能让已有 Key 失效），JSON 数组形态存储
+  try {
+    db.exec("ALTER TABLE keys ADD COLUMN allowed_channels TEXT NOT NULL DEFAULT ''");
+  } catch { /* 已存在 */ }
+  try {
+    db.exec("ALTER TABLE keys ADD COLUMN allowed_models TEXT NOT NULL DEFAULT ''");
+  } catch { /* 已存在 */ }
   // 在线迁移：自定义提供商（同一张 agents 表扩列成「渠道表」，详见 migrateProviders 的注释）
   migrateProviders(db);
   const ins = db.prepare("INSERT OR IGNORE INTO agents (id, display, domain, pool_strategy, cost_tier, updated_at) VALUES (?,?,?,?,?,?)");
@@ -406,6 +415,21 @@ function createKey({ name, route, routeOrder, dailyQuota, rateLimit }) {
   return { id, secret };
 }
 
+/** Key 白名单字段解析：空串/非数组 → 不限制（与 agent2api 空数组 = 不限制等价）；脏数据容错剔除 */
+function parseKeyAllowList(raw) {
+  if (!raw || typeof raw !== "string") return [];
+  try {
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr.filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim().toLowerCase()) : [];
+  } catch { return []; }
+}
+
+/** Key 白名单序列化：数组 → JSON 串落库；非数组/空 → 空串（不限制） */
+function serializeKeyAllowList(list) {
+  if (!Array.isArray(list) || !list.length) return "";
+  return JSON.stringify(list.filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim().toLowerCase()));
+}
+
 function listKeys() {
   open();
   const rows = db.prepare("SELECT * FROM keys ORDER BY created_at DESC").all();
@@ -423,6 +447,8 @@ function listKeys() {
     routeOrder: r.route_order || "",
     dailyQuota: r.daily_quota,
     rateLimit: r.rate_limit,
+    allowedChannels: parseKeyAllowList(r.allowed_channels),
+    allowedModels: parseKeyAllowList(r.allowed_models),
     enabled: !!r.enabled,
     createdAt: r.created_at,
     updatedAt: r.updated_at || 0,
@@ -507,6 +533,8 @@ function findKeyBySecret(secret) {
   return {
     id: r.id, name: r.name, route: r.route, routeOrder: r.route_order || "", dailyQuota: r.daily_quota,
     rateLimit: r.rate_limit, enabled: !!r.enabled,
+    allowedChannels: parseKeyAllowList(r.allowed_channels),
+    allowedModels: parseKeyAllowList(r.allowed_models),
   };
 }
 
@@ -521,10 +549,15 @@ function updateKey(id, patch) {
   const routeOrder = patch.routeOrder != null && routeOrderOk(patch.routeOrder) ? patch.routeOrder : cur.route_order;
   const quota = patch.dailyQuota != null ? Math.max(0, Number(patch.dailyQuota) || 0) : cur.daily_quota;
   const rate = patch.rateLimit != null ? Math.max(0, Number(patch.rateLimit) || 0) : cur.rate_limit;
+  const allowedChannels = patch.allowedChannels != null ? serializeKeyAllowList(patch.allowedChannels) : cur.allowed_channels;
+  const allowedModels = patch.allowedModels != null ? serializeKeyAllowList(patch.allowedModels) : cur.allowed_models;
+  // 白名单字段的非法形态（非数组）整体拒绝——与 validateKeyParams 同口径，不落半套配置
+  if (patch.allowedChannels != null && !Array.isArray(patch.allowedChannels)) throw new Error("allowedChannels 必须是字符串数组");
+  if (patch.allowedModels != null && !Array.isArray(patch.allowedModels)) throw new Error("allowedModels 必须是字符串数组");
   const enabled = patch.enabled != null ? (patch.enabled ? 1 : 0) : cur.enabled;
   // updated_at 推进：号池同步按它做 LWW，把改名/改配额/启停传播到其他设备（issue #92）
-  db.prepare("UPDATE keys SET name=?, route=?, route_order=?, daily_quota=?, rate_limit=?, enabled=?, updated_at=? WHERE id=?")
-    .run(name, route, routeOrder, quota, rate, enabled, Date.now(), cur.id);
+  db.prepare("UPDATE keys SET name=?, route=?, route_order=?, daily_quota=?, rate_limit=?, allowed_channels=?, allowed_models=?, enabled=?, updated_at=? WHERE id=?")
+    .run(name, route, routeOrder, quota, rate, allowedChannels, allowedModels, enabled, Date.now(), cur.id);
   return true;
 }
 
