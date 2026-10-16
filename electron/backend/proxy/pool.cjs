@@ -52,26 +52,28 @@ function decoratePackageStates(packages, now) {
   }));
 }
 
-/** 派生有效状态：cooling 到期自动回 online；exhausted 到次日 04:00 后给复活机会 */
+/** 派生有效状态：cooling 到期自动回 online；exhausted 到次日 04:00 后给复活机会。
+ *  只返回派生状态，不落库——落库时机由调用方 poolAccounts 统一收，避免双写 */
 function effectiveStatus(acc, now) {
   now = now || Date.now();
-  if (acc.status === "cooling" && acc.cool_until && acc.cool_until <= now) {
-    store.updateAccount(acc.id, { status: "online", coolUntil: 0, coolReason: "" });
-    return "online";
-  }
+  if (acc.status === "cooling" && acc.cool_until && acc.cool_until <= now) return "online";
   if (acc.status === "exhausted" && acc.cool_until && acc.cool_until <= now) return "online";
   return acc.status;
 }
 
 const memLastUsed = new Map(); // accId → 内存最近选号时间戳，消除选号高频同步写放大
 
-/** 渠道号池视图（账号明细 + 派生状态 + 内存最新 lastUsed） */
+/** 渠道号池视图（账号明细 + 派生状态 + 内存最新 lastUsed）。
+ *  派生复活（cooling/exhausted 到期回 online）统一在这里落库，调度与视图读同一口径；
+ *  必须保持「状态确实变化才写」，否则每轮 pickAccount 都对全池写一遍，SQLite 锁竞争放大 */
 function poolAccounts(channel) {
   return store.listAccounts(channel).map((a) => {
-    const before = a.status;
     const eff = effectiveStatus(a);
-    // 派生复活（cooling/exhausted 到期）必须落库，否则调度/健康检查读原始行永不复活
-    if (before !== eff) store.updateAccount(a.id, { status: eff, coolUntil: 0, coolReason: "" });
+    const before = a.status;
+    if (before !== eff) {
+      // cooling 到期的复活清冷却字段；exhausted 到期只回 online，保留 coolUntil（次日 04:00 锚点）
+      store.updateAccount(a.id, before === "cooling" ? { status: "online", coolUntil: 0, coolReason: "" } : { status: "online" });
+    }
     const latestUsed = Math.max(a.lastUsed || 0, memLastUsed.get(a.id) || 0);
     return { ...a, status: eff, lastUsed: latestUsed };
   });
