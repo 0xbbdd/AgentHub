@@ -4818,4 +4818,6 @@ module.exports = { get, ADAPTERS, channelModelIds, reverseAliasEntry, resolveMod
   traeCredits, zcodeCreditPackages, lobsterCreditPackages, parseWbResource,
   // 供自测校验「首个 SSE 事件必须解除首字节预算」（issue #107：漏解除 → 长回答被 30s 掐断）：
   // 自测用真 fetchStream + 真 pumpSse + 缩短的 firstByteBudgetMs + 假上游复现现场
-  fetchStream, pumpSse };
+  fetchStream, pumpSse,
+  // 设备指纹派生（discovery.cjs 的 OAuth/导入路径复用同一套熵更高的算法，避免弱独立实现）
+  deviceIds };
