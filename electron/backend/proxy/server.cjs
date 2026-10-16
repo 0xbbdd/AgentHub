@@ -219,12 +219,15 @@ const RETRY_SAME_DEFAULT_INTERVAL_MS = 1000; // 默认退避间隔 1s
 const RETRY_SAME_MIN_INTERVAL_MS = 200;  // 间隔下限（防 0ms 忙等）
 const RETRY_SAME_MAX_INTERVAL_MS = 10000; // 间隔上限
 
-/** 同账号原地重发次数：settings.retrySameAccountCount > 0 时按配置（封顶 RETRY_SAME_MAX_COUNT），
- *  否则 RETRY_SAME_DEFAULT_COUNT。Math.round 整数化（与 normalizeChannelFailoverMax 同口径） */
+/** 同账号原地重发次数：settings.retrySameAccountCount 显式配置（含 0 = 关闭）时按配置
+ * （封顶 RETRY_SAME_MAX_COUNT），缺省/非法回退 RETRY_SAME_DEFAULT_COUNT。
+ *  Math.round 整数化（与 normalizeChannelFailoverMax 同口径） */
 function retrySameAccountCount(settings) {
-  const n = Number(settings && settings.retrySameAccountCount);
-  if (!Number.isFinite(n) || n <= 0) return RETRY_SAME_DEFAULT_COUNT;
-  return Math.min(RETRY_SAME_MAX_COUNT, Math.round(n));
+  const raw = settings && settings.retrySameAccountCount;
+  if (raw == null) return RETRY_SAME_DEFAULT_COUNT; // 缺省 = 默认 1 次
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return RETRY_SAME_DEFAULT_COUNT; // 脏值回默认
+  return Math.min(RETRY_SAME_MAX_COUNT, Math.round(n)); // 0 = 显式关闭原地重发
 }
 
 /** 同账号原地重发退避间隔（毫秒）：settings.retrySameAccountIntervalMs，默认 1000ms */
