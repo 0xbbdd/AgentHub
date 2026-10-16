@@ -31,6 +31,7 @@ export type {
 
 import { mock } from "./mock";
 import { denyReason, isWebTransport } from "./caps";
+import { subscribeWebEvents } from "./events";
 import { remoteActive } from "./remote";
 import { webInvoke } from "./web-transport";
 
@@ -146,9 +147,12 @@ export const installUpdate = () => call<UpdateStatus>("install_update");
 export const openReleasePage = () => call<void>("open_release_page");
 export const openRepoPage = () => call<void>("open_repo_page");
 
-/** 订阅主进程广播（更新状态 / WebDAV 进度 / focus-update 跳转信号），返回退订函数 */
+/** 订阅主进程广播（更新状态 / WebDAV 进度 / focus-update 跳转信号），返回退订函数。
+ *  Web 托管形态走 SSE（信封同形）；纯静态预览（mock）没有事件源 */
 export function onUpdateEvent(cb: (payload: unknown) => void): (() => void) | undefined {
-  return window.agenthub?.onUpdateEvent?.((payload) => cb(payload));
+  if (window.agenthub?.onUpdateEvent) return window.agenthub.onUpdateEvent((payload) => cb(payload));
+  if (isWebTransport()) return subscribeWebEvents(cb);
+  return undefined;
 }
 
 // ===== 技能仓库：WebDAV 跨设备同步 =====

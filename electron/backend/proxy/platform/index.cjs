@@ -16,7 +16,7 @@ const impl = isElectron ? require("./electron.cjs") : require("./node.cjs");
 
 // 启动期契约断言（与 adapters 的 assertAdapterContract 同构）：新增平台能力时两个实现
 // 缺一即在 require 阶段 fail-fast，而不是运行到调用点才炸出 undefined
-const REQUIRED_PLATFORM_METHODS = ["emit", "getDataDir", "solveCaptcha", "version", "log", "openExternal", "openPath"];
+const REQUIRED_PLATFORM_METHODS = ["emit", "onEmit", "getDataDir", "solveCaptcha", "version", "log", "openExternal", "openPath"];
 for (const m of REQUIRED_PLATFORM_METHODS) {
   if (typeof impl[m] !== "function") {
     throw new Error(`平台实现（${isElectron ? "electron" : "node"}）缺少必需方法 ${m}()`);
@@ -27,6 +27,7 @@ module.exports = {
   isElectron,
   form: () => (isElectron ? "electron" : "node"),
   emit: impl.emit,
+  onEmit: impl.onEmit,
   getDataDir: impl.getDataDir,
   solveCaptcha: impl.solveCaptcha,
   version: impl.version,

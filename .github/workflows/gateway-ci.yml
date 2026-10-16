@@ -117,6 +117,17 @@ jobs:
           # 反代面模型目录
           curl -fsS http://127.0.0.1:19527/v1/models | grep -q '"object":"list"'
 
+          # 状态字段（与桌面 gatewayStatus 对齐）：外部监控不必再走 RPC
+          curl -fsS -H "$AUTH" http://127.0.0.1:19528/api/status | grep -q '"keyCount"'
+
+          # 实时事件流：订阅后触发渠道启停，应收到与桌面同形的事件信封
+          curl -sN --max-time 6 -H "$AUTH" http://127.0.0.1:19528/api/events > /tmp/sse.log &
+          sleep 1
+          curl -fsS -X POST http://127.0.0.1:19528/api/rpc -H "$AUTH" -H 'content-type: application/json' \
+            -d '{"cmd":"proxy_channel_toggle","args":{"channel":"modelscope","enabled":false}}' > /dev/null
+          sleep 2
+          grep -q '"event":"proxy"' /tmp/sse.log
+
           # 备份端点产物可打开且完整
           curl -fsS -H "$AUTH" -o /tmp/backup.db http://127.0.0.1:19528/api/backup
           node -e "const {DatabaseSync}=require('node:sqlite');const d=new DatabaseSync('/tmp/backup.db');if(d.prepare('PRAGMA integrity_check').get().integrity_check!=='ok')process.exit(1);console.log('backup integrity ok');d.close();"

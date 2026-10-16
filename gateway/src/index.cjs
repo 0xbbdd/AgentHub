@@ -197,6 +197,14 @@ function registerProbes(app) {
     res.json({
       ok: true,
       gateway: server.status(),
+      // 与桌面 gatewayStatus 对齐的常用字段：外部监控/看板不必再走 RPC 组装
+      today: store.statsToday(),
+      channels: store.CHANNELS.filter((c) => adapters.channelOn(c.id)).map((c) => ({
+        id: c.id,
+        display: c.display,
+        ...pool.poolSummary(c.id),
+      })),
+      keyCount: store.listKeys().length,
       platform: platform.form(),
       version: platform.version(),
       dataDir: process.env.AGENTHUB_DATA_DIR,
@@ -330,6 +338,41 @@ function registerRpcRoutes(app) {
   }));
 }
 
+// 实时事件流（SSE）：复用 platform 的事件出口，信封与桌面 IPC 的 app:event 完全同形
+// （{event:"proxy", ...}），前端 onUpdateEvent 的两种形态共用同一套消费逻辑。
+// 前端用 fetch 流订阅（EventSource 带不了自定义头，鉴权要靠 Bearer）
+const sseClients = new Set();
+function registerEventRoutes(app) {
+  app.get("/api/events", (req, res) => {
+    res.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+    });
+    res.write(": connected\n\n");
+    sseClients.add(res);
+    const off = platform.onEmit((payload) => {
+      try {
+        res.write(`data: ${JSON.stringify({ event: "proxy", ...payload })}\n\n`);
+      } catch {
+        /* 连接已断，close 收尾 */
+      }
+    });
+    const keepAlive = setInterval(() => {
+      try {
+        res.write(": ka\n\n");
+      } catch {
+        /* 同上 */
+      }
+    }, 25000);
+    req.on("close", () => {
+      clearInterval(keepAlive);
+      off();
+      sseClients.delete(res);
+    });
+  });
+}
+
 // Web UI 静态托管：与 API 同源（前端 CSP connect-src 'self' 只允许同源请求）。
 // 未内置 UI 时明确跳过——只有 API 的镜像照样能用
 function registerUiRoutes(app) {
@@ -353,6 +396,7 @@ function startAdmin() {
   registerPoolRoutes(app);
   registerConfigRoutes(app);
   registerRpcRoutes(app);
+  registerEventRoutes(app);
   registerUiRoutes(app);
 
   const srv = app.listen(ADMIN_PORT, ADMIN_BIND);
@@ -371,6 +415,7 @@ async function shutdown(signal) {
   stopping = true;
   console.log(`[AgentHub Gateway] 收到 ${signal}，开始停机…`);
   try { if (adminServer) adminServer.close(); } catch { /* 已关 */ }
+  for (const c of sseClients) { try { c.end(); } catch { /* 已断 */ } } // 主动收掉长连接，停机不留悬挂
   try { proxyIndex.stopTimers(); } catch { /* 未装配 */ }
   try { await poolsync.cancel(); } catch { /* 在途同步收尾 */ }
   const drained = await server.drainAndStop({ timeoutMs: DRAIN_TIMEOUT_MS });

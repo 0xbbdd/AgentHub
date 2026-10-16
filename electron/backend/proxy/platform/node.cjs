@@ -11,16 +11,31 @@ function log(level, msg, meta) {
   (console[level] || console.log)(redact(text));
 }
 
-// request 事件每请求一条，按 5% 采样打日志；其余事件类型全量（都经 redact）
+// request 事件每请求一条，日志按 5% 采样；订阅者（SSE）永远收到全部事件
 const REQUEST_LOG_SAMPLE = 0.05;
+
+/** 事件订阅（网关 SSE 广播用）：返回退订函数 */
+const emitListeners = new Set();
+function onEmit(fn) {
+  emitListeners.add(fn);
+  return () => emitListeners.delete(fn);
+}
 
 module.exports = {
   emit(payload) {
     const t = payload && payload.type;
     if (!t) return;
-    if (t === "request" && Math.random() >= REQUEST_LOG_SAMPLE) return;
-    log("log", `[gateway] ${t}`, payload);
+    if (t !== "request" || Math.random() < REQUEST_LOG_SAMPLE) log("log", `[gateway] ${t}`, payload);
+    for (const fn of emitListeners) {
+      try {
+        fn(payload);
+      } catch {
+        /* 单个订阅者异常不影响其它 */
+      }
+    }
   },
+
+  onEmit,
 
   getDataDir() {
     return require("../../config.cjs").dataDir();
