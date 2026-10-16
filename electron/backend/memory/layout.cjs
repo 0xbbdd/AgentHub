@@ -518,7 +518,7 @@ class ProjectRegistry {
       const cur = data.projects[idx];
       // 命中旧的大写条目时把 slug 归一到小写：否则本次写入会带着小写 slug 落到索引，
       // 而卡片还叫大写，projects() 的 slug 精确关联随即对不上（卡片条数显示 0）
-      const merged = { ...cur, ...entry, slug: sanitizeSlug(entry.slug || cur.slug), updated: now };
+      const merged = { ...cur, ...entry, slug: sanitizeSlug(entry.slug || cur.slug) || cur.slug || "unknown", updated: now };
       // 空值不覆盖已有名：写入方不带 name 时（如 projectAttachPath 传 name: undefined）
       // 之前会把台账里的真名抹成 undefined，卡片随即显示空白
       if (!merged.name && cur.name) merged.name = cur.name;

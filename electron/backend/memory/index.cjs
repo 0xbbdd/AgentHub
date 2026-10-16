@@ -38,6 +38,8 @@ let memCfg = null;
 let httpApi = null;
 let booting = false; // boot 重入闸（异步启动期间防连点）
 let access = null;
+/** 启动延后任务的定时器句柄：shutdown 时统一取消 */
+let bootTimers = [];
 let watcher = null;
 let watchTimer = null;
 let watchPending = null;
@@ -267,17 +269,20 @@ async function boot() {
     if (scheduler) scheduler.start();
     // 存量项目元数据自愈：老版本用显式项目名写入时不探测 Git，项目卡因此缺远程/本地路径。
     // 延后到启动流程之外异步跑，且逐项目最多读少量文件——不能阻塞启动（曾因同步扫描主进程冻结数十秒）。
-    setTimeout(() => {
-      try {
-        const r = service && service.reconcileProjectMetadata();
-        if (r && r.healed) emit({ type: "projects", healed: r.healed });
-      } catch (e) {
-        emit({ type: "projects", healed: 0, message: String((e && e.message) || e) });
-      }
-    }, 6000);
+    // 句柄存引用：shutdown 时取消，否则关闭 6 秒后 reconcile 仍在已关闭的 service 上跑
+    bootTimers = [
+      setTimeout(() => {
+        try {
+          const r = service && service.reconcileProjectMetadata();
+          if (r && r.healed) emit({ type: "projects", healed: r.healed });
+        } catch (e) {
+          emit({ type: "projects", healed: 0, message: String((e && e.message) || e) });
+        }
+      }, 6000),
+    ];
     if (flatSettings()["agents.autoVerify"] !== false) {
       // 异步巡检，不阻塞启动
-      setTimeout(() => reconcileAgents().catch(() => {}), 4000);
+      bootTimers.push(setTimeout(() => reconcileAgents().catch(() => {}), 4000));
     }
     return r;
   } finally {
@@ -287,6 +292,9 @@ async function boot() {
 
 async function shutdown() {
   stopWatch();
+  // 取消启动延后任务：否则关闭 6 秒后 reconcile 仍在已关闭的 service 上跑
+  for (const t of bootTimers) clearTimeout(t);
+  bootTimers = [];
   // 先等在途任务收尾再关库：任务在已关闭的 db 上写索引会报错，MD 已写而索引缺行
   if (scheduler) await scheduler.stopAndDrain().catch(() => {});
   if (syncer && syncer.running) syncer.cancel();
@@ -302,6 +310,7 @@ async function shutdown() {
   syncer = null;
   dedupEngine = null;
   importer = null;
+  access = null;
   booted = false;
 }
 

@@ -176,9 +176,13 @@ const INSTRUCTIONS = [
 async function handleMessage(msg) {
   const { id, method, params } = msg || {};
   if (method === "initialize") {
+    // 协议版本只回自己支持的：无条件回显客户端任意版本会让对端以为服务端
+    // 支持未来版本的新特性（实际并不支持），调用时行为错位
+    const SUPPORTED = ["2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"];
     const want = params && params.protocolVersion;
+    const protocolVersion = SUPPORTED.includes(want) ? want : PROTOCOL_FALLBACK;
     return reply(id, {
-      protocolVersion: want || PROTOCOL_FALLBACK,
+      protocolVersion,
       capabilities: { tools: { listChanged: false } },
       serverInfo: SERVER_INFO,
       instructions: INSTRUCTIONS,
