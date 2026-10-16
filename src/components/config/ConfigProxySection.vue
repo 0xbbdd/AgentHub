@@ -9,12 +9,13 @@ import type { ProxyModel, ProxyRuleFile } from "../../types";
 import { useAppStore } from "../../stores/app";
 import { fmtAgo, fmtK } from "../../views/proxy/format";
 import ProxyUpstreamDialog from "../ProxyUpstreamDialog.vue";
+import ConfigRemoteTargets from "./ConfigRemoteTargets.vue";
 
 const app = useAppStore();
 // 上游启闭弹窗（渠道级开关：关闭的渠道在反代网关全部页面动态隐藏，重新打开立即恢复）
 const upOpen = ref(false);
-// 页面内的二级子板块：服务与路由 / 监控与安全 / 规则文件
-const tab = ref<"service" | "monitor" | "rules">("service");
+// 页面内的二级子板块：服务与路由 / 监控与安全 / 规则文件 / 远程实例
+const tab = ref<"service" | "monitor" | "rules" | "remote">("service");
 const rules = ref<ProxyRuleFile[]>([]);
 const vault = ref<{ encrypted: boolean; driver: string; dataDir: string } | null>(null);
 const saving = ref(false);
@@ -153,6 +154,7 @@ function openDataDir() {
       <button class="cfg-subtab" :class="{ active: tab === 'service' }" @click="tab = 'service'"><i class="ph ph-gear-six"></i>服务与路由</button>
       <button class="cfg-subtab" :class="{ active: tab === 'monitor' }" @click="tab = 'monitor'"><i class="ph ph-chart-bar"></i>监控与安全</button>
       <button class="cfg-subtab" :class="{ active: tab === 'rules' }" @click="tab = 'rules'"><i class="ph ph-file-code"></i>规则文件</button>
+      <button class="cfg-subtab" :class="{ active: tab === 'remote' }" @click="tab = 'remote'"><i class="ph ph-cloud-check"></i>远程实例</button>
     </div>
 
     <template v-if="tab === 'service'">
@@ -340,6 +342,8 @@ function openDataDir() {
       </div>
     </div>
     </template>
+
+    <ConfigRemoteTargets v-else-if="tab === 'remote'" />
 
     <div class="card" v-else>
       <div class="card-title">

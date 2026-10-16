@@ -600,6 +600,23 @@ export interface ProxyGatewayStatus {
   dbDriver: string;
 }
 
+/** 远程网关实例（桌面连远程 Docker 版）：令牌只在主进程存在，前端只见 hasToken */
+export interface RemoteTarget {
+  id: string;
+  alias: string;
+  baseUrl: string;
+  hasToken: boolean;
+  createdAt: number;
+}
+
+export interface RemoteTestResult {
+  ok: boolean;
+  message?: string;
+  version?: string;
+  platform?: string;
+  gatewayRunning?: boolean;
+}
+
 export interface ProxyUsageRow {
   id: number;
   ts: number;

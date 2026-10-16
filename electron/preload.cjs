@@ -329,6 +329,13 @@ const ALLOWED_COMMANDS = new Set([
   "memory_import_cursors_get",
   "memory_import_cursors_reset",
   "memory_import_map_save",
+  // ===== 远程网关（桌面连远程 Docker 版）=====
+  "remote_targets_list",
+  "remote_targets_save",
+  "remote_targets_delete",
+  "remote_targets_activate",
+  "remote_test",
+  "remote_invoke",
 ]);
 
 contextBridge.exposeInMainWorld("agenthub", {

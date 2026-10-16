@@ -120,6 +120,9 @@ function defaultConfig() {
     fxPools: false,
     fxCursor: true,
     // 左栏四大模块的显示顺序（用户在「设置 · 个性化」中调整）
+    /** 远程网关实例（桌面连远程 Docker 版）：tokenEnc 以 enc:v1: 加密落盘，列表接口只回 hasToken */
+    remoteTargets: [],
+    remoteActiveId: "local",
     moduleOrder: ["skills", "sync", "proxy", "memory"],
     // ===== 四大板块启用开关（issue #91 轻量模式）：关闭后左上角置灰不可点、后台完全不运行。
     // 唯一写入口是 module_toggle IPC（主进程读改写），设置页表单不拥有它；
@@ -655,6 +658,10 @@ function saveConfigFromUI(cfg) {
     // 首配会话内密码快照为空串，任何整份提交（切主题/拖模块排序/改反代设置）都会把
     // 已保存的服务器配置整段冲掉——这里以磁盘值为准，让该快照字段失效
     if (disk && disk.webdavShared) next.webdavShared = disk.webdavShared;
+    // 远程网关目标同样磁盘优先：唯一写入口是 remote_targets_save/delete/activate（主进程读改写），
+    // 设置页整份提交携带的是启动时的旧快照，不保护会像 issue #90 一样把变更冲回去
+    if (disk && Array.isArray(disk.remoteTargets)) next.remoteTargets = disk.remoteTargets;
+    if (disk && typeof disk.remoteActiveId === "string") next.remoteActiveId = disk.remoteActiveId;
     // modules（板块启用开关）同样磁盘优先（issue #91）：唯一写入口是 module_toggle IPC
     //（主进程读改写），设置页表单不拥有它——否则开关切换后任何整份保存都会把
     // 渲染层旧快照里的开关状态写回去，重启后开关「自己弹回来」

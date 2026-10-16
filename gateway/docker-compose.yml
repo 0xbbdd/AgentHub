@@ -29,6 +29,8 @@ services:
     environment:
       AGENTHUB_SECRET_KEY: ${AGENTHUB_SECRET_KEY:?必须先设置（openssl rand -base64 32）}
       AGENTHUB_ADMIN_TOKEN: ${AGENTHUB_ADMIN_TOKEN:-}
+      # 只读令牌（可选）：日常监视/看板专用，只能看不能改
+      AGENTHUB_ADMIN_READONLY_TOKEN: ${AGENTHUB_ADMIN_READONLY_TOKEN:-}
       AGENTHUB_PROXY_PORT: ${AGENTHUB_PROXY_PORT:-9527}
       AGENTHUB_ADMIN_PORT: ${AGENTHUB_ADMIN_PORT:-9528}
       TZ: ${TZ:-Asia/Shanghai}

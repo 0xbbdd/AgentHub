@@ -45,8 +45,10 @@ const PORT = Number(process.env.AGENTHUB_PROXY_PORT) || 9527;
 const BIND = process.env.AGENTHUB_HOST || "0.0.0.0";
 const ADMIN_PORT = Number(process.env.AGENTHUB_ADMIN_PORT) || 9528;
 const ADMIN_TOKEN = String(process.env.AGENTHUB_ADMIN_TOKEN || "");
-// 管理面默认不进网络：未设 token 时只绑回环（反代 Key 与管理 token 是两套凭据）
-const ADMIN_BIND = process.env.AGENTHUB_ADMIN_HOST || (ADMIN_TOKEN ? "0.0.0.0" : "127.0.0.1");
+// 只读令牌（可选）：日常监视专用，只放行 read 类命令与查询端点——给自动化/看板用更低风险的凭据
+const ADMIN_READONLY_TOKEN = String(process.env.AGENTHUB_ADMIN_READONLY_TOKEN || "");
+// 管理面默认不进网络：未设任何 token 时只绑回环（反代 Key 与管理 token 是两套凭据）
+const ADMIN_BIND = process.env.AGENTHUB_ADMIN_HOST || (ADMIN_TOKEN || ADMIN_READONLY_TOKEN ? "0.0.0.0" : "127.0.0.1");
 // 免凭据路径：探针（Dockerfile 的 HEALTHCHECK 与编排器 probe 都不带 token）与能力清单
 // （Web 端登录页要据此判断"这是网关托管的 Web UI 还是纯前端预览"，必须无凭据可读）
 const PUBLIC_PATHS = new Set(["/api/livez", "/api/readyz", "/api/capabilities"]);
@@ -64,10 +66,17 @@ function gatewaySettings() {
   return Object.assign({}, config.loadConfig().proxy, { port: PORT, bind: BIND });
 }
 
-/** 管理 token 校验：双方先 SHA-256 成等长再恒定时间比较（token 长度不进时序） */
-function adminTokenOk(token) {
+/** token 校验：双方先 SHA-256 成等长再恒定时间比较（token 长度不进时序） */
+function adminTokenOk(token, expected) {
   const digest = (s) => crypto.createHash("sha256").update(String(s)).digest();
-  return crypto.timingSafeEqual(digest(token), digest(ADMIN_TOKEN));
+  return crypto.timingSafeEqual(digest(token), digest(expected));
+}
+
+/** 只读令牌只能读：写端点开头调用；拒绝时已应答并返回 false */
+function requireFull(req, res) {
+  if (req.adminScope !== "read") return true;
+  res.status(403).json({ ok: false, message: "只读令牌不能执行该操作（需要完整管理 token）" });
+  return false;
 }
 
 /** 单实例锁：同一数据目录只允许一个网关进程（本机直跑与容器、或两个容器共卷双写会把
@@ -156,11 +165,21 @@ function adminAuth(req, res, next) {
   // 与探针判定将全部失配，HEALTHCHECK 401 会把容器判成不健康
   if (!req.path.startsWith("/api/")) return next();
   if (PUBLIC_PATHS.has(req.path)) return next();
-  if (!ADMIN_TOKEN) return next();
+  if (!ADMIN_TOKEN && !ADMIN_READONLY_TOKEN) {
+    req.adminScope = "full"; // 无令牌 = 仅回环可达，等同全权（保持既有语义）
+    return next();
+  }
   const hdr = String(req.headers.authorization || "");
   const bearer = hdr.startsWith("Bearer ") ? hdr.slice(7) : "";
   const token = bearer || String(req.headers["x-admin-token"] || "");
-  if (token && adminTokenOk(token)) return next();
+  if (token && ADMIN_TOKEN && adminTokenOk(token, ADMIN_TOKEN)) {
+    req.adminScope = "full";
+    return next();
+  }
+  if (token && ADMIN_READONLY_TOKEN && adminTokenOk(token, ADMIN_READONLY_TOKEN)) {
+    req.adminScope = "read";
+    return next();
+  }
   res.status(401).json({ ok: false, message: "管理 token 缺失或错误（Authorization: Bearer <AGENTHUB_ADMIN_TOKEN>）" });
 }
 
@@ -182,7 +201,10 @@ function registerProbes(app) {
       version: platform.version(),
       dataDir: process.env.AGENTHUB_DATA_DIR,
       encryption: process.env.AGENTHUB_SECRET_KEY ? "aes-256-gcm" : "plaintext",
-      adminAuth: ADMIN_TOKEN ? "token" : "loopback-only",
+      adminAuth:
+        !ADMIN_TOKEN && !ADMIN_READONLY_TOKEN
+          ? "loopback-only"
+          : [ADMIN_TOKEN && "token", ADMIN_READONLY_TOKEN && "readonly"].filter(Boolean).join("+"),
     });
   });
 }
@@ -192,6 +214,7 @@ function registerKeyRoutes(app) {
     res.json({ ok: true, keys: store.listKeys().map((k) => Object.assign({}, k, { secret: undefined })) });
   }));
   app.post("/api/keys", (req, res) => {
+    if (!requireFull(req, res)) return;
     try {
       const { name, route, routeOrder, dailyQuota, rateLimit } = req.body || {};
       const r = store.createKey({ name, route, routeOrder, dailyQuota, rateLimit });
@@ -208,6 +231,7 @@ function registerPoolRoutes(app) {
   }));
   // JSON 导入：body 为候选数组或 { channel, accounts: [...] }
   app.post("/api/accounts/import", handle((req, res) => {
+    if (!requireFull(req, res)) return;
     const body = req.body || {};
     const list = Array.isArray(body) ? body : Array.isArray(body.accounts) ? body.accounts : [body.candidate || body];
     const channel = Array.isArray(body) ? "" : String(body.channel || "");
@@ -249,6 +273,7 @@ function registerConfigRoutes(app) {
   }));
   // 写统一 WebDAV/S3 配置：与桌面版设置页同一条落盘路径（掩码密码 = 保留原值）
   app.put("/api/config/webdav", handle((req, res) => {
+    if (!requireFull(req, res)) return;
     const r = config.saveSharedWebdav(req.body || {});
     res.status(r.ok ? 200 : 400).json(r.ok ? { ok: true, webdav: config.maskedSharedWebdav() } : r);
   }));
@@ -294,6 +319,10 @@ function registerRpcRoutes(app) {
     }
     if (modeOf(cmd) === "deny") {
       res.status(403).json({ ok: false, message: DENY[cmd] });
+      return;
+    }
+    if (req.adminScope === "read" && modeOf(cmd) !== "read") {
+      res.status(403).json({ ok: false, message: "只读令牌只能执行监视类命令（需要完整管理 token）" });
       return;
     }
     // 桌面 handler 统一形如 (event, args)，且全部不使用 event（实测 0 处），传 null 即可
