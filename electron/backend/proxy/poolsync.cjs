@@ -287,6 +287,11 @@ function mergeSnapshot(snap, channel, opts) {
   let skipped = 0;
   const now = Date.now();
   const localByKey = new Map(store.listAccounts().map((a) => [accountKeyOf(a), a]));
+  // 预取本机全部原始行（含 token_enc 密文）：mergeSnapshot 对命中的每个远端账号都要
+  // 解密本机凭据做有效性比对，循环内逐个 getAccount 是 N+1——同步是全渠道批量操作，
+  // 几百个号时每轮多几百次 SELECT。一次查全建 Map，按 id 直取（accountView 刻意不含密文，
+  // 这一步绕不开，只能收敛成一次查询）
+  const localRowsById = new Map(store.accountRows().map((r) => [r.id, r]));
 
   for (const ra of snap.accounts) {
     if (!ra || typeof ra.key !== "string" || !ra.key) continue;
@@ -324,7 +329,7 @@ function mergeSnapshot(snap, channel, opts) {
     }
 
     // 本机已有同身份账号：自动冲突仲裁
-    const localRow = store.getAccount(local.id);
+    const localRow = localRowsById.get(local.id) || null;
     const localSecrets = localRow ? store.accountSecrets(localRow) : { token: "", refreshToken: "" };
     const localUpdatedAt = Number(local.updatedAt || local.creditsAt || local.lastUsed || local.createdAt || 0);
     const localTokenAt = Number(local.tokenAt || 0) || localUpdatedAt;
