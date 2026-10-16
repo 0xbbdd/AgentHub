@@ -181,6 +181,24 @@ const MEM_COLS = [
   "access_count", "last_hit_at",
 ];
 
+// mem 表各列类型（存量库列自愈用）。
+// 为什么需要：CREATE TABLE IF NOT EXISTS 不会给已存在的表加列——历史上每次加列
+// （project / valid_to / access_count…）都没有迁移步骤，老库 open 后 upsert 直接抛
+// "no such column"，整个记忆读写崩、前端显示「记忆中枢未启用」（1.73.0 教训：
+// access_count/last_hit_at 两列无迁移，升级用户索引全挂、记忆全部读不出来）。
+// 对 MEM_COLS 全集比对 table_info，缺什么补什么；幂等（已存在的列跳过）。
+const MEM_COL_TYPES = {
+  id: "TEXT", path: "TEXT", anchor: "TEXT", type: "TEXT", layer: "TEXT",
+  title: "TEXT", summary: "TEXT", tags: "TEXT", project: "TEXT", agent: "TEXT",
+  device: "TEXT", session: "TEXT", created: "INTEGER", updated: "INTEGER",
+  importance: "INTEGER", hash: "TEXT", size: "INTEGER", mtime: "INTEGER",
+  valid_from: "INTEGER", valid_to: "INTEGER", superseded_by: "TEXT",
+  refs_text: "TEXT", dup_index: "INTEGER", dedup_status: "TEXT",
+  ai_processed: "INTEGER", pinned: "INTEGER", starred: "INTEGER",
+  t_title: "TEXT", t_summary: "TEXT", t_body: "TEXT", t_tags: "TEXT",
+  w_title: "TEXT", access_count: "INTEGER", last_hit_at: "INTEGER",
+};
+
 class MemoryIndex {
   constructor(dbFile) {
     this.file = dbFile;
@@ -202,6 +220,16 @@ class MemoryIndex {
     // FTS 重建（一键修复「卡死」的根源）。开 ON 让 REPLACE 正确走触发器，FTS 保持一致。
     db.exec("PRAGMA recursive_triggers = ON");
     db.exec(DDL);
+    // 存量库列自愈：DDL 的 CREATE TABLE IF NOT EXISTS 对已存在的表不会加列，
+    // 老库（跨任意历史版本）upsert 会抛 no such column，整个记忆读写崩。
+    // 对 MEM_COLS 全集比对 table_info，缺什么补什么。SQLite ALTER 每语句一列，
+    // 逐列 try：重复列名/极端库损坏都不阻断启动（下轮 open 继续自愈）。
+    try {
+      const existing = new Set(db.prepare("PRAGMA table_info(mem)").all().map((c) => c.name));
+      for (const [col, type] of Object.entries(MEM_COL_TYPES)) {
+        if (!existing.has(col)) db.exec(`ALTER TABLE mem ADD COLUMN ${col} ${type}`);
+      }
+    } catch { /* 极端损坏留给 selfCheck/重建路径处理 */ }
     const v = db.prepare("PRAGMA user_version").get().user_version;
     if (v > SCHEMA_VERSION) {
       // 更新版应用写的库：只读保护，不降级写
@@ -239,8 +267,10 @@ class MemoryIndex {
     this._getIdsByPath = this.db.prepare("SELECT id FROM mem WHERE path = ?");
     // upsert 是 INSERT OR REPLACE：新列不写就会在重写时被重置，先取旧热度再带上
     this._getHeat = this.db.prepare("SELECT access_count, last_hit_at FROM mem WHERE id = ? AND path = ?");
-    // 命中计数：access_count/last_hit_at 不在 mem_au 触发器的 OF 列表里，不触发 FTS 重建
-    this._hitStmt = this.db.prepare("UPDATE mem SET access_count = access_count + 1, last_hit_at = ? WHERE id = ?");
+    // 命中计数：access_count/last_hit_at 不在 mem_au 触发器的 OF 列表里，不触发 FTS 重建。
+    // COALESCE 兜 NULL：ALTER TABLE ADD COLUMN DEFAULT 0 后存量行读出来仍是 NULL
+    // （SQLite 不物化默认值），裸 +1 会让存量记忆的热度永远不涨
+    this._hitStmt = this.db.prepare("UPDATE mem SET access_count = COALESCE(access_count, 0) + 1, last_hit_at = ? WHERE id = ?");
     this._clearLinks = this.db.prepare("DELETE FROM mem_link WHERE src = ?");
     this._deleteLinksByNode = this.db.prepare("DELETE FROM mem_link WHERE src = ? OR dst = ?");
     this._insertLink = this.db.prepare("INSERT OR IGNORE INTO mem_link (src, dst, kind) VALUES (?, ?, ?)");
