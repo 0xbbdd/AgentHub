@@ -294,6 +294,8 @@ const ALLOWED_COMMANDS = new Set([
   "memory_profile_get",
   "memory_profile_generate",
   "memory_profile_save",
+  "memory_health_run",
+  "memory_health_get",
   "memory_review_list",
   "memory_review_resolve",
   // ===== 记忆中枢：WebDAV 同步 =====

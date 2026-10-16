@@ -28,6 +28,8 @@ const TASK_DEFS = [
   { id: "index-scan", name: "索引自愈扫描", needsModel: false, defaultInterval: 360, estimate: "0（本地扫描）" },
   // 每天清理：回收站到期彻底删除（恒定执行）+ 按五个清理开关删除异常记忆（开关默认全关）
   { id: "cleanup", name: "异常记忆清理", needsModel: false, daily: "11:20", estimate: "0（本地扫描）" },
+  // 记忆体检（纯 SQL 统计，零 LLM）：僵尸/趋势/分布/演化链/回收站，报告落 mem_meta + 广播
+  { id: "health", name: "记忆体检", needsModel: false, daily: "11:30", estimate: "0（本地统计）" },
 ];
 
 const TICK_MS = 60000;
@@ -480,6 +482,8 @@ class MemoryScheduler {
         return Promise.resolve(this._runIndexScan());
       case "cleanup":
         return this._runCleanup();
+      case "health":
+        return Promise.resolve(this._runHealth());
       default:
         throw new Error(`任务 ${id} 未实现`);
     }
@@ -565,9 +569,29 @@ class MemoryScheduler {
     return { processed: r.total, updated: r.total, tokens: 0, detail };
   }
 
+  /**
+   * 记忆体检（纯 SQL 统计，零 LLM）：产出报告落 mem_meta（前端/IPC 可取），
+   * 广播 memory-health 事件（前端后续做面板时直接用）。只读模式下跳过。
+   */
+  _runHealth() {
+    if (this.service.index.readOnly) {
+      return { processed: 0, updated: 0, tokens: 0, detail: "索引库只读模式，跳过体检" };
+    }
+    const report = this.service.healthReport();
+    this.service.index.setMeta("mem_health_last", String(Date.now()));
+    this.service.index.setMeta("mem_health_report", JSON.stringify(report));
+    this.emit({ type: "health", report });
+    const queries = report.trend.reduce((sum, t) => sum + t.queries, 0);
+    return {
+      processed: this.service.index.counts().total,
+      updated: 0,
+      tokens: 0,
+      detail: `体检完成：僵尸 ${report.zombies.count} 条 · 近 4 周检索 ${queries} 次 · 回收站 ${report.trash.count} 个`,
+    };
+  }
+
   /** 自动定时同步：sync.auto + sync.intervalMin（此前只有手动按钮，配置项是"假旋钮"） */
-  async maybeAutoSync(now) {
-    const cfg = this.getConfig();
+  async maybeAutoSync(now) {    const cfg = this.getConfig();
     if (cfg["sync.enabled"] === false || cfg["sync.auto"] === false) return;
     if (!this.syncer || typeof this.syncer.run !== "function") return;
     if (this.syncer.running) return;

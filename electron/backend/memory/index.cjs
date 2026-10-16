@@ -879,6 +879,13 @@ function register(ipcMain) {
   // ===== 深层记忆 / 蒸馏 / 画像 =====
   ipcMain.handle("memory_distill_run", handle(({ project }) => tasksRunner.runDistill({ project })));
   ipcMain.handle("memory_profile_generate", handle(() => tasksRunner.runProfile({})));
+  // ===== 记忆体检（纯本地统计）：手动触发 + 取最近一次报告 =====
+  ipcMain.handle("memory_health_run", handle(() => scheduler.runTask("health")));
+  ipcMain.handle("memory_health_get", handle(() => {
+    const raw = service && service.index ? service.index.getMeta("mem_health_report") : null;
+    if (!raw) return ok({ report: null });
+    try { return ok({ report: JSON.parse(raw) }); } catch { return ok({ report: null }); }
+  }));
   ipcMain.handle("memory_profile_get", handle(() => {
     // 读取前自愈兜底：若本地文件因版本更新或仓库重置缺失，自动从全局持久缓存恢复
     // （need() 返回的就是 MemoryService 本身，没有 .service 属性——写成 need().service
