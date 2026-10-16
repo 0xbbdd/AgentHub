@@ -33,6 +33,12 @@ const FIRST_BYTE_MAX_MS = 180000; // 首字节预算封顶（超长 prompt 的 p
 const FIRST_BYTE_PER_10K_MS = 1000; // 每 1 万输入 token 追加的预算
 const STREAM_IDLE_MS = 300000; // 流中读超时 300s
 
+/** 从配置读取超时值（0/缺省/非法 → 内置默认；保证可运行时调整且不被脏配置打穿） */
+function timeoutMs(key, fallback) {
+  const n = Number((proxyConfig() || {})[key]);
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : fallback;
+}
+
 /** 估算输入规模（按序列化字符数折算 token，中英混排约 3 字符/token；宁高勿低，避免误杀超大 prompt） */
 function estimateInputTokens(payload) {
   return Math.ceil(String(payload == null ? "" : payload).length / 3);
@@ -45,8 +51,10 @@ function estimateInputTokens(payload) {
  * 小请求仍是 30s 起步，不放松对真正卡死上游的判定。
  */
 function firstByteBudgetMs(payload) {
+  const base = timeoutMs("firstByteBaseMs", FIRST_BYTE_MS);
+  const cap = timeoutMs("firstByteMaxMs", FIRST_BYTE_MAX_MS);
   const extra = Math.floor(estimateInputTokens(payload) / 10000) * FIRST_BYTE_PER_10K_MS;
-  return Math.min(FIRST_BYTE_MS + extra, FIRST_BYTE_MAX_MS);
+  return Math.min(base + extra, cap);
 }
 
 // ===== HTTP 基础 =====
@@ -55,7 +63,7 @@ function firstByteBudgetMs(payload) {
  *  opts.firstByteMs 由调用方按 prompt 规模给定（缺省 FIRST_BYTE_MS） */
 async function fetchStream(url, opts) {
   const { firstByteMs, ...rest } = opts || {};
-  const budgetMs = Math.max(1000, Number(firstByteMs) || FIRST_BYTE_MS);
+  const budgetMs = Math.max(1000, Number(firstByteMs) || timeoutMs("firstByteBaseMs", FIRST_BYTE_MS));
   const ctrl = new AbortController();
   // 到点置位：调用方据此区分「网关首字节预算掐断」与「上游自己断流」——两者都表现为
   // body 读失败，只有这个标志能把截断如实归因并给出可执行文案（issue #107 的根因即在
@@ -95,10 +103,12 @@ async function fetchStream(url, opts) {
   return { resp, cancelTimer: () => clearTimeout(timer), budgetFired: () => budgetFired };
 }
 
-/** 普通 JSON 请求（额度查询 / token 刷新），60s 总超时（参考项目 120s 口径的折中：含冷启动排队） */
+/** 普通 JSON 请求（额度查询 / token 刷新），默认 60s 总超时（参考项目 120s 口径的折中：含冷启动排队）；
+ *  超时值可经 proxy.httpJsonTimeoutMs 配置（0/缺省回退 60s 内置默认） */
 async function httpJson(url, opts) {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 60000);
+  const budget = timeoutMs("httpJsonTimeoutMs", 60000);
+  const timer = setTimeout(() => ctrl.abort(), budget);
   try {
     const resp = await fetch(url, { ...opts, signal: ctrl.signal });
     const text = await resp.text();
@@ -110,17 +120,19 @@ async function httpJson(url, opts) {
   }
 }
 
-/** 逐块读 SSE：web stream 异步迭代 + 空闲 300s 判死；客户端断连后继续消费至 EOF（保 usage 完整） */
+/** 逐块读 SSE：web stream 异步迭代 + 空闲判死（默认 300s，可经 proxy.streamIdleMs 配置）；
+ *  客户端断连后继续消费至 EOF（保 usage 完整） */
 async function pumpSse(resp, onEvent) {
   const scanner = new util.SseScanner(onEvent);
   const decoder = new TextDecoder();
   const reader = resp.body.getReader();
-  // 单个 idle 定时器循环重置：原来每读一个 chunk 就新挂一个 300s 定时器且旧的不清，
+  const idleMs = timeoutMs("streamIdleMs", STREAM_IDLE_MS);
+  // 单个 idle 定时器循环重置：原来每读一个 chunk 就新挂一个定时器且旧的不清，
   // 长流（几千 chunk）会同时挂几千个待触发定时器，高并发时随流量线性膨胀
   let idleTimer = null;
   const armIdle = () =>
     new Promise((_, rej) => {
-      idleTimer = setTimeout(() => rej(Object.assign(new Error("流中读超时（300s）"), { idleTimeout: true })), STREAM_IDLE_MS);
+      idleTimer = setTimeout(() => rej(Object.assign(new Error(`流中读超时（${Math.round(idleMs / 1000)}s）`), { idleTimeout: true })), idleMs);
     });
   try {
     for (;;) {
