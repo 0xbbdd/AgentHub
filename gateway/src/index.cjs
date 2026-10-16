@@ -31,6 +31,7 @@ if (!process.env.AGENTHUB_SECRET_KEY && process.env.AGENTHUB_ALLOW_PLAINTEXT !==
 
 const express = require("express");
 const config = require(path.join(BACKEND_DIR, "config.cjs"));
+const { collectCommands, modeOf, DENY } = require("./commands.cjs");
 const platform = require(path.join(PROXY_DIR, "platform", "index.cjs"));
 const store = require(path.join(PROXY_DIR, "store.cjs"));
 const server = require(path.join(PROXY_DIR, "server.cjs"));
@@ -46,13 +47,15 @@ const ADMIN_PORT = Number(process.env.AGENTHUB_ADMIN_PORT) || 9528;
 const ADMIN_TOKEN = String(process.env.AGENTHUB_ADMIN_TOKEN || "");
 // 管理面默认不进网络：未设 token 时只绑回环（反代 Key 与管理 token 是两套凭据）
 const ADMIN_BIND = process.env.AGENTHUB_ADMIN_HOST || (ADMIN_TOKEN ? "0.0.0.0" : "127.0.0.1");
-// 探针免凭据：Dockerfile 的 HEALTHCHECK 与编排器 probe 都不带 token
-const PROBE_PATHS = new Set(["/api/livez", "/api/readyz"]);
+// 免凭据路径：探针（Dockerfile 的 HEALTHCHECK 与编排器 probe 都不带 token）与能力清单
+// （Web 端登录页要据此判断"这是网关托管的 Web UI 还是纯前端预览"，必须无凭据可读）
+const PUBLIC_PATHS = new Set(["/api/livez", "/api/readyz", "/api/capabilities"]);
 const BODY_LIMIT = "4mb";
 const DRAIN_TIMEOUT_MS = 15000;
 
 let adminServer = null;
 let lockFile = null;
+let commandTable = null; // boot() 之后由 collectCommands() 填充（register 首行副作用需要配置已可读）
 
 /** 进程内覆盖监听参数，不回写 config.json——与桌面版共享宿主配置或卷时绝不篡改对方的 bind */
 function gatewaySettings() {
@@ -112,6 +115,7 @@ async function main() {
   }
 
   await proxyIndex.boot();
+  commandTable = collectCommands();
 
   const started = await server.start(gatewaySettings);
   if (!started.ok) {
@@ -145,7 +149,7 @@ function handle(fn) {
 }
 
 function adminAuth(req, res, next) {
-  if (PROBE_PATHS.has(req.path)) return next();
+  if (PUBLIC_PATHS.has(req.path)) return next();
   if (!ADMIN_TOKEN) return next();
   const hdr = String(req.headers.authorization || "");
   const bearer = hdr.startsWith("Bearer ") ? hdr.slice(7) : "";
@@ -255,6 +259,36 @@ function registerConfigRoutes(app) {
   }));
 }
 
+// 远程管理的统一命令通道：命令表经收集器取自桌面注册表，Web UI 与桌面远程模式共用同一契约。
+// 前端拿到的信封与桌面 IPC 完全一致（{ok:true,...} / {ok:false,message}），错误处理零新增
+function registerRpcRoutes(app) {
+  app.get("/api/capabilities", (req, res) => {
+    res.json({
+      ok: true,
+      platform: platform.form(),
+      version: platform.version(),
+      modules: ["proxy"],
+      features: { serviceControl: false, sse: false, fileDialog: false },
+      commands: Object.fromEntries([...commandTable.keys()].map((cmd) => [cmd, modeOf(cmd)])),
+    });
+  });
+
+  app.post("/api/rpc", handle(async (req, res) => {
+    const cmd = String((req.body || {}).cmd || "");
+    const handler = commandTable.get(cmd);
+    if (!handler) {
+      res.status(404).json({ ok: false, message: `未知命令：${cmd || "(空)"}` });
+      return;
+    }
+    if (modeOf(cmd) === "deny") {
+      res.status(403).json({ ok: false, message: DENY[cmd] });
+      return;
+    }
+    // 桌面 handler 统一形如 (event, args)，且全部不使用 event（实测 0 处），传 null 即可
+    res.json(await handler(null, req.body.args || {}));
+  }));
+}
+
 function startAdmin() {
   const app = express();
   app.use(express.json({ limit: BODY_LIMIT }));
@@ -263,6 +297,7 @@ function startAdmin() {
   registerKeyRoutes(app);
   registerPoolRoutes(app);
   registerConfigRoutes(app);
+  registerRpcRoutes(app);
 
   const srv = app.listen(ADMIN_PORT, ADMIN_BIND);
   // 监听失败必须显式收口：否则 unhandled 'error' 直接崩掉整个进程（含在跑的反代网关）
