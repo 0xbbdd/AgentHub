@@ -75,7 +75,9 @@ async function fetchStream(url, opts) {
     // redirect 默认 follow，但**必须允许调用方覆盖**：Qoder 的请求头带签名且签名覆盖
     // path+query，301 重定向后签名必然失效（实测 gateway http→301 https 真实存在），
     // 故它传 redirect:"error" 要明确报错而非跟随。原先写死 "follow" 会吃掉该参数。
-    resp = await fetch(url, { redirect: "follow", ...rest, signal: ctrl.signal });
+    // 统一出口兜底：header 值必须是 ByteString，中文机器名/设备名会让 fetch 在发请求前抛错。
+    // 只在值含非 Latin-1 时改写，ASCII 请求逐字节不变（issue #148）。
+    resp = await fetch(url, { redirect: "follow", ...rest, headers: util.byteSafeHeaders(rest.headers), signal: ctrl.signal });
   } catch (e) {
     clearTimeout(timer);
     const timedOut = !!(e && e.name === "AbortError");
@@ -110,7 +112,8 @@ async function httpJson(url, opts) {
   const budget = timeoutMs("httpJsonTimeoutMs", 60000);
   const timer = setTimeout(() => ctrl.abort(), budget);
   try {
-    const resp = await fetch(url, { ...opts, signal: ctrl.signal });
+    // 同 fetchStream：header 值统一转 ByteString（仅非 Latin-1 项变化）
+    const resp = await fetch(url, { ...opts, headers: util.byteSafeHeaders(opts && opts.headers), signal: ctrl.signal });
     const text = await resp.text();
     let data = null;
     try { data = JSON.parse(text); } catch { /* 非 JSON 响应留原文 */ }
