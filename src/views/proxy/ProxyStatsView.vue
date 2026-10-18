@@ -361,7 +361,7 @@ onUnmounted(() => {
                 <th style="width: 32%">占比（{{ topBy === "tokens" ? "Token" : "请求" }}）</th>
                 <th>请求</th><th>请求 Tok</th><th>响应 Tok</th><th>总 Tok</th><th>成功率</th><th>平均 TTFT</th>
               </tr>
-              <tr v-for="r in topRows" :key="r.name">
+              <tr v-for="r in topRows" :key="r.id">
                 <td>{{ r.label }}</td>
                 <td>
                   <div class="ratio">

@@ -443,7 +443,7 @@ const PROXY_TREND = Array.from({ length: 7 }, (_, i) => {
 function mockTopRow(name: string, req: number, tokens: number) {
   const ok = Math.round(req * 0.99);
   return {
-    name, req, ok, err: req - ok, successRate: req ? Math.round((ok / req) * 1000) / 10 : 0,
+    id: name, name, req, ok, err: req - ok, successRate: req ? Math.round((ok / req) * 1000) / 10 : 0,
     promptTokens: Math.round(tokens * 0.78), completionTokens: Math.round(tokens * 0.22),
     cacheReadTokens: Math.round(tokens * 0.28), cacheCreationTokens: 0, tokens,
     ttftAvg: 820, latencyAvg: 1900,
