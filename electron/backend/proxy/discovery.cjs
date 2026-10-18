@@ -864,10 +864,14 @@ function traeCfg() {
   return rules.get("headers.json").trae || {};
 }
 
-/** 账号级稳定设备指纹：15 位纯数字 deviceId + 64 hex machineId（与对话请求同源） */
+/** 账号级稳定设备指纹：复用 adapters.deviceIds 的派生算法（逐字节取模 + 连续零扰动，
+ *  熵高于本文件原先的"去字母取前 15 位"写法——后者把 SHA-256 的 hex 去字母后有效随机位
+ *  被压缩，且相邻重复数字进一步拉低熵；设备指纹是风控识别关键，弱随机会增加多账号被
+ *  上游判为同设备的概率）。seed 形态与 adapters 的 `agenthub:device:{seed}` 命名空间错开，
+ *  避免与对话请求侧撞出同一 deviceId */
 function deviceFingerprint(seed) {
-  const h = crypto.createHash("sha256").update(String(seed || "")).digest("hex");
-  return { deviceId: Array.from(h.replace(/[a-f]/g, "")).slice(0, 15).join("").padEnd(15, "0"), machineId: h };
+  const { deviceIds } = require("./adapters.cjs");
+  return deviceIds({ id: `discovery:${seed}` });
 }
 
 function pkcePair() {

@@ -33,6 +33,12 @@ const FIRST_BYTE_MAX_MS = 180000; // 首字节预算封顶（超长 prompt 的 p
 const FIRST_BYTE_PER_10K_MS = 1000; // 每 1 万输入 token 追加的预算
 const STREAM_IDLE_MS = 300000; // 流中读超时 300s
 
+/** 从配置读取超时值（0/缺省/非法 → 内置默认；保证可运行时调整且不被脏配置打穿） */
+function timeoutMs(key, fallback) {
+  const n = Number((proxyConfig() || {})[key]);
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : fallback;
+}
+
 /** 估算输入规模（按序列化字符数折算 token，中英混排约 3 字符/token；宁高勿低，避免误杀超大 prompt） */
 function estimateInputTokens(payload) {
   return Math.ceil(String(payload == null ? "" : payload).length / 3);
@@ -45,8 +51,10 @@ function estimateInputTokens(payload) {
  * 小请求仍是 30s 起步，不放松对真正卡死上游的判定。
  */
 function firstByteBudgetMs(payload) {
+  const base = timeoutMs("firstByteBaseMs", FIRST_BYTE_MS);
+  const cap = timeoutMs("firstByteMaxMs", FIRST_BYTE_MAX_MS);
   const extra = Math.floor(estimateInputTokens(payload) / 10000) * FIRST_BYTE_PER_10K_MS;
-  return Math.min(FIRST_BYTE_MS + extra, FIRST_BYTE_MAX_MS);
+  return Math.min(base + extra, cap);
 }
 
 // ===== HTTP 基础 =====
@@ -55,7 +63,7 @@ function firstByteBudgetMs(payload) {
  *  opts.firstByteMs 由调用方按 prompt 规模给定（缺省 FIRST_BYTE_MS） */
 async function fetchStream(url, opts) {
   const { firstByteMs, ...rest } = opts || {};
-  const budgetMs = Math.max(1000, Number(firstByteMs) || FIRST_BYTE_MS);
+  const budgetMs = Math.max(1000, Number(firstByteMs) || timeoutMs("firstByteBaseMs", FIRST_BYTE_MS));
   const ctrl = new AbortController();
   // 到点置位：调用方据此区分「网关首字节预算掐断」与「上游自己断流」——两者都表现为
   // body 读失败，只有这个标志能把截断如实归因并给出可执行文案（issue #107 的根因即在
@@ -67,7 +75,9 @@ async function fetchStream(url, opts) {
     // redirect 默认 follow，但**必须允许调用方覆盖**：Qoder 的请求头带签名且签名覆盖
     // path+query，301 重定向后签名必然失效（实测 gateway http→301 https 真实存在），
     // 故它传 redirect:"error" 要明确报错而非跟随。原先写死 "follow" 会吃掉该参数。
-    resp = await fetch(url, { redirect: "follow", ...rest, signal: ctrl.signal });
+    // 统一出口兜底：header 值必须是 ByteString，中文机器名/设备名会让 fetch 在发请求前抛错。
+    // 只在值含非 Latin-1 时改写，ASCII 请求逐字节不变（issue #148）。
+    resp = await fetch(url, { redirect: "follow", ...rest, headers: util.byteSafeHeaders(rest.headers), signal: ctrl.signal });
   } catch (e) {
     clearTimeout(timer);
     const timedOut = !!(e && e.name === "AbortError");
@@ -95,12 +105,15 @@ async function fetchStream(url, opts) {
   return { resp, cancelTimer: () => clearTimeout(timer), budgetFired: () => budgetFired };
 }
 
-/** 普通 JSON 请求（额度查询 / token 刷新），60s 总超时（参考项目 120s 口径的折中：含冷启动排队） */
+/** 普通 JSON 请求（额度查询 / token 刷新），默认 60s 总超时（参考项目 120s 口径的折中：含冷启动排队）；
+ *  超时值可经 proxy.httpJsonTimeoutMs 配置（0/缺省回退 60s 内置默认） */
 async function httpJson(url, opts) {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 60000);
+  const budget = timeoutMs("httpJsonTimeoutMs", 60000);
+  const timer = setTimeout(() => ctrl.abort(), budget);
   try {
-    const resp = await fetch(url, { ...opts, signal: ctrl.signal });
+    // 同 fetchStream：header 值统一转 ByteString（仅非 Latin-1 项变化）
+    const resp = await fetch(url, { ...opts, headers: util.byteSafeHeaders(opts && opts.headers), signal: ctrl.signal });
     const text = await resp.text();
     let data = null;
     try { data = JSON.parse(text); } catch { /* 非 JSON 响应留原文 */ }
@@ -110,17 +123,19 @@ async function httpJson(url, opts) {
   }
 }
 
-/** 逐块读 SSE：web stream 异步迭代 + 空闲 300s 判死；客户端断连后继续消费至 EOF（保 usage 完整） */
+/** 逐块读 SSE：web stream 异步迭代 + 空闲判死（默认 300s，可经 proxy.streamIdleMs 配置）；
+ *  客户端断连后继续消费至 EOF（保 usage 完整） */
 async function pumpSse(resp, onEvent) {
   const scanner = new util.SseScanner(onEvent);
   const decoder = new TextDecoder();
   const reader = resp.body.getReader();
-  // 单个 idle 定时器循环重置：原来每读一个 chunk 就新挂一个 300s 定时器且旧的不清，
+  const idleMs = timeoutMs("streamIdleMs", STREAM_IDLE_MS);
+  // 单个 idle 定时器循环重置：原来每读一个 chunk 就新挂一个定时器且旧的不清，
   // 长流（几千 chunk）会同时挂几千个待触发定时器，高并发时随流量线性膨胀
   let idleTimer = null;
   const armIdle = () =>
     new Promise((_, rej) => {
-      idleTimer = setTimeout(() => rej(Object.assign(new Error("流中读超时（300s）"), { idleTimeout: true })), STREAM_IDLE_MS);
+      idleTimer = setTimeout(() => rej(Object.assign(new Error(`流中读超时（${Math.round(idleMs / 1000)}s）`), { idleTimeout: true })), idleMs);
     });
   try {
     for (;;) {
@@ -4551,14 +4566,17 @@ function reverseAliasEntry(model, cfg) {
   return null;
 }
 
-/** 反向映射的渠道目标。自映射（统一名 -> 同名）是历史 UI 污染，不构成可转发目标。 */
+/** 反向映射的渠道目标。自映射只有在目标不是该渠道原生模型时才是脏配置：
+ * 候选来自渠道原始目录，此时「统一名 == 实际模型」说明统一名就是该渠道真实模型名，
+ * 恒等映射合法；非原生的同名目标仍返回 null，防止虚拟名透传上游（issue #145）。 */
 function reverseAliasTarget(model, channel, cfg) {
   const entry = reverseAliasEntry(model, cfg);
   if (!entry) return null;
   const raw = entry[channel];
   if (typeof raw !== "string" || !raw.trim()) return null;
   const target = raw.trim();
-  return target.toLowerCase() === String(model || "").trim().toLowerCase() ? null : target;
+  const same = target.toLowerCase() === String(model || "").trim().toLowerCase();
+  return same && !nativeModel(channel, target) ? null : target;
 }
 
 function nativeModel(channel, model) {
@@ -4568,8 +4586,9 @@ function nativeModel(channel, model) {
 }
 
 /** 模型在某渠道上的实际可转发名。
- * 该渠道显式配了反向映射时，只认映射结果；自映射/空映射不得再回退成“原生模型”，
- * 否则历史脏目录里恰好混入统一名时，仍可能把统一名发给上游。
+ * 该渠道显式配了反向映射时，只认映射结果；空映射/非原生自映射不得再回退成“原生模型”，
+ * 否则历史脏目录里恰好混入统一名时，仍可能把虚拟名发给上游。
+ * 原生模型的恒等映射是合法目标（统一名就是该渠道真实模型名，issue #145）。
  * 未配该渠道映射时，原生模型名可继续作为合法目标（保留 issue #78 的跨渠道备选）。 */
 function resolveModelTarget(model, channel, cfg) {
   const normalized = String(model || "").trim();
@@ -4806,4 +4825,6 @@ module.exports = { get, ADAPTERS, channelModelIds, reverseAliasEntry, resolveMod
   traeCredits, zcodeCreditPackages, lobsterCreditPackages, parseWbResource,
   // 供自测校验「首个 SSE 事件必须解除首字节预算」（issue #107：漏解除 → 长回答被 30s 掐断）：
   // 自测用真 fetchStream + 真 pumpSse + 缩短的 firstByteBudgetMs + 假上游复现现场
-  fetchStream, pumpSse };
+  fetchStream, pumpSse,
+  // 设备指纹派生（discovery.cjs 的 OAuth/导入路径复用同一套熵更高的算法，避免弱独立实现）
+  deviceIds };

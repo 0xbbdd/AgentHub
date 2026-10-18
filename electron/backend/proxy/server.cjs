@@ -210,6 +210,33 @@ function normalizeChannelFailoverMax(v) {
   return Math.min(CHANNEL_FAILOVER_MAX_CAP, Math.max(1, Math.round(n)));
 }
 
+// ===== 瞬时错误原地重发（同账号重试，参考 agent2api retry_api 语义）=====
+// 5xx/网络/超时这类瞬时错误，同一账号先原地重发 N 次吸收抖动，用尽再换号。
+// 与 401 刷新重试、429 退避重试并列的第三档重试。
+const RETRY_SAME_MAX_COUNT = 5;          // 同账号原地重发次数上限（配置可覆盖）
+const RETRY_SAME_DEFAULT_COUNT = 1;      // 默认重发 1 次
+const RETRY_SAME_DEFAULT_INTERVAL_MS = 1000; // 默认退避间隔 1s
+const RETRY_SAME_MIN_INTERVAL_MS = 200;  // 间隔下限（防 0ms 忙等）
+const RETRY_SAME_MAX_INTERVAL_MS = 10000; // 间隔上限
+
+/** 同账号原地重发次数：settings.retrySameAccountCount 显式配置（含 0 = 关闭）时按配置
+ * （封顶 RETRY_SAME_MAX_COUNT），缺省/非法回退 RETRY_SAME_DEFAULT_COUNT。
+ *  Math.round 整数化（与 normalizeChannelFailoverMax 同口径） */
+function retrySameAccountCount(settings) {
+  const raw = settings && settings.retrySameAccountCount;
+  if (raw == null) return RETRY_SAME_DEFAULT_COUNT; // 缺省 = 默认 1 次
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return RETRY_SAME_DEFAULT_COUNT; // 脏值回默认
+  return Math.min(RETRY_SAME_MAX_COUNT, Math.round(n)); // 0 = 显式关闭原地重发
+}
+
+/** 同账号原地重发退避间隔（毫秒）：settings.retrySameAccountIntervalMs，默认 1000ms */
+function retrySameAccountIntervalMs(settings) {
+  const n = Number(settings && settings.retrySameAccountIntervalMs);
+  if (!Number.isFinite(n) || n <= 0) return RETRY_SAME_DEFAULT_INTERVAL_MS;
+  return Math.min(RETRY_SAME_MAX_INTERVAL_MS, Math.max(RETRY_SAME_MIN_INTERVAL_MS, Math.round(n)));
+}
+
 /** 每模型上游尝试预算：failover 关 → 固定 6；否则 max(6, 上限 + 1)。
  *  +1 沿用旧配比（5 渠道 + 1 = 6）：预算恰等于候选数时，末个渠道会被预算收尾排除在轨迹外，
  *  报错条数将比设置值少 1——用户会再次怀疑「设置没生效」 */
@@ -620,6 +647,14 @@ async function handleChat(req, res, settings, surface, convNotes) {
     record({ status: 401, error: "key disabled" });
     return sink.endErr(401, "API Key 已停用", "invalid_request_error", "invalid_api_key");
   }
+  // Key 级渠道/模型白名单（参考 agent2api apiKeys allowedProviders/allowedModels，空数组 = 不限制）：
+  // 泄露影响面收敛的最小权限化措施。模型名按请求的对外模型名（body.model）判定，渠道判定在路由后。
+  const keyAllowedModels = Array.isArray(key.allowedModels) ? key.allowedModels : [];
+  const keyAllowedChannels = Array.isArray(key.allowedChannels) ? key.allowedChannels : [];
+  if (keyAllowedModels.length && !keyAllowedModels.includes(String(body.model || "").toLowerCase())) {
+    record({ status: 403, error: "model not allowed by key" });
+    return sink.endErr(403, `该 API Key 不允许请求模型 "${body.model}"（allowedModels 白名单）`, "invalid_request_error", "model_not_allowed");
+  }
   // 日配额（0=不限，次日 00:00 重置）
   if (key.dailyQuota > 0 && store.keyTodayReq(key.id) >= key.dailyQuota) {
     record({ status: 429, error: "daily quota exceeded" });
@@ -828,7 +863,18 @@ async function handleChat(req, res, settings, surface, convNotes) {
       //（模型目录的物理边界，靠回退模型兜底）
       const owners = adapters.modelOwners(chainModel, settings).filter((c) => c !== resolved.channel);
       owners.sort(cmpByOrder(routeOrderOf(key, settings), tierGroups()));
-      const queue = [resolved.channel, ...owners];
+      // Key 白名单过滤：allowedChannels 非空时，候选队列只留白名单内的渠道（主渠道 + 备选一起过）
+      let queue = [resolved.channel, ...owners];
+      if (keyAllowedChannels.length) {
+        queue = queue.filter((c) => keyAllowedChannels.includes(String(c).toLowerCase()));
+        if (!queue.length) {
+          lastErr = Object.assign(
+            new Error(`该 API Key 的 allowedChannels 白名单不含任何承载模型 "${chainModel}" 的渠道`),
+            { status: 403 }
+          );
+          continue; // 尝试回退模型（白名单可能放行别的模型）
+        }
+      }
       queue.length = Math.min(
         queue.length,
         settings.channelFailover === false ? 1 : normalizeChannelFailoverMax(settings.channelFailoverMax)
@@ -879,6 +925,7 @@ async function handleChat(req, res, settings, surface, convNotes) {
         const tried = new Set();
         const triedAccountNames = []; // 本渠道实际选中的账号名（最终错误文案用；去重保序）
         const rateRetried = new Set(); // 无明示时间的 429 同号退避重试标记（每号限一次）
+        const transientRetried = new Map(); // 瞬时错误（5xx/网络/超时）同账号原地重发计数：accId → 已重发次数
         // 每账号并发租约：expire_first 排序与并发无关，同窗口并发会话否则全打同一账号（参考项目租约语义）
         const perAccountLimit = Number(settings.concurrencyPerAccount) > 0 ? Number(settings.concurrencyPerAccount) : 3;
         let poolEmpty = false; // 号池无可用账号（全冷却/耗尽/负缓存打光）
@@ -1027,6 +1074,25 @@ async function handleChat(req, res, settings, surface, convNotes) {
             }
             const cls = classifyUpstream(e, false, chan);
             humanizeAccountBlocked(e, cls);
+            // 瞬时错误（5xx/网络/超时）同账号原地重发：先在这个账号上按配置次数重发吸收抖动，
+            // 用尽才走换号。首字节超时（firstByteTimeout）虽是"慢"不是"账号故障"，
+            // 但原地重发同一份 body 结果不会变（上游这一刻就是慢），故不重发、只换号（agent2api 同口径）。
+            // 429 与 401 有专属动作（429 短退避重试 / 401 刷新凭证重试），不走本档（见下方各自分支）。
+            if (cls.kind === "server" && !e.firstByteTimeout) {
+              const maxSame = retrySameAccountCount(settings);
+              const usedSame = transientRetried.get(acc.id) || 0;
+              if (usedSame < maxSame) {
+                transientRetried.set(acc.id, usedSame + 1);
+                tried.delete(acc.id); // 允许重新选中本号
+                attempt--; // 不消耗换号次数
+                const delayMs = retrySameAccountIntervalMs(settings);
+                oplog.log("warn", "代理重试",
+                  `上游瞬时错误（${String((e && e.message) || "").slice(0, 80)}），${delayMs}ms 后同账号重发（第 ${usedSame + 1}/${maxSame} 次）`,
+                  { channel: chan, target: acc.name });
+                await new Promise((r) => setTimeout(r, delayMs));
+                continue;
+              }
+            }
             // 无明示重置时间的 429：上游多为 1~3s 短窗限流，退避 1s 重试一次再落冷却换号
             // （参考项目 RetrySame 语义）；有墙钟/Retry-After 的 429 重试必白费，直接冷却。
             // 单号池场景下这一跳决定 429 是就地消化还是直接抛给客户端
@@ -1393,4 +1459,6 @@ module.exports = { start, stop, stopAsync, drainAndStop, status, channelHealthSn
   // 候选队列耗尽文案（scripts/test-concurrency-message.cjs 行为断言用）
   concurrencyBlockedMessage,
   // 模型名形近提示（scripts/test-model-hint.cjs 行为断言用）
-  nearModelIds };
+  nearModelIds,
+  // 瞬时错误原地重发纯函数（自测断言用）
+  retrySameAccountCount, retrySameAccountIntervalMs };

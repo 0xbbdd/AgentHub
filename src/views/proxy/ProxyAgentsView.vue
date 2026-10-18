@@ -9,6 +9,7 @@ import type { ProxyChannelView, ProxyAccount, ProxyChannelId, ProxyPoolStrategy,
 import { useAppStore } from "../../stores/app";
 import { fmtInt, fmtK, fmtDate, fmtAgo, fmtCredits, ACCOUNT_STATUS, SOURCE_NAMES, channelName, fmtBalance, fmtPkgTotal, fmtPkgUsed, pkgFallbackName, balanceUnit, isQoderChannel, isClineChannel, costTierName, checkinLabels, todayStr } from "./format";
 import { coalesceAsync } from "../../utils/timing";
+import { commandMode } from "../../api/caps";
 import { solveCaptcha, cancelCaptcha, CaptchaCancelledError } from "../../utils/aliyunCaptcha";
 
 const app = useAppStore();
@@ -146,6 +147,10 @@ const SMS_ONLY_CHANNELS: ProxyChannelId[] = ["autoclaw"];
 // 与 NO_OAUTH_CHANNELS 同一分工：渠道能力的展示层开关，判定口径在各自适配器
 const NO_CHECKIN_CHANNELS: ProxyChannelId[] = ["catpaw", "cline_free", "cline_pass"];
 function addTabAllowed(key: AddMethod, channel: ProxyChannelId = activeChannel.value): boolean {
+  // 容器形态：服务端 deny 的入口直接隐藏，避免用户点了才看到错误文案
+  if (key === "oauth" && commandMode("proxy_oauth_begin") === "deny") return false;
+  if (key === "file" && commandMode("proxy_account_import_file") === "deny") return false;
+  if (key === "local" && (commandMode("proxy_scan") === "deny" || commandMode("proxy_scan_import") === "deny")) return false;
   if (key === "oauth" && NO_OAUTH_CHANNELS.includes(channel)) return false;
   // 手机验证码页签只给 AutoClaw 国内版；它自身也没有 OAuth 页签可放
   if (key === "sms") return SMS_ONLY_CHANNELS.includes(channel);
@@ -160,6 +165,9 @@ function addTabAllowed(key: AddMethod, channel: ProxyChannelId = activeChannel.v
 function allowedMethods(channel: ProxyChannelId): AddMethod[] {
   return (["oauth", "sms", "local", "file", "paste"] as AddMethod[]).filter((key) => addTabAllowed(key, channel));
 }
+
+// 容器形态（OAuth 被服务端 deny）：添加弹窗只保留粘贴 JSON，并给出号池同步引导
+const containerForm = computed(() => commandMode("proxy_oauth_begin") === "deny");
 
 // 渠道允许的添加方式（分段控件按渠道过滤）
 const METHOD_TABS = computed(
@@ -1824,6 +1832,11 @@ onUnmounted(() => {
             >
               <i class="ph" :class="t.icon"></i>{{ t.label }}
             </button>
+          </div>
+
+          <!-- 容器形态的可行路径：OAuth/本机扫描/文件选择都被服务端禁用，先把话说清楚 -->
+          <div v-if="containerForm" class="add-msg">
+            容器形态推荐：设置 → 号池同步（WebDAV/S3）；也可粘贴含 token/refreshToken 的凭据 JSON，或调用管理 API <code>/api/accounts/import</code>。桌面端「导出选中账号」只有元数据、不含凭据，不能直接灌号。
           </div>
 
           <!-- 方式内容：各面板共用固定高度，切换时弹窗不跳高度 -->

@@ -124,6 +124,20 @@ async function refreshAccount(id) {
   return { id: acc.id, credits, expiresAt: expiresAt || 0 };
 }
 
+/** 逐账号批量刷新的共享内核：每批 2 并发、Promise.allSettled 容错、结果统一补 ok。
+ *  refreshChannel 与 refreshAll 只在「收集哪些账号 id」上分家，批量节奏与结果组装收敛到这一处 */
+async function refreshBatch(ids) {
+  const results = [];
+  for (let i = 0; i < ids.length; i += 2) {
+    const batch = await Promise.allSettled(ids.slice(i, i + 2).map((id) => refreshAccount(id)));
+    // 成功必须补 ok:true：refreshAccount 正常返回不带 ok，直接推入会被 failed 统计全判成失败
+    for (const b of batch) {
+      results.push(b.status === "fulfilled" ? { ok: true, ...b.value } : { ok: false, message: String((b.reason && b.reason.message) || b.reason) });
+    }
+  }
+  return results;
+}
+
 /** 单渠道逐账号批量刷新（号池页「刷新当前渠道」用），每渠道并发 ≤2；单账号失败不影响其余 */
 async function refreshChannel(channel) {
   if (refreshing) return { ok: false, message: "刷新进行中" };
@@ -136,12 +150,7 @@ async function refreshChannel(channel) {
       .listAccounts(channel)
       .filter((a) => a.status !== "disabled" && a.hasToken)
       .map((a) => a.id);
-    const results = [];
-    for (let i = 0; i < ids.length; i += 2) {
-      const batch = await Promise.allSettled(ids.slice(i, i + 2).map((id) => refreshAccount(id)));
-      // 成功必须补 ok:true：refreshAccount 正常返回不带 ok，直接推入会被 failed 统计全判成失败
-      for (const b of batch) results.push(b.status === "fulfilled" ? { ok: true, ...b.value } : { ok: false, message: String((b.reason && b.reason.message) || b.reason) });
-    }
+    const results = await refreshBatch(ids);
     events.emit({ type: "credits" });
     const failed = results.filter((x) => !x.ok);
     return { ok: true, total: results.length, failed: failed.length, results };
@@ -166,11 +175,7 @@ async function refreshAll() {
     }
     const results = [];
     for (const ids of byChannel.values()) {
-      // 渠道内两两并发
-      for (let i = 0; i < ids.length; i += 2) {
-        const batch = await Promise.allSettled(ids.slice(i, i + 2).map((id) => refreshAccount(id)));
-        for (const b of batch) results.push(b.status === "fulfilled" ? { ok: true, ...b.value } : { ok: false, message: String((b.reason && b.reason.message) || b.reason) });
-      }
+      results.push(...await refreshBatch(ids));
     }
     events.emit({ type: "credits" });
     const failed = results.filter((r) => !r.ok);

@@ -13,6 +13,7 @@ const err = ref("");
 const msg = ref("");
 const syncing = ref("");
 const filter = ref("");
+const statusFilter = ref<"all" | "on" | "off">("all"); // 状态筛选：全部 / 已开启 / 已关闭
 const activeTab = ref(""); // "" = 全部
 const mainTab = ref<"catalog" | "alias" | "reverse">("catalog");
 const ruleDialogOpen = ref(false);
@@ -27,14 +28,32 @@ const CHANNEL_OPTIONS = computed<{ value: "" | ProxyChannelId; label: string }[]
 // 渠道 tab 只显示有模型的渠道：复用下方 modelsByChannel 预分组（O(渠道) 查直值，不再 O(渠道×模型) 逐对扫描）
 const tabChannels = computed(() => channels.value.filter((c) => (modelsByChannel.value[c.id] || []).length > 0));
 
+// 三重筛选的交集：渠道 tab → 启停状态 → 关键词（id 与显示名模糊匹配）。
+// 这个列表既是表格数据源，也是「一键开启/关闭/反选」的作用范围——所见即所改
 const rows = computed(() => {
   const kw = filter.value.trim().toLowerCase();
   return models.value.filter((m) => {
     if (activeTab.value && !m.sources.includes(activeTab.value as ProxyChannelId)) return false;
+    if (statusFilter.value === "on" && !m.enabled) return false;
+    if (statusFilter.value === "off" && m.enabled) return false;
     if (!kw) return true;
     return m.id.toLowerCase().includes(kw) || String(m.name || "").toLowerCase().includes(kw);
   });
 });
+
+/** 当前筛选范围的人类可读描述：批量操作前让用户确认「打的是哪一片」 */
+const scopeText = computed(() => {
+  const parts = [activeTab.value ? channelName(activeTab.value) : "全部渠道"];
+  if (statusFilter.value !== "all") parts.push(statusFilter.value === "on" ? "仅已开启" : "仅已关闭");
+  const kw = filter.value.trim();
+  if (kw) parts.push(`关键词「${kw}」`);
+  return parts.join(" · ");
+});
+
+function resetFilters() {
+  filter.value = "";
+  statusFilter.value = "all";
+}
 
 // ===== 思考强度选项 =====
 const REASONING_EFFORT_OPTIONS = [
@@ -139,9 +158,13 @@ async function addReverseAlias() {
     err.value = "至少为一个渠道选择目标模型";
     return;
   }
-  const selfMappedChannel = Object.entries(targetMap).find(([, target]) => target.toLowerCase() === name.toLowerCase());
-  if (selfMappedChannel) {
-    err.value = `${channelName(selfMappedChannel[0])} 的实际模型不能与统一请求名相同`;
+  const selfMapped = Object.entries(targetMap).filter(([ch, target]) => {
+    if (target.toLowerCase() !== name.toLowerCase()) return false;
+    // 候选来自渠道原始目录：同名且是原生模型 = 合法恒等映射，只有非原生同名才是脏配置
+    return !channelTargetModels(ch).some((m) => m.toLowerCase() === target.toLowerCase());
+  });
+  if (selfMapped.length) {
+    err.value = `以下渠道的实际模型不是该渠道原生模型，不能与统一请求名相同：${selfMapped.map(([ch]) => channelName(ch)).join("、")}`;
     return;
   }
   const rev = { ...(app.config.proxy.modelReverseAliases || {}) };
@@ -198,6 +221,56 @@ async function toggleEnabled(m: ProxyModel, v: string | number | boolean) {
   app.config.proxy.disabledModels = [...list];
   await persist(on ? `已启用 ${m.id}` : `已禁用 ${m.id}`);
   await refresh();
+}
+
+// ===== 批量启停：作用范围恒为「当前筛选出的可见模型」，不是整个目录 =====
+// 与单条开关同一份数据（disabledModels）与同一种比较口径（精确 id），
+// 因此批量结果与逐条点击完全等价，服务端每请求读盘热生效。
+const bulkBusy = ref(false);
+/** 待确认的批量操作：关闭/反选可能让模型大面积不可用（一键关闭「全部」会把整个网关打哑），先确认再落盘 */
+const bulkConfirm = ref<{ mode: "off" | "invert"; title: string; desc: string } | null>(null);
+
+/** 打开批量操作入口：开启是安全动作直接执行，关闭与反选先弹确认 */
+function requestBulk(mode: "on" | "off" | "invert") {
+  const ids = rows.value.map((m) => m.id);
+  if (!ids.length || bulkBusy.value) return;
+  if (mode === "on") {
+    void applyBulk("on");
+    return;
+  }
+  const verb = mode === "off" ? "关闭" : "反选";
+  bulkConfirm.value = {
+    mode,
+    title: `${verb} ${ids.length} 个模型`,
+    desc: `作用范围：${scopeText.value}。其余模型不受影响，误操作可用「一键开启」恢复。`,
+  };
+}
+
+async function confirmBulk() {
+  const c = bulkConfirm.value;
+  bulkConfirm.value = null;
+  if (c) await applyBulk(c.mode);
+}
+
+async function applyBulk(mode: "on" | "off" | "invert") {
+  const ids = rows.value.map((m) => m.id);
+  if (!ids.length || bulkBusy.value) return;
+  bulkBusy.value = true;
+  try {
+    const list = new Set(app.config.proxy.disabledModels || []);
+    for (const id of ids) {
+      if (mode === "on") list.delete(id);
+      else if (mode === "off") list.add(id);
+      else if (list.has(id)) list.delete(id);
+      else list.add(id);
+    }
+    app.config.proxy.disabledModels = [...list];
+    const verb = mode === "on" ? "启用" : mode === "off" ? "关闭" : "反选";
+    await persist(`已${verb} ${ids.length} 个模型`);
+    await refresh();
+  } finally {
+    bulkBusy.value = false;
+  }
 }
 
 async function setOverride(m: ProxyModel, v: string) {
@@ -303,24 +376,35 @@ onMounted(refresh);
 
       <!-- Tab 1: 模型目录 -->
       <template v-if="mainTab === 'catalog'">
-        <!-- 页头工具条：渠道分段选择器在左、搜索与官方目录拉取在右 -->
+        <!-- 页头工具条：渠道分段选择器在左、状态筛选与搜索与官方目录拉取在右 -->
         <div class="models-head">
-          <div class="seg">
-            <button class="seg-item" :class="{ active: !activeTab }" @click="activeTab = ''">全部</button>
-            <button
-              v-for="c in tabChannels"
-              :key="c.id"
-              class="seg-item"
-              :class="{ active: activeTab === c.id }"
-              @click="activeTab = c.id"
-            >
-              {{ c.display }}
-            </button>
+          <div class="seg-group">
+            <span class="seg-label">渠道</span>
+            <div class="seg">
+              <button class="seg-item" :class="{ active: !activeTab }" @click="activeTab = ''">全部</button>
+              <button
+                v-for="c in tabChannels"
+                :key="c.id"
+                class="seg-item"
+                :class="{ active: activeTab === c.id }"
+                @click="activeTab = c.id"
+              >
+                {{ c.display }}
+              </button>
+            </div>
           </div>
           <span class="head-tools">
+            <div class="seg-group">
+              <span class="seg-label">状态</span>
+              <div class="seg">
+                <button class="seg-item" :class="{ active: statusFilter === 'all' }" @click="statusFilter = 'all'">全部</button>
+                <button class="seg-item" :class="{ active: statusFilter === 'on' }" @click="statusFilter = 'on'">开启</button>
+                <button class="seg-item" :class="{ active: statusFilter === 'off' }" @click="statusFilter = 'off'">关闭</button>
+              </div>
+            </div>
             <label class="search-box">
               <i class="ph ph-magnifying-glass"></i>
-              <input v-model="filter" class="search-input" placeholder="搜索模型" spellcheck="false" />
+              <input v-model="filter" class="search-input" placeholder="搜索模型 ID / 名称" spellcheck="false" />
               <el-tooltip v-if="filter" content="清空搜索" placement="top">
                 <button class="search-clear" @click.prevent="filter = ''"><i class="ph ph-x"></i></button>
               </el-tooltip>
@@ -341,6 +425,24 @@ onMounted(refresh);
           <div class="card-title">
             {{ activeTab ? channelName(activeTab) + "模型目录" : "合并模型目录" }}
             <span class="right">{{ rows.length }} 个模型 · 保存即热生效</span>
+            <!-- 批量启停：作用范围 = 上表当前筛选结果（渠道 / 状态 / 关键词三重筛选的交集） -->
+            <div class="bulk-bar">
+              <el-tooltip content="启用当前筛选出的全部模型" placement="top">
+                <button class="btn btn-sm" :disabled="bulkBusy || !rows.length" @click="requestBulk('on')">
+                  <i class="ph ph-check-circle"></i>一键开启
+                </button>
+              </el-tooltip>
+              <el-tooltip content="关闭当前筛选出的全部模型" placement="top">
+                <button class="btn btn-sm" :disabled="bulkBusy || !rows.length" @click="requestBulk('off')">
+                  <i class="ph ph-x-circle"></i>一键关闭
+                </button>
+              </el-tooltip>
+              <el-tooltip content="当前筛选出的模型：开启的关闭、关闭的开启" placement="top">
+                <button class="btn btn-sm" :disabled="bulkBusy || !rows.length" @click="requestBulk('invert')">
+                  <i class="ph ph-arrows-left-right"></i>一键反选
+                </button>
+              </el-tooltip>
+            </div>
           </div>
           <div class="table-scroll" style="overflow-x: hidden">
             <table class="table table-bare" style="table-layout: fixed; width: 100%">
@@ -486,7 +588,13 @@ onMounted(refresh);
                 </tr>
                 <tr v-if="!rows.length">
                   <td :colspan="activeTab ? 7 : 8" style="text-align: center; color: var(--text-3); padding: 24px 0">
-                    无匹配模型 —— 点上方「拉取模型」从官方目录云端同步（用号池账号 token，不依赖本地软件）
+                    <template v-if="models.length && (statusFilter !== 'all' || filter.trim())">
+                      当前筛选条件下无匹配模型 ——
+                      <button class="link-btn" @click="resetFilters">清空筛选</button>
+                    </template>
+                    <template v-else>
+                      无匹配模型 —— 点上方「拉取模型」从官方目录云端同步（用号池账号 token，不依赖本地软件）
+                    </template>
                   </td>
                 </tr>
               </tbody>
@@ -530,6 +638,9 @@ onMounted(refresh);
         </div>
         <div class="set-desc" style="margin-bottom: 10px">
           解决不同渠道同一模型命名不一致（例如 Trae 的 glm-5.3 与 WorkBuddy/ZCode 的名称不同）。客户端按统一名称请求，网关根据路由渠道自动发给对应渠道的模型名。
+        </div>
+        <div class="set-desc" style="margin-bottom: 10px">
+          实际模型可以与统一请求名相同（恒等映射）：只要它是该渠道原生模型，保存后仍按该名称转发；大小写可以不同。
         </div>
         <div class="rev-form">
           <div class="rev-row">
@@ -589,6 +700,18 @@ onMounted(refresh);
       </div>
     </div>
 
+    <!-- 批量启停确认（关闭/反选会改变大量模型的可用性，先确认再落盘） -->
+    <div v-if="bulkConfirm" class="p-mask" @click.self="bulkConfirm = null">
+      <div class="p-dlg glass">
+        <div class="p-title">{{ bulkConfirm.title }}</div>
+        <div class="set-desc">{{ bulkConfirm.desc }}</div>
+        <div class="p-actions">
+          <button class="btn" @click="bulkConfirm = null">取消</button>
+          <button class="btn btn-primary" @click="confirmBulk">确定</button>
+        </div>
+      </div>
+    </div>
+
     <!-- 路由与切换规则小弹窗 -->
     <Teleport to="body">
       <div v-if="ruleDialogOpen" class="p-mask" @click.self="ruleDialogOpen = false">
@@ -608,7 +731,7 @@ onMounted(refresh);
           <div class="rule-body">
             <div class="rule-item"><b>1. 渠道路由：</b>模型仅存在于单渠道 → 强制走该渠道；多源重叠 → per-model 覆盖优先，否则按路由策略打分。</div>
             <div class="rule-item"><b>2. 自定义模型映射：</b>请求入口先把别名解析为实际模型再路由（响应模型字段保持请求值）。</div>
-            <div class="rule-item"><b>3. 反向模型映射：</b>一个统一请求名映射到各渠道不同模型名，渠道确定后自动转为该渠道模型转发（响应保持统一请求名）。</div>
+            <div class="rule-item"><b>3. 反向模型映射：</b>一个统一请求名映射到各渠道不同模型名，渠道确定后自动转为该渠道模型转发（响应保持统一请求名）。实际模型与统一名相同且属于渠道原生模型时，按恒等映射处理。</div>
             <div class="rule-item"><b>4. 上下文与思考强度：</b>支持在表格中行内自定义覆盖，修改后即时注入出站参数并反映在模型目录。</div>
             <div class="rule-item"><b>5. 全局回退降级：</b>模型未知或号池耗尽 → 按配置页「不可用时自动切换模型」统一设置切到全局回退模型（客户端无感）。</div>
             <div class="rule-item"><b>6. 模型级负缓存：</b>模型级限流（6004）/ 该号不支持（11102）→ 只冷却「账号×模型」组合，切模型即豁免。</div>
@@ -762,6 +885,17 @@ onMounted(refresh);
   align-items: center;
   gap: 8px;
 }
+/* 带文字标签的分段组：页头有两个 seg（渠道 / 状态），无标签时两组「全部」会混淆 */
+.seg-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.seg-label {
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
 /* 渠道分段选择器：容器框住选项，选中项点亮（与号池弹窗的方式切换同一语言）；
    容器 padding 3px + 内项 22px + 边框 = 30px，与右侧 .btn / 搜索框同高成一条线 */
 .seg {
@@ -890,6 +1024,35 @@ onMounted(refresh);
   .headmsg-leave-active {
     transition: none;
   }
+}
+/* 卡片标题右端批量按钮组：.right 的 margin-left:auto 已把这一组推到最右 */
+.bulk-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+/* 窄窗口下标题行允许换行：三个批量按钮 + 计数挤不下时整体落到第二行，不压扁按钮 */
+.card-title {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+.bulk-bar .btn .ph {
+  font-size: 12px;
+}
+/* 空态里的行内重置按钮：长得像链接，不抢表格主视觉 */
+.link-btn {
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: inherit;
+  font-family: inherit;
+  color: var(--accent-strong);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.link-btn:hover {
+  color: var(--accent);
 }
 .err-card {
   margin-bottom: 12px;

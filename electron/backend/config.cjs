@@ -252,6 +252,13 @@ function defaultConfig() {
       channelEnabled: {},       // 渠道启闭（「上游启闭」弹窗）：{ [渠道 id]: true|false }，缺省 = 启用。
                                 // 关闭的渠道在反代网关全部页面隐藏，路由/调用/调度也不再使用，重新打开立即恢复
       ccSwitchModel: "",        // 生态接入默认模型（注册进 CC Switch 时使用，缺省取 fallbackModel）
+      // ===== 上游超时旋钮（毫秒；对应 agent2api 四段超时的可配置化，0/缺省 = 用内置默认） =====
+      firstByteBaseMs: 30000,      // 首字节基础预算（30s，按输入规模追加、封顶 firstByteMaxMs）
+      firstByteMaxMs: 180000,      // 首字节预算封顶（超长 prompt 的 prefill 可能上百秒）
+      streamIdleMs: 300000,        // 流式相邻数据空闲超时（300s，收到新数据即重置）
+      httpJsonTimeoutMs: 60000,    // 非流式 JSON 请求（额度查询 / token 刷新）总超时（60s）
+      retrySameAccountCount: 1,    // 瞬时错误同账号原地重发次数（0~5，参考 agent2api retryCount）
+      retrySameAccountIntervalMs: 1000, // 同账号原地重发退避间隔（毫秒，200~10000）
     },
   };
 }

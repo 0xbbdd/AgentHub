@@ -287,6 +287,11 @@ function mergeSnapshot(snap, channel, opts) {
   let skipped = 0;
   const now = Date.now();
   const localByKey = new Map(store.listAccounts().map((a) => [accountKeyOf(a), a]));
+  // 预取本机全部原始行（含 token_enc 密文）：mergeSnapshot 对命中的每个远端账号都要
+  // 解密本机凭据做有效性比对，循环内逐个 getAccount 是 N+1——同步是全渠道批量操作，
+  // 几百个号时每轮多几百次 SELECT。一次查全建 Map，按 id 直取（accountView 刻意不含密文，
+  // 这一步绕不开，只能收敛成一次查询）
+  const localRowsById = new Map(store.accountRows().map((r) => [r.id, r]));
 
   for (const ra of snap.accounts) {
     if (!ra || typeof ra.key !== "string" || !ra.key) continue;
@@ -324,7 +329,7 @@ function mergeSnapshot(snap, channel, opts) {
     }
 
     // 本机已有同身份账号：自动冲突仲裁
-    const localRow = store.getAccount(local.id);
+    const localRow = localRowsById.get(local.id) || null;
     const localSecrets = localRow ? store.accountSecrets(localRow) : { token: "", refreshToken: "" };
     const localUpdatedAt = Number(local.updatedAt || local.creditsAt || local.lastUsed || local.createdAt || 0);
     const localTokenAt = Number(local.tokenAt || 0) || localUpdatedAt;
@@ -877,6 +882,7 @@ const SHARED_FILE = "shared-config.json";
 const SHARED_FORMAT = "agenthub-proxy-shared@1";
 // 跨设备应当一致的配置项。设备专属的 port / bind / 并发 / 限速 / 签到开关刻意不含：
 // 同步过去会把另一台设备上按自身环境改过的端口与常开签到开关盖掉。
+// 超时与瞬时重试旋钮（firstByteBaseMs 等 / retrySameAccountCount）同属设备专属（网络环境不同），不同步。
 const SHARED_CONFIG_KEYS = ["modelAliases", "modelReverseAliases", "modelCustom",
   "modelOverrides", "modelFallback", "disabledModels"];
 /** 各键在本机配置里的形状：对端载荷按这个口径收，形状不符一律不写。
