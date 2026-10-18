@@ -1583,11 +1583,21 @@ onUnmounted(() => {
               <template v-if="loading && !ch.accounts.length">
                 <tr v-for="n in 4" :key="'sk-' + n">
                   <td class="sel-col"><div class="skeleton" style="height: 14px; width: 14px; margin: 0 auto"></div></td>
-                  <td><div class="skeleton" style="height: 20px; width: 120px"></div></td>
-                  <td><div class="skeleton" style="height: 18px; width: 50px"></div></td>
-                  <td><div class="skeleton" style="height: 18px; width: 70px"></div></td>
-                  <td><div class="skeleton" style="height: 18px; width: 80px"></div></td>
-                  <td><div class="skeleton" style="height: 18px; width: 90px"></div></td>
+                  <td>
+                    <div class="skeleton" style="height: 20px; width: 120px; margin: 0 auto"></div>
+                  </td>
+                  <td>
+                    <div class="skeleton" style="height: 18px; width: 50px; margin: 0 auto"></div>
+                  </td>
+                  <td>
+                    <div class="skeleton" style="height: 18px; width: 70px; margin: 0 auto"></div>
+                  </td>
+                  <td>
+                    <div class="skeleton" style="height: 18px; width: 80px; margin: 0 auto"></div>
+                  </td>
+                  <td>
+                    <div class="skeleton" style="height: 18px; width: 90px; margin: 0 auto"></div>
+                  </td>
                   <td style="text-align: right"><div class="skeleton" style="height: 20px; width: 140px; margin-left: auto"></div></td>
                 </tr>
               </template>
@@ -3157,9 +3167,20 @@ onUnmounted(() => {
   word-break: break-all;
   user-select: all;
 }
-/* ===== 列表布局：账号两行式 + 数字列右对齐 ===== */
+
+/* ===== 列表布局：账号两行式 + 列值居中 ===== */
+/* th 全站已强制居中（global.css），这里覆盖 td 默认左对齐；td.num 单列保持同优先级，
+   压过全局 .table td.num 的右对齐（对齐用量统计页 .tbl-c 的配方）。
+   操作列不参与：td 内联 text-align: right 优先级更高，保持右对齐 */
+.pool-tbl td,
 .pool-tbl td.num {
-  text-align: right;
+  text-align: center;
+}
+
+/* 操作列定宽：auto 布局下容器超宽时剩余空间会被按钮组最多的操作列吸走（撑到近 1/3 表宽），
+   定宽后它收缩到按钮组实际宽度，富余回流给账号等列；内容超出（更多按钮的渠道）时仍可自动撑开 */
+.pool-tbl th:last-child {
+  width: 340px;
 }
 /* 积分包展开：账号行下的只读明细表（数据来自 poolView 附的 packages） */
 .pkg-caret {
@@ -3224,10 +3245,14 @@ onUnmounted(() => {
 }
 .acc-cell {
   line-height: 1.3;
+  /* 列宽建议值：账号列给足展示空间，压缩操作列的富余占比（auto 布局下的分配 hint） */
+  width: 280px;
 }
 .acc-name {
   display: block;
-  max-width: 220px;
+  /* 列值居中配套：280px 限宽块在 td 里水平居中，避免「块靠左、文本居中」的错位 */
+  margin-inline: auto;
+  max-width: 280px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3243,9 +3268,12 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 5px;
+  /* flex 不吃 text-align：列值居中时副行内容同步居中；margin-inline 让限宽块跟随居中 */
+  justify-content: center;
   margin-top: 2px;
-  /* 副行限宽锚定 .acc-name 的 220px：账号列宽度由名称行决定，备注再长也不撑列 */
-  max-width: 220px;
+  margin-inline: auto;
+  /* 副行限宽锚定 .acc-name 的 280px：账号列宽度由名称行决定，备注再长也不撑列 */
+  max-width: 280px;
   min-width: 0;
   font-size: 10.5px;
   color: var(--text-3);

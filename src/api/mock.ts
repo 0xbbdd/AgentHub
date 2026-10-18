@@ -443,7 +443,7 @@ const PROXY_TREND = Array.from({ length: 7 }, (_, i) => {
 function mockTopRow(name: string, req: number, tokens: number) {
   const ok = Math.round(req * 0.99);
   return {
-    name, req, ok, err: req - ok, successRate: req ? Math.round((ok / req) * 1000) / 10 : 0,
+    id: name, name, req, ok, err: req - ok, successRate: req ? Math.round((ok / req) * 1000) / 10 : 0,
     promptTokens: Math.round(tokens * 0.78), completionTokens: Math.round(tokens * 0.22),
     cacheReadTokens: Math.round(tokens * 0.28), cacheCreationTokens: 0, tokens,
     ttftAvg: 820, latencyAvg: 1900,
@@ -1437,12 +1437,18 @@ export const mock = {
           { name: "workbuddy", req: 421, tokens: 96000 },
         ];
       case "proxy_stats_detail": {
-        // 与后端同口径：Key / 模型模糊搜索 + 渠道 / 状态过滤，并回筛选命中的 token 汇总
-        const a = (args || {}) as { key?: string; model?: string; channel?: string; status?: string; page?: number; pageSize?: number };
-        const kw = String(a.key || "").toLowerCase();
+        // 与后端同口径：Key 精确（key_id = ?）+ 模型模糊 + 渠道 / 状态过滤，并回筛选命中的 token 汇总
+        const a = (args || {}) as {
+          keyId?: string;
+          model?: string;
+          channel?: string;
+          status?: string;
+          page?: number;
+          pageSize?: number
+        };
         const mw = String(a.model || "").toLowerCase();
         let rows = PROXY_USAGE.filter((r) => {
-          if (kw && !(r.keyName || "").toLowerCase().includes(kw) && !(r.keyId || "").toLowerCase().includes(kw)) return false;
+          if (a.keyId && r.keyId !== a.keyId) return false;
           if (mw && !(r.model || "").toLowerCase().includes(mw)) return false;
           if (a.channel && r.channel !== a.channel) return false;
           if (a.status === "ok" && !(r.status >= 200 && r.status < 300)) return false;
