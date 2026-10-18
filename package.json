@@ -67,6 +67,10 @@
       "electron/**/*",
       "package.json"
     ],
+    "asarUnpack": [
+      "**/*.node",
+      "node_modules/@koromix/**"
+    ],
     "extraResources": [
       {
         "from": "build/icon.png",
