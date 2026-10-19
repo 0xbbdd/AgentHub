@@ -8,6 +8,11 @@
 //   - work_runs.usage_json：主循环（直答 / 协作编排者）一次 run 的 token 账，run 收尾时写入（进行中为 NULL）；
 //   - collaboration_run_agent_attempts.usage_json：协作子代理每次 attempt 的 token 账，结算时写入。
 //   两处各自成条入库，聚合时自然相加、与客户端计费一致，不会重复计（2026-10 本机实测核对）。
+// usage_json 口径（2026-10-19 本机实测 11 条逐条核对）：totalTokens = input + output + cacheRead + cacheWrite，
+//   即 input 是「新鲜输入」、与 cacheRead 互斥（cacheWrite 实测恒 0，智谱侧不单列缓存写入）。
+//   入库时 inputTokens 必须补入 cacheRead，对齐全系统基线「input_tokens 含 cache_read_tokens」：
+//   db.cjs 的净输入按 input_tokens - cache_read_tokens 相减、命中率按 cache_read_tokens / input_tokens 计算，
+//   口径错位会导致命中率超 100%、计费净输入为负、总量少算整份缓存读（与 dsh/mimo 同款归一化）。
 // 设备标识：<root>\device\device-id.json 的 deviceId（客户端安装级稳定 id）；
 //   缺失回退第一个账号目录名（账号 key），再缺失返回 null（上层兜底）。
 // 幂等键：`${deviceId}:autoclaw:${账号key}:run:${run_id}` 与 `...:attempt:${participant_id}:${attempt}`；
@@ -122,7 +127,8 @@ function toMs(v) {
   return Number.isNaN(iso) ? null : iso;
 }
 
-/** usage_json 解析：四桶 + totalTokens；结构非法返回 null */
+/** usage_json 解析：四桶 + totalTokens；结构非法返回 null。
+ *  注意 input 是新鲜输入（不含 cacheRead），入库前需按文件头口径补入。 */
 function parseUsage(raw) {
   if (!raw) return null;
   try {
@@ -211,7 +217,7 @@ function extract(dir, deviceId, deviceName, since) {
               modelId: row.connection_model ? normalizeModel(row.connection_model) : "unknown",
               sessionId: row.session_id || undefined,
               mode: row.collaboration_mode || row.execution_intent || undefined,
-              inputTokens: usage.input,
+              inputTokens: usage.input + usage.cacheRead,
               outputTokens: usage.output,
               reasoningTokens: 0,
               cacheCreationTokens: usage.cacheWrite,
@@ -271,7 +277,7 @@ function extract(dir, deviceId, deviceName, since) {
               sessionId: row.session_id || undefined,
               agent: row.participant_name || row.agent_id || undefined,
               mode: "subagent",
-              inputTokens: usage.input,
+              inputTokens: usage.input + usage.cacheRead,
               outputTokens: usage.output,
               reasoningTokens: 0,
               cacheCreationTokens: usage.cacheWrite,

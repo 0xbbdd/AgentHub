@@ -445,31 +445,17 @@ function formatNum(n) {
 
 // ===== 托盘 =====
 
-function fmtTime(iso) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-/** 托盘菜单（动态构建：技能同步状态 + 今日用量 + 更新提示 + 暂停/恢复定时同步） */
+/** 托盘菜单（动态构建：今日用量 + 更新提示 + 暂停/恢复定时同步） */
 function buildTrayMenu() {
   const cfg = config.loadConfig();
   const running = remotesync.isRunning();
-  const p = remotesync.progress();
   // 板块开关（issue #91）：关闭板块的托盘入口一并隐藏，避免绕过 UI 触发已停用模块
   const on = (k) => {
     const m = (cfg.modules || {})[k];
     return !m || m.enabled !== false;
   };
-  const statusText = running
-    ? `同步中…（${p.stageLabel}）`
-    : remotesync.configured(cfg)
-      ? `上次同步 ${fmtTime(remotesync.loadRemoteState().lastSyncAt) || "—"}`
-      : "未配置 WebDAV";
   const usageToday = on("sync") ? usageTodaySummary() : null;
   const items = [];
-  if (on("skills")) items.push({ label: `技能仓库：${statusText}`, enabled: false });
   if (on("sync")) items.push({ label: usageToday != null ? `今日用量 ${formatNum(usageToday)} token` : "今日用量 —", enabled: false });
   if (items.length) items.push({ type: "separator" });
   const st = updater.getStatus();
