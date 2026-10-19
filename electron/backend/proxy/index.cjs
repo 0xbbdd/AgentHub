@@ -252,6 +252,20 @@ async function checkinBatch({ channel, accountId, action, interactive }) {
             }
           }
         } else r = typeof ad.trial === "function" ? await ad.trial(acc, secrets) : { ok: false, message: "该渠道没有加油包" };
+        // 国际版每日活跃（保活三件事）：参考项目 issue #277 的实测结论——国际版没有签到体系，
+        // 每日奖励的判定挂在①活跃上报 ②免费模型对话 ③网页会话 三条通道上，缺一条就领不到。
+        // 放在 trial 之后：领完加油包顺手把「今日活跃」做掉，用户点一次就完整跑一遍。
+        // 纯 best-effort：失败只拼进 message，绝不把 trial 的 ok 翻成失败（活动开关在上游手里，
+        // 关掉活动不该让整个定时签到报错）。status/桌面端不触发，避免只查状态就写上游。
+        if (useAct === "trial" && r && r.ok !== false && typeof ad.dailyActivity === "function") {
+          try {
+            const da = await ad.dailyActivity(acc, secrets);
+            r.dailyActivity = da;
+            if (da && da.message) r.message = `${r.message || ""}${r.message ? " · " : ""}每日活跃：${da.message}`.slice(0, 400);
+          } catch (e) {
+            r.dailyActivity = { ok: false, message: String((e && e.message) || e) };
+          }
+        }
         // 小浣熊首登奖励（一次性新手福利，桌面端/手机端各一条）自动领取：台账（meta.onboardingGrants）
         // 未结算才探测，成功（含幂等 granted=false）落标记，失败不落、下轮签到/自动签到自然重试
         // （「直到领取成功，后续不再领取」）。签到失败（401/网络）时跳过——凭证问题领取也必然失败

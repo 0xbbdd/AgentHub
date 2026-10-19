@@ -100,7 +100,11 @@ async function main() {
   }
 
   console.log(failures ? `\nRESULT: ${failures} failed` : "\nTrae 目录过滤自测全过");
-  process.exit(failures ? 1 : 0);
+  // 与 workbuddy 保活自测同一处置：Windows 上 fetch 连接池会在强退时与 libuv 抢跑，
+  // 触发 UV_HANDLE_CLOSING 断言并把退出码变成 127。让事件循环自然收尾，5 秒兜底。
+  process.exitCode = failures ? 1 : 0;
+  const t = setTimeout(() => process.exit(failures ? 1 : 0), 5000);
+  t.unref();
 }
 
 main().catch((e) => {

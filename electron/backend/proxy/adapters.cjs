@@ -1605,6 +1605,175 @@ function makeWorkBuddy(channelId) {
       return { ok: false, status: 0, data: null, message: "上游无可用响应" };
     },
 
+    // ===== 国际版每日活跃（keepalive）=====
+    // 来源：参考项目 billing/activity.rs + providers/workbuddy/keepalive.rs 的实测结论（issue #277）。
+    // 国际版没有「每日签到」体系，活跃判定分三个通道，缺一条就领不到每日奖励：
+    //   ① 活跃上报 POST /v2/report（chat_request_send 事件）→ 点亮成长中心连登 streak
+    //   ② 桌面端免费模型最小对话（保持「账号有调用」）
+    //   ③ 网页通道建会话 POST /console/as/conversations/（**每日活跃计数只认它**）
+    // 三条都是 best-effort：任一失败只进结果字段，绝不把签到结论翻成失败
+    // （参考项目同一取向：活动开关由上游控制，不该让定时任务整体中断）。
+    // 只在国际版触发：国内版的上游没有这条「活跃即发」的玩法，多发请求只是白撞。
+
+    /** ① 活跃上报：POST /v2/report，body 是「一个事件的数组」。
+     *  事件形状逐字段对齐参考项目（chat_request_send + mode=craft + 各种计数字段），
+     *  **不要「顺手精简」**：服务端按形状与判据字段归账，少一个键那次上报就可能不计。
+     *  回读 GET /activity/growth/streak 复核（上报 200 ≠ 计分）。 */
+    async reportActivity(account, secrets) {
+      const uid = String((account && account.uid) || "");
+      if (!uid) return { succeeded: false, streakDays: null, message: "缺少账号 uid，无法上报活跃" };
+      const convId = util.uuid();
+      const now = Date.now();
+      const event = {
+        eventCode: "chat_request_send",
+        timestamp: now,
+        reportDelay: 0,
+        mode: "craft",
+        conversationId: convId,
+        requestId: convId,
+        inputLength: 12,
+        requestModelId: "deepseek-v4.1-flash",
+        requestModelName: "DeepSeek V4.1 Flash",
+        isPlan: false,
+        isAutoExecuteTerminal: false,
+        isAutoModify: false,
+        codebaseEnable: false,
+        maxToken: 0,
+        maxSteps: 0,
+        temperature: 0,
+        maxRetries: 0,
+        mentionContexts: [],
+        knowledgeId: [],
+        knowledgeName: [],
+        codebaseId: "",
+        mentionContextCount: 0,
+        command: "",
+        expertId: "",
+        recommendId: "",
+        skillId: "",
+        skillCount: 0,
+        totalCount: 0,
+        fileUri: "",
+        presentAt: now,
+        traceId: "",
+        rootRequestId: convId,
+        parentConversationId: convId,
+        agentName: "default",
+        agentType: "conversation",
+        userId: uid,
+      };
+      const r = await this.billingCall(account, secrets, ["/report", "/v2/report"], JSON.stringify([event]));
+      const code = Number((r.data && r.data.code) ?? 0);
+      const succeeded = !!r.ok && (code === 0 || code === 200 || r.data == null);
+      if (!succeeded) {
+        return { succeeded: false, streakDays: null, message: String((r.data && (r.data.message || r.data.msg)) || r.message || `HTTP ${r.status}`) };
+      }
+      // 回读连登天数（只读 oracle）：失败只丢天数，不改上报结论
+      const st = await this.billingCall(account, secrets, ["/activity/growth/streak", "/v2/activity/growth/streak"], "{}").catch(() => ({ ok: false }));
+      const streak = st && st.data && st.data.data && st.data.data.streak;
+      const days = Number((streak && streak.days) ?? (st && st.data && st.data.data && st.data.data.days) ?? 0) || 0;
+      return { succeeded: true, streakDays: days, message: `活跃上报成功${days ? `，连登 ${days} 天` : ""}` };
+    },
+
+    /** ② 桌面端保活：用免费模型发一次最小流式对话。
+     *  模型链取参考项目实测「不消耗积分」的免费模型，逐个尝试、第一个拿到 2xx 收口。
+     *  必须**读**响应体（不读的请求上游可能不计活跃），但只需读满首个上限即可——SSE 没必要读完。 */
+    async pokeActivity(account, secrets) {
+      const c = this.cfg();
+      const FREE_MODELS = ["deepseek-v4.1-flash", "hy3", "hy4-preview", "hy4-preview-f"];
+      const models = [...new Set([...(c.keepaliveModels || []), ...FREE_MODELS])];
+      let lastMsg = "";
+      for (const model of models) {
+        const payload = JSON.stringify({
+          model,
+          stream: true,
+          max_tokens: 16,
+          messages: [
+            { role: "system", content: "You are a helpful assistant." },
+            { role: "user", content: "hi" },
+          ],
+        });
+        try {
+          const { resp, cancelTimer } = await fetchStream(c.chatUrl, {
+            method: "POST",
+            headers: this.headers(account, secrets),
+            body: payload,
+            firstByteMs: 20000,
+          });
+          try {
+            // 读到 EOF 或 1MiB 就够（活跃只需要「请求发生过且被消费」）
+            let read = 0;
+            const reader = resp.body && resp.body.getReader ? resp.body.getReader() : null;
+            if (reader) {
+              for (;;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                read += (value && value.length) || 0;
+                if (read >= 1 << 20) { try { await reader.cancel(); } catch { /* 已关闭 */ } break; }
+              }
+            }
+            return { succeeded: true, model, message: `免费模型 ${model} 保活完成` };
+          } finally {
+            cancelTimer();
+          }
+        } catch (e) {
+          lastMsg = String((e && e.message) || e);
+        }
+      }
+      return { succeeded: false, model: null, message: `免费模型保活均失败：${lastMsg || "无可用模型"}` };
+    },
+
+    /** ③ 网页会话保活：POST /console/as/conversations/。
+     *  **只带 Authorization + X-User-Id 两个凭据头**，UA 用浏览器串——桌面端 X-IDE-* 指纹
+     *  正是网页链路要剥掉的东西（参考项目 issue #277 的抓包结论）。
+     *  会话体固定带 conversationOrigin 与 plugins（网页端建会话的抓包形态）。 */
+    async webConversation(account, secrets) {
+      const c = this.cfg();
+      const uid = String((account && account.uid) || "");
+      if (!secrets || !secrets.token) return { succeeded: false, message: "缺少 accessToken，无法走网页通道" };
+      if (!uid) return { succeeded: false, message: "缺少账号 uid，无法走网页通道" };
+      // 网页域与 chat 域不同：国际版是 www.workbuddy.ai（参考项目 session_endpoint 同口径）。
+      // 用 c.webBase 可覆盖；缺省按 chatUrl 的 origin 推导，避免再引一份硬编码域名。
+      const origin = c.webBase || (c.chatUrl ? new URL(c.chatUrl).origin : "https://www.workbuddy.ai");
+      const headers = {
+        "content-type": "application/json",
+        accept: "application/json, text/plain, */*",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+        origin,
+        referer: `${origin}/app`,
+        authorization: `Bearer ${secrets.token}`,
+        "x-user-id": uid,
+      };
+      const body = JSON.stringify({
+        prompt: "Hi",
+        model: "deepseek-v4.1-flash",
+        conversationOrigin: "workbuddy-app",
+        plugins: [{ name: "weixinpay", marketplace: "codebuddy-builtin" }],
+      });
+      const r = await httpJson(`${origin}/console/as/conversations/`, { method: "POST", headers, body })
+        .catch((e) => ({ ok: false, status: 0, data: null, message: String((e && e.message) || e) }));
+      if (r.ok) return { succeeded: true, message: "网页会话已建（当日活跃已计）" };
+      return { succeeded: false, message: String((r.data && (r.data.message || r.data.msg)) || r.message || `HTTP ${r.status}`) };
+    },
+
+    /** 每日活跃组合动作（仅国际版有意义；调用方负责按渠道判断）。
+     *  三步全部走完再汇总：任一失败只报该步原因，不短路（三步互补，不是互斥分支）。 */
+    async dailyActivity(account, secrets) {
+      const report = await this.reportActivity(account, secrets).catch((e) => ({ succeeded: false, message: String((e && e.message) || e) }));
+      const poke = await this.pokeActivity(account, secrets).catch((e) => ({ succeeded: false, message: String((e && e.message) || e) }));
+      const web = await this.webConversation(account, secrets).catch((e) => ({ succeeded: false, message: String((e && e.message) || e) }));
+      const parts = [
+        report.succeeded ? `活跃上报${report.streakDays ? `（连登 ${report.streakDays} 天）` : ""}` : `活跃上报失败：${report.message}`,
+        poke.succeeded ? `免费模型保活（${poke.model}）` : `免费模型保活失败：${poke.message}`,
+        web.succeeded ? "网页会话已建" : `网页会话失败：${web.message}`,
+      ];
+      return {
+        ok: !!(report.succeeded || poke.succeeded || web.succeeded),
+        report, poke, web,
+        message: parts.join("；"),
+      };
+    },
+
     /**
      * 每日签到状态：checkin-activity-status（新）→ checkin-status（旧）逐路径降级。
      * 参考 cockpit-tools 实测：code===0 为成功；code!=0 为业务失败（如已签到/未开放）
