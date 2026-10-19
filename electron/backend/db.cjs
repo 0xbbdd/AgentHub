@@ -591,6 +591,8 @@ function savePrice(entry, updatedBy = "") {
     // 计费价格 LWW 时钟（与行内 updated_at 解耦：删除操作也要推进时钟，否则删光后被远端旧价覆盖）
     setMeta("prices_local_updated", String(Date.now()));
     db.exec("COMMIT");
+    // 价格变化直接改写 v_record_cost 的费用匹配，聚合缓存整体失效
+    _invalidateAggCache();
   } catch (e) {
     db.exec("ROLLBACK");
     throw e;
@@ -603,6 +605,7 @@ function deleteModelPrices(providerId, modelId) {
     "DELETE FROM model_price WHERE model_id = ? AND COALESCE(provider_id, '') = COALESCE(?, '')"
   ).run(modelId, providerId || null);
   setMeta("prices_local_updated", String(Date.now()));
+  _invalidateAggCache();
 }
 
 // ---- 模型别名 CRUD（归并计费）----
@@ -627,6 +630,8 @@ function addAlias(alias, targetModelId) {
   ).run(a, t);
   // 归并影响全部历史费用，与改价同一条 LWW 时钟：多设备同步时后改的一方生效
   setMeta("prices_local_updated", String(Date.now()));
+  // 别名归并直接改写 v_record_cost 的 model_id 归并结果，聚合缓存整体失效
+  _invalidateAggCache();
   const billable = `(${QUOTA_SOURCES_SQL})`;
   const affected = db.prepare(
     `SELECT COUNT(*) AS c FROM usage_record WHERE model_id = ? AND (input_tokens + output_tokens + reasoning_tokens) > 0 AND ${billable}`
@@ -641,6 +646,7 @@ function addAlias(alias, targetModelId) {
 function removeAlias(alias) {
   get().prepare("DELETE FROM model_alias WHERE alias = ?").run(String(alias || "").trim());
   setMeta("prices_local_updated", String(Date.now()));
+  _invalidateAggCache();
 }
 
 function priceRow(row) {
@@ -759,6 +765,8 @@ function replacePrices(prices, clockMs, aliases) {
     }
     setMeta("prices_local_updated", String(Math.floor(Number(clockMs) || Date.now())));
     db.exec("COMMIT");
+    // 价格与别名整表替换：v_record_cost 匹配结果全变，聚合缓存整体失效
+    _invalidateAggCache();
   } catch (e) {
     db.exec("ROLLBACK");
     throw e;
@@ -804,6 +812,9 @@ function applyRemotePricing(entries) {
     }
     setMeta("prices_local_updated", String(now));
     db.exec("COMMIT");
+    // 远程价格段开/关影响 v_record_cost 匹配，聚合缓存整体失效
+    // （全部同价跳过时白清一次，代价只是下轮重算）
+    _invalidateAggCache();
   } catch (e) {
     db.exec("ROLLBACK");
     throw e;
@@ -827,7 +838,9 @@ function getSummary(mode, targetDeviceId = null, source = null) {
   // 聚合结果缓存：同一 (mode, device, source) 在数据未变期间直接复用。
   // getSummary 是总览首屏最重的一条（真实库实测 ~224ms，含视图文本聚合与费用聚合两段），
   // 而它的调用频率远高于数据变化频率（切 tab / 切设备 / 跨天重拉都会进）。
-  const cacheKey = JSON.stringify(["summary", mode, targetDeviceId ?? null, source ?? null]);
+  // 键含当天零点：汇总里有「今日 / 本月 / 上月同期」等随日期滑动的窗口，跨天即使零写入
+  // 结果也应重算（否则「今日用量」会一直挂着昨天的值），加日期让跨天自然失效。
+  const cacheKey = JSON.stringify(["summary", mode, targetDeviceId ?? null, source ?? null, todayStartMs()]);
   return _cached(cacheKey, () => _getSummaryImpl(mode, targetDeviceId, source));
 }
 
@@ -1024,9 +1037,11 @@ function _getDeviceBreakdownsImpl(localDeviceId, mode, targetDeviceId = null, so
 
 function getTrend(mode, days, targetDeviceId = null, source = null, day = null) {
   // 近 N 天模式（day=null）缓存：days 的取值集小（7/30/90…），缓存键空间有限。
+  // 键含当天零点：窗口起点是「现在 − N 天」的滑动窗口，跨天即使零写入边界也会前移，
+  // 加日期让跨天自然失效（同一天内的亚天级滑动差异可忽略，与前端按天展示的口径一致）。
   // 单日模式（day 非空）不缓存——它是用户点某一天的交互查询，实时性优先且量小（实测 ~6ms）。
   if (day == null) {
-    const cacheKey = JSON.stringify(["trend", mode, days, targetDeviceId ?? null, source ?? null]);
+    const cacheKey = JSON.stringify(["trend", mode, days, targetDeviceId ?? null, source ?? null, todayStartMs()]);
     return _cached(cacheKey, () => _getTrendImpl(mode, days, targetDeviceId, source, null));
   }
   return _getTrendImpl(mode, days, targetDeviceId, source, day);
@@ -1387,6 +1402,8 @@ function deleteDeviceData(deviceId) {
     db.prepare("DELETE FROM device_meta WHERE device_id = ?").run(deviceId);
     db.prepare("DELETE FROM meta WHERE key LIKE ? ESCAPE '\\'").run(escapeLike(`merged:${deviceId}:`) + "%");
     db.exec("COMMIT");
+    // 该设备的明细与元数据没了：breakdowns/summary 聚合直接变，缓存整体失效
+    _invalidateAggCache();
   } catch (e) {
     db.exec("ROLLBACK");
     throw e;
@@ -1407,6 +1424,8 @@ function clearLocalCache(localDeviceId) {
     db.prepare("DELETE FROM device_meta WHERE device_id != ?").run(localDeviceId ?? "");
     db.prepare("DELETE FROM meta WHERE key LIKE 'uploaded:%' OR key LIKE 'merged:%'").run();
     db.exec("COMMIT");
+    // 明细清空：全部聚合结果作废
+    _invalidateAggCache();
   } catch (e) {
     db.exec("ROLLBACK");
     throw e;
