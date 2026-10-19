@@ -1030,6 +1030,10 @@ async function handleChat(req, res, settings, surface, convNotes) {
               lastErr = Object.assign(new Error(String(streamErr.message || "上游返回错误")), {
                 status: streamErr.status || 502,
                 code: streamErr.code || 0,
+                // 上游在流内错误里给出的「建议多久后重试」（Qoder 10605 排队等）：
+                // 不透传会让通用 429 分支按「无明示时长」只退 1s 再打，高峰期每个号
+                // 都要白撞一遍；透传后 classifyUpstream 会换算成墙钟 resetMs。
+                ...(streamErr.retryAfterMs ? { retryAfterMs: Number(streamErr.retryAfterMs) } : {}),
               });
               // 与 catch 路径（下方 classifyUpstream 后的 switchable 检查）同口径：
               // 确定性拒绝（prompt_too_long / fatal / model_denied）换号必白撞，
