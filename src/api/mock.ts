@@ -1247,6 +1247,31 @@ export const mock = {
       case "proxy_oauth_cancel":
       case "proxy_oauth_submit_callback":
         return { ok: true };
+      // 明文导出（预览）：形状与主进程一致，凭据是占位明文
+      case "proxy_account_export_plain":
+        return {
+          ok: true,
+          exportedAt: NOW,
+          missing: [],
+          accounts: [
+            {
+              channel: "trae",
+              uid: "demo-uid-0001",
+              name: "演示账号",
+              note: "",
+              token: "demo-access-token",
+              refreshToken: "demo-refresh-token",
+              tokenExp: NOW + 3600000,
+              expiresAt: 0,
+              credits: 1000,
+              status: "online",
+              source: "paste",
+              createdAt: NOW,
+              updatedAt: NOW,
+              meta: {},
+            },
+          ],
+        };
       case "proxy_pool":
         return JSON.parse(JSON.stringify(PROXY_POOL));
       // 渠道启闭（预览）：list 全量带 enabled；toggle 写 mock 配置即生效

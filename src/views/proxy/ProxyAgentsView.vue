@@ -279,36 +279,46 @@ watch(activeChannel, () => {
   selectedIds.value = new Set();
 });
 
-/** 导出选中账号为 JSON 文件：仅元数据，不含凭据（凭据仅本机 DPAPI 加密保管，不外发） */
-function exportSelected() {
+/** 导出选中账号为 JSON 文件：**含明文凭据**（token/refreshToken 由主进程解密后回传），
+ *  供用户在其它软件里直接使用；落盘仍是浏览器下载那条链路（与旧的元数据导出一致） */
+const exportOpen = ref(false);
+const exportBusy = ref(false);
+async function doExport() {
+  if (exportBusy.value) return;
   const rows = activeChannelAccounts.value.filter((a) => selectedIds.value.has(a.id));
-  if (!rows.length) return;
-  const payload = {
-    format: "agenthub-accounts",
-    exportedAt: new Date().toISOString(),
-    channel: activeChannel.value,
-    accounts: rows.map((a) => ({
-      id: a.id,
-      channel: a.channel,
-      uid: a.uid,
-      name: a.name,
-      note: a.note || "",
-      source: a.source,
-      status: a.status,
-      credits: a.credits,
-      creditsAt: a.creditsAt,
-      expiresAt: a.expiresAt,
-      createdAt: a.createdAt,
-    })),
-  };
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `agenthub-accounts-${activeChannel.value}-${todayStr()}.json`;
-  link.click();
-  URL.revokeObjectURL(url);
-  toast(`已导出 ${rows.length} 个账号（仅元数据，不含凭据）`);
+  if (!rows.length) {
+    exportOpen.value = false;
+    return;
+  }
+  exportBusy.value = true;
+  try {
+    const r = await api.proxyAccountExportPlain(rows.map((a) => a.id));
+    if (r.ok === false) throw new Error(r.message || "导出失败");
+    const accounts = r.accounts || [];
+    if (!accounts.length) throw new Error("选中账号都已不存在");
+    const payload = {
+      // 格式名与元数据导出（agenthub-accounts，故意不含 token）刻意区分开：
+      // 灌号侧对旧格式是按「元数据包」直接拒绝的，新格式不能撞名
+      format: "agenthub-credentials",
+      exportedAt: new Date().toISOString(),
+      channel: activeChannel.value,
+      accounts,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `agenthub-credentials-${activeChannel.value}-${todayStr()}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    const miss = (r.missing || []).length;
+    toast(`已导出 ${accounts.length} 个账号的明文凭据${miss ? `（${miss} 个已不存在，已跳过）` : ""}，请妥善保管`, "info");
+    exportOpen.value = false;
+  } catch (e) {
+    toast(String((e as Error)?.message || e), "err");
+  } finally {
+    exportBusy.value = false;
+  }
 }
 
 /** 批量删除：主进程逐个走单删链路（墓碑先行，经 WebDAV 传播到其他设备） */
@@ -1466,10 +1476,10 @@ onUnmounted(() => {
               <button class="btn btn-sm" @click="openStrategy(ch)">调度策略</button>
             </el-tooltip>
             <button class="btn btn-sm" @click="openAdd(ch)">添加账号</button>
-            <!-- 多选后出现的批量操作：导出（仅元数据）与批量删除（二次确认） -->
+            <!-- 多选后出现的批量操作：导出凭据（明文，二次确认）与批量删除（二次确认） -->
             <template v-if="selectedCount">
-              <el-tooltip content="把选中账号导出为 JSON 文件（仅元数据，不含凭据）" placement="top">
-                <button class="btn btn-sm" @click="exportSelected">导出</button>
+              <el-tooltip content="把选中账号导出为 JSON 文件（含明文 token/refreshToken，可直接用于其他软件）" placement="top">
+                <button class="btn btn-sm" @click="exportOpen = true">导出</button>
               </el-tooltip>
               <el-tooltip content="删除选中的账号（本地加密凭据一并删除，删除会经 WebDAV 同步传播到其他设备）" placement="top">
                 <button class="btn btn-sm danger" :disabled="batchDelBusy" @click="batchDelOpen = true">批量删除</button>
@@ -1846,7 +1856,7 @@ onUnmounted(() => {
 
           <!-- 容器形态的可行路径：OAuth/本机扫描/文件选择都被服务端禁用，先把话说清楚 -->
           <div v-if="containerForm" class="add-msg">
-            容器形态推荐：设置 → 号池同步（WebDAV/S3）；也可粘贴含 token/refreshToken 的凭据 JSON，或调用管理 API <code>/api/accounts/import</code>。桌面端「导出选中账号」只有元数据、不含凭据，不能直接灌号。
+            容器形态推荐：设置 → 号池同步（WebDAV/S3）；也可粘贴含 token/refreshToken 的凭据 JSON，或调用管理 API <code>/api/accounts/import</code>。桌面端号池「导出」按钮的产物已含明文凭据（<code>format=agenthub-credentials</code>），可以直接拿来灌号。
           </div>
 
           <!-- 方式内容：各面板共用固定高度，切换时弹窗不跳高度 -->
@@ -2040,6 +2050,24 @@ onUnmounted(() => {
           <div class="p-actions">
             <button class="btn" @click="delOpen = false">取消</button>
             <button class="btn btn-primary danger-solid" @click="doDelete">删除</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 导出凭据确认（明文凭据落盘不可撤回，先让用户过目） -->
+      <div v-if="exportOpen" class="p-mask" @click.self="exportOpen = false">
+        <div class="p-dlg glass">
+          <div class="p-title">导出账号凭据</div>
+          <div class="set-desc">
+            将把选中的 {{ selectedCount }} 个账号导出为一个 JSON 文件，其中
+            <b>token / refreshToken 是明文</b>，可直接粘贴到其他软件使用。<br />
+            文件一旦落盘就无法撤回，请勿放进网盘、聊天记录或代码仓库等会被他人看到的地方。
+          </div>
+          <div class="p-actions">
+            <button class="btn" @click="exportOpen = false">取消</button>
+            <button class="btn btn-primary" :disabled="exportBusy" @click="doExport">
+              {{ exportBusy ? "导出中…" : "导出明文凭据" }}
+            </button>
           </div>
         </div>
       </div>

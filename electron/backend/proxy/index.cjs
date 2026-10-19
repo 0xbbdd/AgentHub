@@ -150,8 +150,9 @@ function parseAccountsJson(text, fallbackChannel) {
 
 // 桌面元数据包 vs 凭据包：报错必须说清「文件本来就没有 token」，否则用户会反复换文件格式。
 const METADATA_ONLY_MESSAGE =
-  "这是桌面端导出的账号元数据（不含 token），不能用于灌号。请改用：① 号池同步（推荐）；" +
-  "② 粘贴含 token/refreshToken 的凭据 JSON；③ 管理 API POST /api/accounts/import";
+  "这是旧版桌面端导出的账号元数据（不含 token），不能用于灌号。请改用：① 号池同步（推荐）；" +
+  "② 粘贴含 token/refreshToken 的凭据 JSON（新版桌面端号池「导出」按钮的产物已含明文凭据）；" +
+  "③ 管理 API POST /api/accounts/import";
 
 /** 批量入池：同渠道同 uid 已存在则跳过；入池即后台查一次额度 */
 function importAccounts(list) {
@@ -214,12 +215,27 @@ async function checkinBatch({ channel, accountId, action, interactive }) {
         continue;
       }
       const useAct = act === "checkin" && acc.channel === "workbuddy_ai" ? "trial" : act;
-      const secrets = store.accountSecrets(store.getAccount(acc.id));
+      let secrets = store.accountSecrets(store.getAccount(acc.id));
       try {
+        // 凭证保鲜：手上 token 已过期/临期时先刷一次（与余额链路 ensureFreshSecrets 同一口径）。
+        // 缺这一步时，noPersist 渠道（AutoClaw 的新凭证只进适配器进程缓存、不落库）在进程
+        // 重启后会拿着库内旧 token 直接吃 401——表现为「签到报登录态已过期，对话却正常」
+        const tokenBefore = secrets.token;
+        if (useAct !== "status") secrets = await credits.ensureFreshSecrets(acc, secrets);
         let r;
         if (useAct === "status") r = await ad.checkinStatus(acc, secrets);
         else if (useAct === "checkin") {
           r = await ad.checkin(acc, secrets);
+          // 预刷新没赶上（或 refreshToken 刚被上游轮换）：刷新后重试一次，
+          // 与对话链路 attemptChat 的 401 处理同款（single-flight，不重复刷）。
+          // 预刷新已经换过 token 时不再刷第二次——那会白消耗一次 refresh_token 轮换
+          if (r && r.authError && secrets.token === tokenBefore) {
+            const rr = await adapters.refreshTokenLocked(acc.channel, acc, secrets).catch(() => ({ ok: false }));
+            if (rr.ok) {
+              secrets = { ...secrets, token: rr.token, refreshToken: rr.refreshToken };
+              r = await ad.checkin(acc, secrets);
+            }
+          }
           // zcode 领取奖励的人机校验二段流：上游启用验证码时适配器返回 needCaptcha，
           // 手动发起的领取弹官方 SDK 验证窗拿 verifyParam 重调一次；无人值守的自动 tick
           // 不弹窗，该行如实标「需人工过码」，UI 提示用户手动领取
@@ -871,6 +887,49 @@ function register(ipcMain) {
     }
     if (removed) oplog.log("info", "号池账号", `批量删除 ${removed} 个账号（选择 ${list.length} 个${missing ? `，${missing} 个已不存在` : ""}）`, {});
     return ok({ removed, missing });
+  }));
+  // 明文导出选中账号（号池多选 →「导出凭据」）：与元数据导出（format=agenthub-accounts，
+  // 故意不含 token）语义不同——这里带**解密后的明文凭据**，供用户在其它软件里直接使用。
+  // 落盘由渲染层用 Blob 触发下载（与旧导出同一条链路），主进程只做解密与组装。
+  ipcMain.handle("proxy_account_export_plain", handle(({ ids }) => {
+    const list = Array.isArray(ids) ? ids.map(String).filter(Boolean) : [];
+    if (!list.length) return fail("未选择账号");
+    const views = new Map(store.listAccounts().map((v) => [v.id, v]));
+    const accounts = [];
+    const missing = [];
+    for (const id of list) {
+      const view = views.get(id);
+      const row = view ? store.getAccount(id) : null;
+      if (!view || !row) { missing.push(id); continue; }
+      const secrets = store.accountSecrets(row);
+      accounts.push({
+        // 字段名与「粘贴 JSON 导入」的容忍表对齐：导出的文件可以直接再灌回号池
+        channel: view.channel,
+        uid: view.uid || "",
+        name: view.name || "",
+        note: view.note || "",
+        token: secrets.token || "",
+        refreshToken: secrets.refreshToken || "",
+        // access token 的 JWT 到期（ms，解不出为 0）：外部软件据此判断还能不能用
+        tokenExp: Number(util.jwtDecode(secrets.token).exp || 0) * 1000,
+        expiresAt: view.expiresAt || 0,
+        credits: view.credits || 0,
+        status: view.status,
+        source: view.source || "",
+        createdAt: view.createdAt || 0,
+        updatedAt: view.updatedAt || 0,
+        // 切号快照等敏感元数据在这里一并解为明文：zcode 的 sw 是 DPAPI 密文，
+        // 带着密文导出到别的机器/软件等于没带（与同步快照共用同一份明文实现）
+        meta: poolsync.prepareMetaForExport(secrets.meta, view.channel),
+      });
+    }
+    if (!accounts.length) return fail("选中账号都已不存在");
+    // 只记条数与账号名，不记凭据本身（oplog 落库前另有一道脱敏，这里不依赖它）
+    oplog.log("warn", "号池账号", `导出 ${accounts.length} 个账号的明文凭据（供外部软件使用）`, {
+      channel: accounts[0].channel,
+      detail: accounts.map((a) => a.name || a.uid).join(", ").slice(0, 200),
+    });
+    return ok({ accounts, missing, exportedAt: Date.now() });
   }));
   ipcMain.handle("proxy_account_toggle", handle(({ id, enabled }) => {
     const acc = store.getAccount(id);
