@@ -346,6 +346,9 @@ function parseRateResetMs(text) {
   return Number.isFinite(t) && t > Date.now() ? t : 0;
 }
 
+/** 「输入过大」判定：实现与词表在 util.cjs（唯一一份），server 与各适配器共用。 */
+const isInputTooLargeMsg = util.isInputTooLargeMsg;
+
 /** 错误分类（对齐参考项目 handler.applyErrorPolicy 全表 + 参考项目 SOLO 专项）：
  *  决定冷却档位与是否换号。6004 = 模型级限流（罚账号×模型，切模型豁免）；
  *  11102 = 该账号不支持此模型（6h 指数负缓存）；4008 = 模型/账号级限流；4001 = 模型配置问题
@@ -374,6 +377,14 @@ function classifyUpstream(e, planLimit, channel) {
     return { kind: "model_rate", switchable: true, status: 429, resetMs: parseRateResetMs(msg) };
   }
   if (/\b11102\b/.test(msg) || /service info not found/i.test(msg)) return { kind: "model_blocked", switchable: true, status: 404 };
+  // 输入过大（413 / 上游的「too long」族文案）：同一份 body 换任何账号都同错，
+  // 归 prompt_too_long 走零动作透传，绝不能冷却账号——否则一次超大 prompt 会把整条池逐个罚掉。
+  // 词表对齐参考项目 trae/errors.rs 的 INPUT_TOO_LARGE_MARKERS（大小写不敏感、中文原样匹配），
+  // 那里同时钉住了「413 排在最前」的顺序理由：body 恰好带 "1005…plan" 时不能被 plan 匹配劫持成硬冷却。
+  // 顺序：11115 与 402/429 等已有判定在前（它们更具体），本条只兜「其它 4xx 的过大文案」。
+  if (code === 413 || (e && e.status === 413) || isInputTooLargeMsg(msg)) {
+    return { kind: "prompt_too_long", switchable: false, status: 413 };
+  }
   if (/\b11115\b/.test(msg) || /prompt is too long|prompt_too_long/i.test(msg)) {
     return { kind: "prompt_too_long", switchable: false, status: 400 }; // 请求本身超限：零动作透传
   }

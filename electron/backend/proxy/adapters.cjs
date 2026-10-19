@@ -479,7 +479,21 @@ const trae = {
       for (const it of list) {
         const id = it && (it.config_name || it.configName);
         if (typeof id !== "string" || !id) continue;
-        const name = (it.display_config && (it.display_config.display_name || it.display_config.name)) || id;
+        // 目录里混着三类「不是模型」的条目（参考项目 models.rs 对 38 条实测目录校准）：
+        //   ① is_invisible_to_user = true  → 内部 subagent / 实验通道
+        //      （browser_use_subagent / file_search_agent / sagitta / aquila …）
+        //   ② display_config.display_name 为空 → 租户自定义模型的**占位模板**
+        //      （custom_model_* / summary …），能出现在表里但不可选
+        //   ③ config_switch = false → 已下线开关
+        // 三者的判据一律「缺省 = 可见」（字段缺失/非 false 都放行）：上游删字段时若把整张表
+        // 滤空，用户看到的是「上游没模型了」，而真相是本机判空判错了——这是最坏的失效方式。
+        // 只做布尔严格判定（=== true / === false），不做真值转换，避免 "false" 字符串误杀。
+        if (it.is_invisible_to_user === true || it.isInvisibleToUser === true) continue;
+        const disp = it.display_config || {};
+        const dispName = disp.display_name ?? disp.displayName ?? disp.name ?? "";
+        if (!String(dispName).trim()) continue;
+        if (it.config_switch === false || it.configSwitch === false) continue;
+        const name = dispName;
         if (!models.some((m) => m.id === id)) {
           // 上限取自官方目录条目，字段结构实证自 2026-10-03 抓取的原始响应（详见 traeLimits 注释）。
           // 取不到写 0（=未知，与 workbuddy 系列静态兜底一致）。**原先无条件写 131072 是凭空捏造**：
@@ -703,12 +717,24 @@ const trae = {
         } else if (ev === "done" || ev === "turn_completion") {
           emit({ type: "finish", reason: data.finish_reason || data.finishReason || "stop" });
         } else if (ev === "error") {
-          // code:1005 = 积分不足 PlanLimit；4008 = 限流；4001 = 模型配置问题（不罚号，交由分类器处理）
+          // code:1005 = 积分不足 PlanLimit；4008 = 限流；4001 = 模型在当前 function 通道不可用（不罚号）
           sawError = true;
           const code = Number(data.code) || 0;
           if (code === 1005) result.planLimit = true;
-          const status = code === 1005 ? 402 : code === 4008 ? 429 : 502;
-          emit({ type: "error", status, code, message: data.message || data.msg || `上游错误 ${code}` });
+          // 状态映射对齐参考项目 trae/forward.rs 的实测表 [4008→429, 4001→404, 20101→502]：
+          // 4001 是「模型在 solo_work_lite 通道不存在」，不是服务端故障——报 502 会让客户端
+          // 以为上游挂了并触发无意义重试；报 404 才符合语义（该模型在此渠道不存在），
+          // 且与通用分类器的 not_found 短冷却/终态口径一致。20101 等其余业务码仍按 502。
+          // 输入过大（prompt is too long 族）优先于 code：参考项目 errors.rs 明写「4001 配
+          // 'prompt is too long' 仍归过大」，那是请求问题而不是通道问题，故排在最前（1005 除外，
+          // 它是额度耗尽、语义与请求长度无关）。判错会顺着换号链个罚整池账号。
+          const msgText = String(data.message || data.msg || "");
+          const status = code === 1005 ? 402
+            : util.isInputTooLargeMsg(msgText) ? 413
+            : code === 4008 ? 429
+            : code === 4001 ? 404
+            : 502;
+          emit({ type: "error", status, code, message: msgText || `上游错误 ${code}` });
         }
         // metadata / timing_cost / extra_info 忽略
       });

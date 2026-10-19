@@ -313,6 +313,34 @@ function hasConsumableDelta(d) {
     || hasLegacyFn; // legacy 兼容通道的真实调用仍算出线，防流中换号重发拼接
 }
 
+/** 「输入过大」的文案词表（大小写不敏感；中文原样匹配）。
+ *  来源：参考项目 trae/errors.rs 的 INPUT_TOO_LARGE_MARKERS（12 条，逐字对应）。
+ *  这条判定的意义不是文案好看，而是**别冷却健康账号**：同一份超大 body 换任何账号都会被
+ *  上游拒，把它算成账号错误会顺着换号链把整池账号逐个罚掉（Trae 流内 4001 配
+ *  "prompt is too long" 就是这种形态：码写着模型不可用、真实原因是输入超限）。
+ *  ⚠ 词表只许加实测出现过的串：宽泛词（如单独的 "length"）会把参数错误一起吞进来。 */
+const INPUT_TOO_LARGE_MARKERS = [
+  "too long",
+  "too many tokens",
+  "context length",
+  "maximum context",
+  "context window",
+  "request entity too large",
+  "input too large",
+  "输入过长",
+  "内容过长",
+  "上下文过长",
+  "上下文长度",
+  "超出模型上限",
+];
+
+/** 文案是否属于「输入过大」族（唯一实现：server 分类器与各适配器的流内错误都用它） */
+function isInputTooLargeMsg(message) {
+  const lower = String(message || "").toLowerCase();
+  if (!lower) return false;
+  return INPUT_TOO_LARGE_MARKERS.some((m) => lower.includes(m.toLowerCase()));
+}
+
 /** OpenAI 流式 chunk 组装 */
 function chunk(reqId, model, delta, finishReason, usage) {
   const c = {
@@ -490,5 +518,6 @@ module.exports = {
   isCompleteJson, parseRetryAfterHeaders, stableConvId, promptCacheKey,
   isDeepSeekModel, injectThinking, normalizeReasoningEffort, backfillReasoningContent, EFFORT_RANK, EFFORT_LEVELS,
   SseScanner, stripEmptyDelta, hasConsumableDelta, chunk, DONE, Aggregator, openaiError, validateChatBody, normalizeRoles, estimateTokens,
+  isInputTooLargeMsg, INPUT_TOO_LARGE_MARKERS,
   byteSafeHeaderValue, byteSafeHeaders,
 };

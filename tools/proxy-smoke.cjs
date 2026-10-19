@@ -531,6 +531,12 @@ async function main() {
           res.end('event: error\ndata: {"code":4001,"message":"model config is empty"}\n\n');
           return;
         }
+        if (url.includes("/toolarge")) {
+          // 流内「输入过大」：码写成 4001（模型不可用），真实原因是 prompt 超限。
+          // 判据必须让「过大」优先于码，否则会被当成通道问题换号重撞、并把账号记成故障。
+          res.end('event: error\ndata: {"code":4001,"message":"prompt is too long: 262144 tokens > 200000 maximum context length"}\n\n');
+          return;
+        }
         if (auth.includes("bad-token")) {
           // 积分不足 PlanLimit（1005）：应触发换号
           res.end('event: error\ndata: {"code":1005,"message":"credits insufficient"}\n\n');
@@ -656,8 +662,20 @@ async function main() {
   rules.reload("headers.json");
   const misCfg = store.addAccount({ channel: "trae", uid: "mis", name: "配置错号", token: "mis-token", source: "paste", expiresAt: Date.now() + 7200000 });
   rr = await call({ model: "deepseek-v4-flash", stream: false, messages: [{ role: "user", content: "hi" }] });
-  assert(rr.status === 502, "4001 按上游错误收尾: " + rr.status);
+  // 状态 404 而非 502：4001 的语义是「该模型在当前 function 通道不可用」（参考项目
+  // trae/forward.rs 的实测映射表 [4008→429, 4001→404, 20101→502] 逐条钉住）。
+  // 报 502 会让客户端以为上游故障并盲目重试同一个必死的模型；404 才让客户端换模型。
+  // 「不罚号」仍然是这条用例的主体：账号不进冷却、status 保持 online。
+  assert(rr.status === 404, "4001 按上游错误收尾（模型在本通道不可用 → 404）: " + rr.status);
   assert(store.getAccount(misCfg).status === "online", "4001 不罚号（账号保持 online）");
+  // 10.4b-2 流内「输入过大」：码是 4001、文案是 too long → 必须归输入过大（413、零动作、
+  // 不换号重撞、不罚号）。同一份超大 body 换任何账号都同错，判错就会顺着换号链把整池逐个罚掉。
+  headersCfg.trae.chatUrl = "http://127.0.0.1:19530/trae/toolarge";
+  fs.writeFileSync(headersPath, JSON.stringify(headersCfg, null, 2));
+  rules.reload("headers.json");
+  rr = await call({ model: "deepseek-v4-flash", stream: false, messages: [{ role: "user", content: "hi" }] });
+  assert(rr.status === 413, "输入过大按 413 收尾: " + rr.status);
+  assert(store.getAccount(misCfg).status === "online", "输入过大不罚号（账号保持 online）");
   // 10.4b 的夹具账号用完即回收：它 creditsAt=0（未知余额）不参与零余额跳过，
   // 留在池里会让 10.5~10.7 的调度断言撞上 pickAccount 的 100ms 防惊群让位，结果随节奏漂移
   store.removeAccount(misCfg);
