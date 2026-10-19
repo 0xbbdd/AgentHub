@@ -13,7 +13,7 @@ AgentHub 是本地运行的中控台（Electron + Vue 3 + TypeScript），自身
 | 板块 | 一句话 | 适合谁 |
 | --- | --- | --- |
 | **技能仓库** | 各工具的 Skill 收进一个中央库，一处维护、一键挂回 | 同时用 Codex / Claude Code / ZCode / Cursor 等多个工具的人 |
-| **用量统计** | 汇总 20 个数据源的 token 用量与费用，按天 / 项目 / 模型看趋势 | 想知道这个月到底烧了多少的人 |
+| **用量统计** | 汇总 21 个数据源的 token 用量与费用，按天 / 项目 / 模型看趋势 | 想知道这个月到底烧了多少的人 |
 | **反代网关** | 把本机已登录的订阅额度包成标准 API，任何客户端都能调 | 手里有订阅额度（Trae / WorkBuddy / 小浣熊 / 魔搭 / ZCode / Qoder / Cline 等 14 个渠道）、想让别的软件也用上的人 |
 | **记忆中枢** | 本地 Markdown 记忆库 + MCP 服务，让 Agent 记住项目和偏好 | 不想每次开新会话都重新交代背景的人 |
 
@@ -126,11 +126,11 @@ curl -s http://127.0.0.1:9528/api/readyz    # 503 = 池里还没账号，正常
 
 ### 它解决什么问题
 
-用量散在各家工具自己的本地库里，没人告诉你这个月一共花了多少。用量统计直接读**本机客户端的数据文件**，把 20 个数据源归一到同一套口径，做汇总、趋势、费用和跨设备对比。
+用量散在各家工具自己的本地库里，没人告诉你这个月一共花了多少。用量统计直接读**本机客户端的数据文件**，把 21 个数据源归一到同一套口径，做汇总、趋势、费用和跨设备对比。
 
-### 支持的数据源（20 个）
+### 支持的数据源（21 个）
 
-ZCode、商汤小浣熊、Xiaomi MiMo、Codex、DeepSeek Harness、WorkBuddy、WorkBuddy AI、Reasonix、CodeBuddy、Qoder、Qoder CN、Antigravity、Antigravity IDE、Antigravity 老数据恢复、Trae、Trae CN、TRAE SOLO、TRAE SOLO CN、OpenSquilla、Grok。
+ZCode、商汤小浣熊、Xiaomi MiMo、Codex、DeepSeek Harness、WorkBuddy、WorkBuddy AI、Reasonix、CodeBuddy、Qoder、Qoder CN、Antigravity、Antigravity IDE、Antigravity 老数据恢复、Trae、Trae CN、TRAE SOLO、TRAE SOLO CN、OpenSquilla、Grok、AutoClaw。
 
 在「配置 · 用量统计」里可以逐个开关、指定自定义数据目录——没装过的源自动跳过，不会报错。
 
