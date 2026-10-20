@@ -110,7 +110,7 @@ export const useMemoryStore = defineStore("memory", {
         this.root = env.root || "";
         this.loaded = true;
         this.loadError = "";
-        // 页签显隐白名单：app 侧据此过滤横条；配置里没这个键的（含后端还没加 ui.tabs 时）按默认 5 个渲染
+        // 页签显隐白名单：app 侧据此过滤横条；配置里没这个键的（含后端还没加 ui.tabs 时）按默认 8 个渲染
         try {
           const app = useAppStore();
           const tabs = (this.config?.ui?.tabs as unknown) || [];

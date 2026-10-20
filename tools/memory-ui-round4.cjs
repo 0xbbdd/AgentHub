@@ -92,7 +92,7 @@ async function main() {
       return true;
     }, label);
 
-  /** 把 9 个页签全部勾回（配置页 → 界面 → 显示的页签 → 保存 → 完成）：一次性覆盖所有页面，含默认隐藏的四页 */
+  /** 把 9 个页签全部勾回（配置页 → 界面 → 显示的页签 → 保存 → 完成）：一次性覆盖所有页面，含默认隐藏的「检索与索引」 */
   async function setAllTabs() {
     await page(() => {
       const btn = [...document.querySelectorAll(".tabs button.tab-config")].find((b) => !b.textContent.includes("完成"));

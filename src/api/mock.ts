@@ -544,7 +544,7 @@ const MOCK_CFG: Record<string, unknown> = {
   import: { dryRunFirst: true, batchSize: 200, maxBatchBytes: 8388608, sensitiveSkip: true, md: { observationMarkers: true, extractTags: true }, sources: [] },
   privacy: { redact: false, pause: false, localOnlyProjects: [] },
   sync: { enabled: true, auto: true, intervalMin: 60, packSizeLimitMB: 50, excludeIndex: true },
-  ui: { pageSize: 50, defaultTab: "dashboard", tabs: ["dashboard", "browse", "projects", "auto", "sync"], realtimeRefresh: true },
+  ui: { pageSize: 50, defaultTab: "dashboard", tabs: ["dashboard", "browse", "projects", "profile", "agents", "auto", "import", "sync"], realtimeRefresh: true },
 };
 
 /** 点路径写进 mock 配置树（中间层级缺失就补对象）：与前端 save(entries) 的点路径口径一致 */
@@ -750,7 +750,7 @@ export const mock = {
             "sync.excludeIndex": { type: "boolean", def: true, label: "索引库不入同步包", group: "同步", hot: true },
             "ui.pageSize": { type: "number", def: 50, min: 10, max: 500, label: "列表每页条数", group: "界面", hot: true },
             "ui.defaultTab": { type: "enum", def: "dashboard", options: ["dashboard", "browse", "projects", "profile", "agents", "index", "auto", "import", "sync"], label: "默认页签", group: "界面", hot: true },
-            "ui.tabs": { type: "multiselect", options: ["dashboard", "browse", "projects", "profile", "agents", "index", "auto", "import", "sync"], def: ["dashboard", "browse", "projects", "auto", "sync"], label: "显示的页签", group: "界面", hot: true },
+            "ui.tabs": { type: "multiselect", options: ["dashboard", "browse", "projects", "profile", "agents", "index", "auto", "import", "sync"], def: ["dashboard", "browse", "projects", "profile", "agents", "auto", "import", "sync"], label: "显示的页签", group: "界面", hot: true },
             "ui.realtimeRefresh": { type: "boolean", def: true, label: "浏览页实时刷新", group: "界面", hot: true },
           },
           root: "C:\\Users\\demo\\AgentHub\\memory",
