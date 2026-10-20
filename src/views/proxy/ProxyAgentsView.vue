@@ -637,10 +637,18 @@ async function saveAutoCheckin() {
 // ===== ZCode 独立人机校验（过码）=====
 const solvingCaptchaId = ref<string>("");
 
+/** 最近错误是否仍然“有效”：账号在上次报错后有过成功调用（lastUsed 更新），
+ *  说明那是一条历史错误，不应再标红/弹窗误导——6004 模型级冷却结束后最容易撞见
+ *  “客户端已恢复、号池卡片还挂着旧 429”的观感。 */
+function hasFreshError(acc?: ProxyAccount | null): boolean {
+  if (!acc || !acc.lastError) return false;
+  return !acc.lastUsed || acc.lastError.at >= acc.lastUsed;
+}
+
 /** 判断该账号当前是否因 3007/人机校验而报错或需过码 */
 function isNeedCaptcha(acc?: ProxyAccount | null): boolean {
   if (!acc) return false;
-  const msg = String(acc.lastError?.message || acc.coolReason || "");
+  const msg = String((hasFreshError(acc) ? acc.lastError?.message : "") || acc.coolReason || "");
   return acc.channel === "zcode" && (/人机校验|验证码|3007|captcha|verify/i.test(msg));
 }
 
@@ -1670,11 +1678,11 @@ onUnmounted(() => {
                   </td>
                   <td>
                     <!-- 状态标签：使用 pill 样式 -->
-                    <el-tooltip :content="acc.lastError ? '点击查看最近一次上游错误' : ''" :disabled="!acc.lastError" placement="top">
+                    <el-tooltip :content="hasFreshError(acc) ? '点击查看最近一次上游错误' : ''" :disabled="!hasFreshError(acc)" placement="top">
                       <span
                         class="pill status-tag"
-                        :class="[isNeedCaptcha(acc) ? 'warn' : acc.status === 'online' ? 'ok' : acc.status === 'cooling' ? 'warn' : acc.status === 'disabled' ? 'blue' : 'err', { 'has-err': !!acc.lastError }]"
-                        @click="acc.lastError && (errRow = acc)"
+                        :class="[isNeedCaptcha(acc) ? 'warn' : acc.status === 'online' ? 'ok' : acc.status === 'cooling' ? 'warn' : acc.status === 'disabled' ? 'blue' : 'err', { 'has-err': hasFreshError(acc) }]"
+                        @click="hasFreshError(acc) && (errRow = acc)"
                       >
                         {{ isNeedCaptcha(acc) ? "需过码" : (ACCOUNT_STATUS[acc.status]?.text || acc.status) }}
                       </span>

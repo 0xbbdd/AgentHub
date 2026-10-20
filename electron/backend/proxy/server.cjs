@@ -336,13 +336,19 @@ async function attemptChat(channel, acc, model, body, emit, meta) {
   }
 }
 
-/** 从错误文本解析上游明示的限流重置时间（参考项目实证：「将在 2026-09-17 04:00 重置」）。
- *  对齐墙钟冷却比固定 60s 盲猜准确——重置前换哪个号打这个模型都是白费。
- *  文案固定按 UTC+8 解释（参考项目 ParseRateReset 口径，与本机时区无关） */
+/** 从错误文本解析上游明示的限流重置时间。
+ *  WB 的 6004 文案有两种语言：中文「将在 2026-09-17 04:00 重置」与英文
+ *  「your usage will reset at 2026-10-20 10:09:49 UTC+8」。旧实现只认中文
+ *  「将在…重置」整句，英文（以及时间后带 UTC+8 的文案）都解析不到，
+ *  6004 只能落 10 分钟兜底：真实重置还早时每 10 分钟重试一次，看起来像
+ *  额度永久用完；真实重置只剩几分钟时又比上游多关一段。
+ *  这里改成只认「日期时间」本身，语言/句式变化不再影响解析；上游时间
+ *  统一按 UTC+8 解释（参考项目 ParseRateReset 口径，与本机时区无关）。 */
 function parseRateResetMs(text) {
-  const m = /将在\s*([0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2}[ T][0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?)\s*重置/.exec(String(text || ""));
+  const m = /([0-9]{4})[-/]([0-9]{1,2})[-/]([0-9]{1,2})[ T]([0-9]{1,2}):([0-9]{2})(?::([0-9]{2}))?/.exec(String(text || ""));
   if (!m) return 0;
-  const t = Date.parse(m[1].replace(/\//g, "-").replace(" ", "T") + "+08:00");
+  const p2 = (n) => String(n).padStart(2, "0");
+  const t = Date.parse(`${m[1]}-${p2(m[2])}-${p2(m[3])}T${p2(m[4])}:${m[5]}:${m[6] || "00"}+08:00`);
   return Number.isFinite(t) && t > Date.now() ? t : 0;
 }
 
@@ -374,7 +380,12 @@ function classifyUpstream(e, planLimit, channel) {
   // 6004 模型级限流：code 字段与消息文本双通道判定——WB 流内 6004 的文案
   // （「您的使用量已超出频率限制，将在 XXX 重置」）不含数字码，只测文本会漏
   if (code === 6004 || /\b6004\b/.test(msg)) {
-    return { kind: "model_rate", switchable: true, status: 429, resetMs: parseRateResetMs(msg) };
+    // 重置时间优先取正文（英文 reset at / 中文「…重置」都能解析）；
+    // 正文没给时再用上游的 Retry-After 头族——WB 的 6004 有时只在头里带等待时长
+    return {
+      kind: "model_rate", switchable: true, status: 429,
+      resetMs: parseRateResetMs(msg) || (e.retryAfterMs ? Date.now() + e.retryAfterMs : 0),
+    };
   }
   if (/\b11102\b/.test(msg) || /service info not found/i.test(msg)) return { kind: "model_blocked", switchable: true, status: 404 };
   // 输入过大（413 / 上游的「too long」族文案）：同一份 body 换任何账号都同错，
@@ -538,6 +549,9 @@ function applyCool(accId, model, cls, message) {
     cls.kind === "bad_params" ||
     cls.kind === "prompt_too_long" ||
     cls.kind === "slow" ||
+    // model_rate（6004）只罚「账号×模型」：错误原因已随模型级冷却一起落库（号池悬浮明细可查），
+    // 再写账号 lastError 会让冷却/重置结束后卡片仍挂着旧 429，被读成「额度一直没恢复」
+    cls.kind === "model_rate" ||
     (cls.kind === "model_denied" && !cls.channelLevel);
   if (!silent && message) {
     store.noteError(accId, message);
@@ -1237,6 +1251,11 @@ async function handleChat(req, res, settings, surface, convNotes) {
     // 不点明的话会被读成「用这个渠道发过请求」。判定用 upstreamTries 而不是轨迹里的账号名：
     // fatal（上游 400 透传）那条路径刻意不往轨迹里 push，用轨迹会误报「没发过请求」
     if (!allConcBlocked && !upstreamTries) msg = `未发起任何上游请求（候选渠道号池为空或降级中）：${msg}`;
+    // 6004 原话是「usage exceeds frequency limit」，账号积分其实还在；用户很容易读成
+    // 「额度用完」去充值。补一句本机口径（不替代上游 reset 时间，只解释错误性质）
+    if (/\b6004\b/.test(msg) && !msg.includes("6004 =")) {
+      msg += "（6004 = 账号×模型的频率上限，不是积分耗尽；可按上游给的时间等待，或改用其它模型）";
+    }
     // AgentHub 请求 id 前缀：用户报障时直接引用它，就能在明细里定位到同一行（issue #78）。
     // 同时把上游的 code / request_id 落进记账（客户端消息会截断，长标识常被切掉）
     msg = `[ah:${String(reqId).slice(0, 8)}] ${msg}`;

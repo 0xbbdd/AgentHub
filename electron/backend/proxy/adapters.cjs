@@ -1397,13 +1397,15 @@ function makeWorkBuddy(channelId) {
     },
 
     /** 对话主流程：WB 上游已近似 OpenAI 形态，透传归一（方案 §6.3 SSE 转换 WB）。
-     *  国际版优先走 /console/chat/completions（官方国际客户端现行路径），404/405 回退 /v2（参考项目实证）。
+     *  国际版优先走 /v2/chat/completions：本机 5.8.4 官方桌面客户端的对话请求逐条实证
+     *  都打这个路径；/console 是网页控制台路径，保留为 404/405 兜底。原先 console 优先
+     *  与客户端真实请求面不一致，且两条入口的免费模型限频不保证同口径（6004 误报诱因之一）。
      *  meta = 轮内会话元数据（server 在换号循环外生成一次，重试/换号复用同值） */
     async chat({ account, secrets, model, body, emit, meta }) {
       const c = this.cfg();
       const payload = JSON.stringify(this.rewriteBody(model, body, account));
       const headers = { ...this.headers(account, secrets), ...wbConversationHeaders(body, meta) };
-      const urls = [c.consoleChatUrl, c.chatUrl].filter(Boolean);
+      const urls = [c.chatUrl, c.consoleChatUrl].filter(Boolean);
       let resp = null;
       let cancelTimer = () => {};
       let lastErr = null;
@@ -1441,7 +1443,11 @@ function makeWorkBuddy(channelId) {
           if (data.error) {
             const codeNum = Number(data.error.code) || 0;
             const msgStr = String(data.error.message || "");
-            const status = codeNum === 402 || /insufficient|credit|quota|balance/i.test(msgStr) ? 402 : codeNum === 4008 ? 429 : 502;
+            // 6004 是模型级限频（HTTP 429 语义），文案里没有 credit/quota 字样——
+            // 旧映射会把它归 502，客户端按服务故障重试；这里显式归 429
+            const status = codeNum === 402 || /insufficient|credit|quota|balance/i.test(msgStr) ? 402
+              : codeNum === 4008 || codeNum === 6004 ? 429
+              : 502;
             if (status === 402) result.planLimit = true;
             emit({ type: "error", status, code: codeNum, message: msgStr || "insufficient credits" });
             return;
@@ -1677,10 +1683,12 @@ function makeWorkBuddy(channelId) {
 
     /** ② 桌面端保活：用免费模型发一次最小流式对话。
      *  模型链取参考项目实测「不消耗积分」的免费模型，逐个尝试、第一个拿到 2xx 收口。
+     *  deepseek-v4.1-flash 放在最后：它是用户真实对话最常用的免费模型、免费窗口最先被打满，
+     *  保活没必要跟真实流量抢同一个账号×模型额度（hy3/hy4 同样免费，失败会自动往下试）。
      *  必须**读**响应体（不读的请求上游可能不计活跃），但只需读满首个上限即可——SSE 没必要读完。 */
     async pokeActivity(account, secrets) {
       const c = this.cfg();
-      const FREE_MODELS = ["deepseek-v4.1-flash", "hy3", "hy4-preview", "hy4-preview-f"];
+      const FREE_MODELS = ["hy3", "hy4-preview", "hy4-preview-f", "deepseek-v4.1-flash"];
       const models = [...new Set([...(c.keepaliveModels || []), ...FREE_MODELS])];
       let lastMsg = "";
       for (const model of models) {
