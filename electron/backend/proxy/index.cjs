@@ -1,6 +1,6 @@
 // 反代网关 · 编排层：模块装配 + IPC 命令注册（对应前端 src/views/proxy/* 与 src/api/ipc.ts）
 // 设置统一存框架整体配置 config.json 的 proxy 段（config.cjs 默认值深合并），每次读取走磁盘 = 热生效；
-// 端口属例外：改端口由 proxy_restart 同进程 stop→listen 秒级完成（方案 §6.6 第②层）
+// 端口属例外：改端口由 proxy_restart 同进程 stop→listen 秒级完成（第②层）
 "use strict";
 const fs = require("node:fs");
 const path = require("node:path");
@@ -51,7 +51,7 @@ function looseJson(value) {
 
 /**
  * zcode 快照形态识别（三种来源同构归一）：
- *   ① zcode-account-switcher 导出：{meta:{label,email}, snapshot:{credentials, config}}
+ *   ① 账号切换工具导出：{meta:{label,email}, snapshot:{credentials, config}}
  *   ② 官方/手工裸快照：{credentials, config}（credentials 可为对象或 JSON 字符串）
  *   ③ 官方档案导出：{provider_api_keys, cred_file?…} 带 credentials 键的变体
  * 守卫：credentials JSON 必须含 zcode 特征键（zcodejwttoken / oauth:* / account-provider:*），
@@ -183,7 +183,7 @@ function channelOn(channel) {
 
 let booted = false;
 
-// ===== 签到（Trae ug 签到 / WB 双区 daily-checkin / WB AI trial 加油包，参考项目实证端点） =====
+// ===== 签到（Trae ug 签到 / WB 双区 daily-checkin / WB AI trial 加油包，实测端点） =====
 /** 批量签到动作：channel 为空 = 全渠道；accountId 指定 = 单账号（OAuth 登录后自动签到用）。
  *  国际版没有每日签到体系，checkin 动作对它自动改走 trial 加油包（与号池页按钮行为一致） */
 let checkinBusy = false;
@@ -252,7 +252,7 @@ async function checkinBatch({ channel, accountId, action, interactive }) {
             }
           }
         } else r = typeof ad.trial === "function" ? await ad.trial(acc, secrets) : { ok: false, message: "该渠道没有加油包" };
-        // 国际版每日活跃（保活三件事）：参考项目 issue #277 的实测结论——国际版没有签到体系，
+        // 国际版每日活跃（保活三件事）：issue #277 的实测结论——国际版没有签到体系，
         // 每日奖励的判定挂在①活跃上报 ②免费模型对话 ③网页会话 三条通道上，缺一条就领不到。
         // 放在 trial 之后：领完加油包顺手把「今日活跃」做掉，用户点一次就完整跑一遍。
         // 纯 best-effort：失败只拼进 message，绝不把 trial 的 ok 翻成失败（活动开关在上游手里，
@@ -766,7 +766,7 @@ function register(ipcMain) {
     events.emit({ type: "status" });
     return ok({});
   }));
-  // 改端口后调用：同进程 stop→listen，秒级完成（方案 §6.6）
+  // 改端口后调用：同进程 stop→listen，秒级完成
   ipcMain.handle("proxy_restart", handle(async () => {
     await server.stopAsync();
     const r = await server.start(settings);
@@ -844,7 +844,7 @@ function register(ipcMain) {
     oplog.log("info", "网关配置", `${store.channelDisplay(channel)} 成本档位改为 ${tier || "未标注"}`, { channel });
     return ok({});
   }));
-  // 手动粘贴（方案 §2.4 三途径之一）；token 仅本地加密存储
+  // 手动粘贴（三途径之一）；token 仅本地加密存储
   ipcMain.handle("proxy_account_add", handle(({ channel, name, token, refreshToken, uid }) => {
     if (!adapters.get(channel)) return fail("未知渠道");
     if (!String(token || "").trim()) return fail("请粘贴 token / JWT");
@@ -880,7 +880,7 @@ function register(ipcMain) {
     // 先写墓碑再删本机：删除要经 WebDAV 传播到其他设备（号池同步拉取时按墓碑移除）
     poolsync.noteRemoved(poolsync.accountKeyOf(acc));
     if (!store.removeAccount(id)) return fail("账号不存在");
-    // CatPaw 会话注册表挂点（对齐参照实现 W5 接线要求）：账号删除后其会话记录残留
+    // CatPaw 会话注册表挂点（对齐 W5 接线要求）：账号删除后其会话记录残留
     // （2h TTL），工具续接窗口内其他账号的请求可把 tool 结果提交到已消失账号的 conversation
     try { require("./catpaw/registry.cjs").registry.clearAccount(id); } catch { /* 无会话不影响删除 */ }
     oplog.log("info", "号池账号", `移除 ${store.channelDisplay(acc.channel)} 账号「${acc.name}」`, { channel: acc.channel, target: acc.name });
@@ -992,7 +992,7 @@ function register(ipcMain) {
     return credits.refreshChannel(String(channel));
   }));
 
-    // ===== 签到（Trae ug 签到 / WB 双区 daily-checkin / WB AI trial 加油包 / ZCode 领取奖励，参考项目实证端点） =====
+    // ===== 签到（Trae ug 签到 / WB 双区 daily-checkin / WB AI trial 加油包 / ZCode 领取奖励，实测端点） =====
   // 批量签到动作见模块级 checkinBatch（手动 IPC 与定时自动签到共用）；
   // 手动发起 interactive=true——zcode 领取需要人机校验时允许弹官方 SDK 验证窗
   ipcMain.handle("proxy_checkin_status", handle(({ channel, accountId }) => checkinBatch({ channel, accountId, action: "status" })));
@@ -1042,7 +1042,7 @@ function register(ipcMain) {
     const r = await discovery.beginOAuth(ch, (result) => {
       if (result.ok) {
         credits.refreshAccount(result.id).catch(() => {});
-        // 登录后自动签到一次（参考项目 login.sh / signin 同款：自动签到 + 查积分）
+        // 登录后自动签到一次（自动签到 + 查积分）
         checkinBatch({ accountId: result.id, action: "checkin" }).catch(() => {});
       }
       oplog.log(result.ok ? "info" : "error", "OAuth 登录", result.ok ? `${store.channelDisplay(ch)} 授权登录成功` : result.message || `${store.channelDisplay(ch)} 授权登录失败`, { channel: ch });
@@ -1332,7 +1332,7 @@ function register(ipcMain) {
   }));
 
   // ===== 统计 =====
-  // 区间化总览：一次回 KPI / 序列 / 四维排行 / 各 Key / 状态分布 / Token 构成（方案 §4.2）
+  // 区间化总览：一次回 KPI / 序列 / 四维排行 / 各 Key / 状态分布 / Token 构成
   ipcMain.handle("proxy_stats_overview", handle(({ from, to, granularity }) =>
     store.statsOverview({ from, to, granularity })));
   ipcMain.handle("proxy_stats_top", handle(({ dim, days }) => store.statsTop(dim, days)));

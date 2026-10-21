@@ -379,7 +379,7 @@ async function T(name, fn) {
   // ===== T24 Cookie 双凭据通道（方案 A1 的核心设计） =====
   // 背景（2026-10-06 实测穷尽四条路径确立）：魔搭端点分两族且严格互斥，
   //   「OAuth 可用族」推理 + 魔粒；「仅 Cookie/ms- 可用族」点赞 + 令牌管理。
-  //   且 ms- 令牌能点赞但不触发 daily_active（参考项目实测注释：仅 Web 会话触发日活）
+  //   且 ms- 令牌能点赞但不触发 daily_active（实测注释：仅 Web 会话触发日活）
   //   ⇒ Cookie 是唯一两全的凭据。本组断言锁定这套分层不被后续改动破坏。
   await T("T24 Cookie 通道：星标族用 Cookie、日活靠 webTouch、OAuth 账号无凭据时如实提示", () => {
     const src = fs.readFileSync(path.join(__dirname, "..", "electron", "backend", "proxy", "adapters.cjs"), "utf8");

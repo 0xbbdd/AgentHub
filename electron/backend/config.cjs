@@ -25,7 +25,7 @@ function isPortable() {
 // 凭据信封按前缀分派，加密后端二选一（桌面 safeStorage / headless AES）：
 //   enc:v1: — Electron safeStorage（Windows 下即 DPAPI），OS 用户绑定、原理上不可跨机
 //   enc:v2: — AES-256-GCM，密钥取自 AGENTHUB_SECRET_KEY，桌面与 headless 形态通用
-// 两种前缀并存是刻意的：统一成"可移植信封"只会退化成把密钥一起搬走（等于没有加密）。
+// 两种前缀并存是刻意的：统一成"通用信封"只会退化成把密钥一起搬走（等于没有加密）。
 // 无 safeStorage 且无 key 时保持明文降级（自测环境依赖此行为）；生产形态由网关入口强制 key
 let safeStorage = null;
 try { safeStorage = require("electron").safeStorage; } catch { /* 自测环境无 electron */ }
@@ -252,13 +252,20 @@ function defaultConfig() {
       channelEnabled: {},       // 渠道启闭（「上游启闭」弹窗）：{ [渠道 id]: true|false }，缺省 = 启用。
                                 // 关闭的渠道在反代网关全部页面隐藏，路由/调用/调度也不再使用，重新打开立即恢复
       ccSwitchModel: "",        // 生态接入默认模型（注册进 CC Switch 时使用，缺省取 fallbackModel）
-      // ===== 上游超时旋钮（毫秒；对应 agent2api 四段超时的可配置化，0/缺省 = 用内置默认） =====
+      // ===== 上游超时旋钮（毫秒；对应四段超时的可配置化，0/缺省 = 用内置默认） =====
       firstByteBaseMs: 30000,      // 首字节基础预算（30s，按输入规模追加、封顶 firstByteMaxMs）
       firstByteMaxMs: 180000,      // 首字节预算封顶（超长 prompt 的 prefill 可能上百秒）
       streamIdleMs: 300000,        // 流式相邻数据空闲超时（300s，收到新数据即重置）
       httpJsonTimeoutMs: 60000,    // 非流式 JSON 请求（额度查询 / token 刷新）总超时（60s）
-      retrySameAccountCount: 1,    // 瞬时错误同账号原地重发次数（0~5，参考 agent2api retryCount）
+      retrySameAccountCount: 1,    // 瞬时错误同账号原地重发次数（0~5，对齐 retryCount）
       retrySameAccountIntervalMs: 1000, // 同账号原地重发退避间隔（毫秒，200~10000）
+      rateRetryDelayMs: 1000,      // 无明示重置时间的 429 同号退避基数（毫秒，实际延迟带 ±15% 抖动；
+                                   // 1000~15000。上游窗口更长时调大比「冷却换号」划算）
+      dedupeSameBody: true,        // 同 body 请求去重排队：客户端快速重试时，后来的请求等前一个结束再发
+                                   // （防风控识别为反代：同一账号连发同一份内容是最典型的机器特征；
+                                   // 关掉后并发重试会全部并行打到上游，也更容易把上游拦截窗口续期）
+      dedupeWaitMs: 45000,         // 去重排队等待上限（毫秒，1000~300000）：到点无条件放行，
+                                   // 宁可多一个并发，也不让用户被一个卡住的前序请求挂住
     },
   };
 }

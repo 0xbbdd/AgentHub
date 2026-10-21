@@ -1,4 +1,4 @@
-// 反代网关 · 额度查询（方案 §6.4）：三软件独立，逐账号批量查询（每渠道并发 ≤2）
+// 反代网关 · 额度查询：三软件独立，逐账号批量查询（每渠道并发 ≤2）
 // 401 先就地刷新凭证重试一次，仍 401 标 relogin；单账号失败不影响其余账号；成功写日快照
 "use strict";
 const store = require("./store.cjs");
@@ -24,7 +24,7 @@ function noCreditsMessage(channel) {
   return store.isBuiltinChannel(channel) ? "该渠道不提供额度查询（官方无对外余额接口）" : "该渠道为 API Key 直连，无余额概念";
 }
 
-/** 临期预刷新（参考项目 RefreshSkew 语义）：JWT 到期前窗口内先刷 token，返回可直接用于
+/** 临期预刷新（RefreshSkew 语义）：JWT 到期前窗口内先刷 token，返回可直接用于
  *  本次/下次请求的 secrets（刷新失败原样返回，绝不因刷新失败把调用方拖进错误分支）。
  *
  *  窗口按渠道取：默认 24h；小浣熊 access 仅 3h（会话1 §2），用 24h 会把每轮刷新都变成一次
@@ -32,7 +32,7 @@ function noCreditsMessage(channel) {
  *
  *  抽成公共函数而不是各链路各写一份：余额与签到面对的是同一个「手上 token 已过期」问题，
  *  口径一旦分叉就会出现「余额正常、签到报登录态已过期」这类只在一处暴露的缺陷。
- *  noPersist 渠道（AutoClaw）：新凭证只进适配器进程缓存、不落库（方案 §7）——服务端轮换
+ *  noPersist 渠道（AutoClaw）：新凭证只进适配器进程缓存、不落库——服务端轮换
  *  refresh_token，落库会与桌面端自己的刷新互相顶掉。 */
 async function ensureFreshSecrets(acc, secrets) {
   const adapter = adapters.get(acc && acc.channel);
@@ -57,7 +57,7 @@ async function refreshAccount(id) {
   if (!secrets.token) throw new Error("该账号没有凭据");
 
   let r = await adapter.queryCredits(acc, secrets).catch((e) => ({ error: String((e && e.message) || e) }));
-  // 临期预刷新（参考项目 RefreshSkew 语义）：JWT 到期前窗口内先刷 token，避免下次对话首请求吃 401
+  // 临期预刷新（RefreshSkew 语义）：JWT 到期前窗口内先刷 token，避免下次对话首请求吃 401
   secrets = await ensureFreshSecrets(acc, secrets);
   if (r.unavailable) {
     // 积分服务对该账号不开放（实测 Trae pay/ug 域 code 1001，但同一 token 对话域正常）：
@@ -174,7 +174,7 @@ async function refreshChannel(channel) {
   }
 }
 
-/** 全量刷新：逐账号批量查询，每渠道并发 ≤2（方案 §6.4）；单账号失败不影响其余 */
+/** 全量刷新：逐账号批量查询，每渠道并发 ≤2；单账号失败不影响其余 */
 async function refreshAll() {
   if (refreshing) return { ok: false, message: "刷新进行中" };
   refreshing = true;

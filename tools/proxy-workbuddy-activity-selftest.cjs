@@ -1,6 +1,6 @@
 // WorkBuddy 国际版「每日活跃」保活自测：验证三条通道各自的请求形状、错误容错与汇总口径。
 //
-// 依据：参考项目 billing/activity.rs + providers/workbuddy/keepalive.rs（issue #277 的实测结论）——
+// 依据：上游保活接口（issue #277 的实测结论）——
 //   ① POST /v2/report            活跃上报（chat_request_send 事件数组）→ 点亮连登 streak
 //   ② POST {chat}/chat/completions  免费模型最小对话（维持「账号有调用」）
 //   ③ POST /console/as/conversations/  网页会话（**每日活跃计数只认它**）

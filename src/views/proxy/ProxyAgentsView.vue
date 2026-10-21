@@ -248,7 +248,7 @@ const OAUTH_HELP: Record<string, { title: string; desc: string }> = {
 // 粘贴 JSON 的字段示例（placeholder 用，随渠道切换 token 字段名提示）
 const pastePlaceholder = computed(() => {
   if (addChannel.value === "zcode") {
-    return `zcode 支持三种形态：\n① 轻量：{ "zcodeJwtToken": "…", "codingPlanKey": "apiKey.secret（选填）", "provider": "zai" }\n② 快照：{ "credentials": {…}, "config": {…} }（整份凭据，含切号快照）\n③ zcode-account-switcher 导出文件的 accounts 数组条目`;
+    return `zcode 支持三种形态：\n① 轻量：{ "zcodeJwtToken": "…", "codingPlanKey": "apiKey.secret（选填）", "provider": "zai" }\n② 快照：{ "credentials": {…}, "config": {…} }（整份凭据，含切号快照）\n③ ZCode 账号切换工具的导出文件 accounts 数组条目`;
   }
   if (addChannel.value === "catpaw") {
     // CatPaw 的凭据是桌面端会话 Cookie 里的 X-Passport-Token 值 + 独立 user-uid（不在 token 里）

@@ -1,5 +1,5 @@
 // 反代网关 · 存储层：SQLite（WAL）+ DPAPI 加密凭据
-// 表结构对齐方案 §5.1：keys / agents / accounts / credits_history / usage_requests
+// 表结构：keys / agents / accounts / credits_history / usage_requests
 // 驱动优先 better-sqlite3（方案选型），ABI 不匹配等加载失败时回退 Node 22 内置 node:sqlite（接口对齐）
 // 凭据（token/refreshToken）不落明文：复用 config.cjs 的 safeStorage(DPAPI) enc:v1: 信封，等效方案 vault.bin
 "use strict";
@@ -162,7 +162,7 @@ const CHANNELS = [
   // 鉴权 Authorization: Bearer workos:<JWT>，无签名、无会话、无桌面端依赖——登录走 WorkOS
   // 设备授权（RFC 8628，四步：authorize/device → 浏览器确认 → authenticate 轮询 → /auth/register
   // 换 Cline 会话令牌）。两个独立 channel id 不做成「一家的一个选项」：界面混池、模型启停键冲突、
-  // 同名模型短名归属漂移都是混池建模的真实缺陷（参考实现 agent2api 同款拆分）。
+  // 同名模型短名归属漂移都是混池建模的真实缺陷（同款拆分）。
   // 池是身份不是账号属性，cline_free 标 costTier "free"（免费额度池，cost-first 路由正确优先），
   // cline_pass 不标（付费订阅，错标 free 会让 cost-first 烧钱）。
   { id: "cline_free", display: "Cline Free", domain: "api.cline.bot", costTier: "free" },
@@ -281,7 +281,7 @@ function open() {
     db.exec("ALTER TABLE agents ADD COLUMN cost_tier TEXT NOT NULL DEFAULT ''");
   } catch { /* 已存在 */ }
   // 在线迁移：keys.allowed_channels / keys.allowed_models（Key 级渠道/模型白名单，空 = 不限制）
-  // 参考 agent2api apiKeys 的 allowedProviders/allowedModels（R9，对齐 OmniProxy）：
+  // Key 级渠道/模型白名单（allowedProviders/allowedModels，对齐 R9）：
   // 存量行空串 = 不限制（升级绝不能让已有 Key 失效），JSON 数组形态存储
   try {
     db.exec("ALTER TABLE keys ADD COLUMN allowed_channels TEXT NOT NULL DEFAULT ''");
@@ -373,7 +373,7 @@ function routeOrderOk(order) {
   return order === "" || order === "score" || order === "cost-first";
 }
 
-/** Key 参数整单校验（参考 agent2api retry_api 语义：任一字段非法整体拒绝，不落半套配置）。
+/** Key 参数整单校验（retry_api 语义：任一字段非法整体拒绝，不落半套配置）。
  *  isPatch=true 时只校验出现的字段（updateKey 的部分更新）；返回非法原因（空串 = 通过） */
 function validateKeyParams(p, isPatch) {
   if (!isPatch || p.name != null) {
@@ -415,7 +415,7 @@ function createKey({ name, route, routeOrder, dailyQuota, rateLimit }) {
   return { id, secret };
 }
 
-/** Key 白名单字段解析：空串/非数组 → 不限制（与 agent2api 空数组 = 不限制等价）；脏数据容错剔除 */
+/** Key 白名单字段解析：空串/非数组 → 不限制（空数组 = 不限制等价）；脏数据容错剔除 */
 function parseKeyAllowList(raw) {
   if (!raw || typeof raw !== "string") return [];
   try {

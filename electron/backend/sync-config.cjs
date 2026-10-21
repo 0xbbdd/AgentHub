@@ -290,7 +290,7 @@ function defaultConfig() {
       displayCurrency: "CNY",
       usdToCny: 7.2,
       importProxy: "", // 价格源导入代理（留空=系统代理/直连）
-      // 远程价格源自动拉取（来源 remote，参考 sub2api 的 pricing.remote_url/hash_url）
+      // 远程价格源自动拉取（来源 remote，pricing.remote_url/hash_url）
       remotePricing: {
         enabled: false,
         url: "https://raw.githubusercontent.com/Wei-Shaw/model-price-repo/main/model_prices_and_context_window.json",

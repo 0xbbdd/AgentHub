@@ -585,7 +585,7 @@ const TOOLS = computed<{ name: string; meta: string; label: string; ok: boolean 
         <div class="foot-meta">
           <div class="foot-ver">{{ version }}</div>
           <el-tooltip content="作者" placement="top">
-            <div class="foot-author"><i class="ph ph-user"></i><b>沐辉</b></div>
+            <div class="foot-author"><i class="ph ph-user"></i><b>沐晖</b></div>
           </el-tooltip>
         </div>
         <el-tooltip content="Star 支持" placement="top">

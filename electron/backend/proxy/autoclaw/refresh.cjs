@@ -1,6 +1,6 @@
-// 反代网关 · AutoClaw token 刷新（参照实现 providers/autoclaw/refresh.rs）
+// 反代网关 · AutoClaw token 刷新（协议事实：refresh 实测）
 //
-// 关键取舍（方案 §7）：刷新结果**不落盘不落库**，只进适配器进程级凭证缓存。
+// 关键取舍：刷新结果**不落盘不落库**，只进适配器进程级凭证缓存。
 // 理由：AutoClaw 桌面端的 auth.json 是 safeStorage 加密登录态，服务端轮换 refresh_token
 // 后网关若持久化新值会与桌面端自己的刷新互相顶掉（掉登录根因）；代价是网关重启后
 // 可能要用库里旧 refresh_token 再刷一次（服务端宽限期内有效）。

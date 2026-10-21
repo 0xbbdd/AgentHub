@@ -1,11 +1,11 @@
 // Trae 模型目录过滤自测：拉取 get_detail_param 时，表里混着的三类「不是模型」的条目
 // 必须被滤掉，而**字段缺失的条目必须放行**（缺省 = 可见）。
 //
-// 判据来源：参考项目 providers/trae/models.rs 对 38 条实测目录的校准结论 ——
+// 判据来源：对 38 条实测目录的校准结论 ——
 //   ① is_invisible_to_user = true   → 内部 subagent / 实验通道
 //   ② display_config.display_name 为空 → 租户自定义模型的占位模板
 //   ③ config_switch = false          → 已下线开关
-// 参考项目同时钉住「三个布尔字段一律缺省 = 可见」：上游删字段时若把整张表滤空，
+// 同时钉住「三个布尔字段一律缺省 = 可见」：上游删字段时若把整张表滤空，
 // 用户看到的是「上游没模型了」，而真相是本机判空判错了 —— 那是最坏的失效方式。
 //
 // 本自测不起网络：用本地 http 服务冒充 get_detail_param，只验证解析与过滤这一段。
@@ -26,7 +26,7 @@ function assert(cond, label, extra) {
   }
 }
 
-/** 造一条 config_info 条目（参数即上游真实字段名，便于对照参考项目的判据） */
+/** 造一条 config_info 条目（参数即上游真实字段名，便于对照判据） */
 function entry(configName, displayName, extra) {
   return {
     config_name: configName,
@@ -43,11 +43,11 @@ async function main() {
   // 缺省字段的条目：必须留（缺省 = 可见）
   r.push({ config_name: "minimax-m3", display_config: { display_name: "MiniMax-M3" } });
   // display_config 整个缺失但 config 名合法：按 ③ 的判据会被「display_name 为空」滤掉，
-  // 这是参考项目的既有取舍（没有展示名的条目不是可选模型）。这里单独断言，避免回归成"保留"。
+  // 这是既有的取舍（没有展示名的条目不是可选模型）。这里单独断言，避免回归成"保留"。
   r.push(entry("browser_use_subagent", "Browser Use Subagent", { is_invisible_to_user: true }));
   r.push(entry("summary", "")); // display_name 空 → 占位模板
   r.push(entry("glm-5-turbo", "GLM-5 Turbo", { config_switch: false })); // 已下线
-  // 相邻反例：名字相近但字段正常 → 必须留（防「前缀匹配误杀」，参考项目 issue #10 的教训）
+  // 相邻反例：名字相近但字段正常 → 必须留（防「前缀匹配误杀」，issue #10 的教训）
   r.push(entry("glm-5.3-flash", "GLM-5.3-Flash"));
 
   const server = http.createServer((req, res) => {

@@ -1,7 +1,7 @@
-// 反代网关 · 渠道适配器（方案 §6.3 IR 内核 + §2 协议事实基线）
+// 反代网关 · 渠道适配器（IR 内核 + 协议事实基线）
 // 进线 OpenAI body → 归一 → 渠道改写 → 上游 fetch → SSE 事件流转换 → 统一 OpenAI 输出
 // 三渠道（trae / workbuddy / workbuddy_ai）差异收敛为「配置（rules/headers.json）+ 改写函数」，
-// WorkBuddy CN 与国际版共享适配器核心，配置层隔离、代码零复制（方案 §2.3）
+// WorkBuddy CN 与国际版共享适配器核心，配置层隔离、代码零复制
 "use strict";
 const crypto = require("node:crypto");
 const rules = require("./rules.cjs");
@@ -28,7 +28,7 @@ function channelOn(channel, cfg) {
 }
 
 const FIRST_BYTE_MS = 30000; // 首 token 30s 超时判失败。实测成功请求 TTFT P99≈8.7s、最大 20.2s，
-// 10s 会误杀慢模型/thinking 首包（参考项目无首字节总超时，读空闲容忍 300s，这里取全覆盖+余量的折中）
+// 10s 会误杀慢模型/thinking 首包（上游无首字节总超时，读空闲容忍 300s，这里取全覆盖+余量的折中）
 const FIRST_BYTE_MAX_MS = 180000; // 首字节预算封顶（超长 prompt 的 prefill 可能上百秒）
 const FIRST_BYTE_PER_10K_MS = 1000; // 每 1 万输入 token 追加的预算
 const STREAM_IDLE_MS = 300000; // 流中读超时 300s
@@ -97,7 +97,7 @@ async function fetchStream(url, opts) {
     const err = Object.assign(new Error(`上游 HTTP ${resp.status}：${text.slice(0, 200)}`), {
       status: resp.status,
       body: text,
-      // 上游明示的限流等待（Retry-After 三头族，参考项目 P1-2），分类器据此对齐墙钟
+      // 上游明示的限流等待（Retry-After 三头族，P1-2），分类器据此对齐墙钟
       retryAfterMs: util.parseRetryAfterHeaders(resp.headers),
     });
     throw err;
@@ -105,7 +105,7 @@ async function fetchStream(url, opts) {
   return { resp, cancelTimer: () => clearTimeout(timer), budgetFired: () => budgetFired };
 }
 
-/** 普通 JSON 请求（额度查询 / token 刷新），默认 60s 总超时（参考项目 120s 口径的折中：含冷启动排队）；
+/** 普通 JSON 请求（额度查询 / token 刷新），默认 60s 总超时（上游 120s 口径的折中：含冷启动排队）；
  *  超时值可经 proxy.httpJsonTimeoutMs 配置（0/缺省回退 60s 内置默认） */
 async function httpJson(url, opts) {
   const ctrl = new AbortController();
@@ -326,7 +326,7 @@ function candidateOrigins(c, extra) {
   return out;
 }
 
-// ===== Trae SOLO CN（方案 §2.1） =====
+// ===== Trae SOLO CN =====
 
 /** 订阅包取余量：CN 档位优先级 100(CNExpress) > 6 > 5 > 4 > 1 > 9 > 8 > 0，命中即用 */
 const TRAE_PACK_PRIORITY = [100, 6, 5, 4, 1, 9, 8, 0];
@@ -352,7 +352,7 @@ function pickEntitlementPack(packs) {
 function traeCredits(packs) {
   const packages = [];
   for (const p of Array.isArray(packs) ? packs : []) {
-    // 参考项目 trae/usage.rs 的三条过滤：隐藏包、已取消(status=3)、兑换码包(product_type=3)。
+    // 上游 trae 的三条过滤：隐藏包、已取消(status=3)、兑换码包(product_type=3)。
     // 只在 entitlement_base_info 这一层**直接读**（字段就在那），且只在结构存在时生效——
     // 老响应没这层嵌套时照常出包，不做全域 dig（那会误吃到别的 status）。
     const base = p && typeof p.entitlement_base_info === "object" && p.entitlement_base_info ? p.entitlement_base_info : null;
@@ -433,7 +433,7 @@ const trae = {
   },
 
   /** 模型显示名 → (config_name, model_name)；映射表外置热加载。
-   *  宽松归一化匹配（参考项目 normalizeModelName）：下划线↔横线、大小写不敏感，
+   *  宽松归一化匹配（上游 normalizeModelName）：下划线↔横线、大小写不敏感，
    *  客户端传 deepseek_v4_pro / DeepSeek-V4-Pro 之类变体也能命中映射；未命中原样透传（上游接受裸 config_name） */
   mapModel(model) {
     const map = rules.get("model_map.json") || {};
@@ -454,7 +454,7 @@ const trae = {
     return unionIds(catalog, Object.keys(rules.get("model_map.json") || {}));
   },
 
-  /** 拉取官方模型目录：get_detail_param（参考项目实证：config_info_list[].config_name + display_config.display_name），
+  /** 拉取官方模型目录：get_detail_param（实测：config_info_list[].config_name + display_config.display_name），
    *  镜像域优先（与对话出口同域），失败回退官方域 */
   async fetchModels(account, secrets) {
     const c = this.cfg();
@@ -479,7 +479,7 @@ const trae = {
       for (const it of list) {
         const id = it && (it.config_name || it.configName);
         if (typeof id !== "string" || !id) continue;
-        // 目录里混着三类「不是模型」的条目（参考项目 models.rs 对 38 条实测目录校准）：
+        // 目录里混着三类「不是模型」的条目（对 38 条实测目录校准）：
         //   ① is_invisible_to_user = true  → 内部 subagent / 实验通道
         //      （browser_use_subagent / file_search_agent / sagitta / aquila …）
         //   ② display_config.display_name 为空 → 租户自定义模型的**占位模板**
@@ -515,7 +515,7 @@ const trae = {
     return { ok: false, message: lastErr || "目录拉取失败" };
   },
 
-  /** 完整请求头指纹（逐字段对齐参考项目实证抓包，缺任何一项都可能被上游风控识别为非官方客户端） */
+  /** 完整请求头指纹（逐字段对齐实测抓包，缺任何一项都可能被上游风控识别为非官方客户端） */
   headers(account, secrets) {
     const c = this.cfg();
     const { deviceId, machineId } = deviceIds(account);
@@ -553,12 +553,12 @@ const trae = {
       "x-request-id": `req_${crypto.randomUUID().replace(/-/g, "")}`,
       // referer 在 chat() 里按实际请求 URL 覆盖（同源伪装）
     };
-    // X-Uid 官方客户端恒带（参考项目 SOLOHeaders 实证），缺了是风控识别点
+    // X-Uid 官方客户端恒带（SOLOHeaders 实证），缺了是风控识别点
     if (account && account.uid) h["x-uid"] = String(account.uid);
     return h;
   },
 
-  /** function 字段按模型分发（TraeWorkAssistant models_sync.rs 实证：部分模型仅在
+  /** function 字段按模型分发（实测：部分模型仅在
    *  solo_agent 下可用）；映射表外置 rules/function_map.json，未命中默认 solo_work_lite */
   functionForModel(model) {
     const map = rules.get("function_map.json") || {};
@@ -572,7 +572,7 @@ const trae = {
     return "solo_work_lite";
   },
 
-  /** OpenAI body → llm_utils_chat 改写（对齐参考项目 prepare_llm_chat_body） */
+  /** OpenAI body → llm_utils_chat 改写（对齐上游 prepare_llm_chat_body） */
   rewriteBody(model, body, account) {
     const c = this.cfg();
     const { configName } = this.mapModel(model);
@@ -604,7 +604,7 @@ const trae = {
         return t;
       });
     }
-    // tool_choice 归一化（对齐参考项目）："none"（字符串或对象）→ 删 tool_choice 并同时删除 tools/functions；
+    // tool_choice 归一化（对齐上游）："none"（字符串或对象）→ 删 tool_choice 并同时删除 tools/functions；
     // {type:function} → name 字符串；{type:auto/required} → 字符串
     const tc = out.tool_choice;
     const tcType = typeof tc === "string" ? tc : tc && typeof tc === "object" ? tc.type : "";
@@ -615,9 +615,9 @@ const trae = {
     } else if (tc && typeof tc === "object") {
       out.tool_choice = (tc.function && tc.function.name) || tcType || "auto";
     }
-    // 必填注入字段（方案 §2.1）
+    // 必填注入字段
     out.config_name = configName;
-    // model 与 config_name 同值（traework2api payload.go 实证形态：上游认这两个键同值）。
+    // model 与 config_name 同值（实测形态：上游认这两个键同值）。
     // model_map 第二列（__dev 内部名）保留备用：若上游报 "the model is unknown"，
     // 切换 TraeWorkAssistant 形态——把本行改为 out.model_name = modelName 并删掉 out.model
     out.model = configName;
@@ -642,7 +642,7 @@ const trae = {
 
   /**
    * 对话主流程：emit 结构化事件（delta/usage/finish/error），返回上游级结果供换号决策
-   * 官方域优先，网络层失败回退社区镜像域（方案 §2.1 镜像兜底）
+   * 官方域优先，网络层失败回退社区镜像域（镜像兜底）
    */
   async chat({ account, secrets, model, body, emit }) {
     const c = this.cfg();
@@ -652,7 +652,7 @@ const trae = {
     for (const url of [c.chatUrl, c.mirrorChatUrl]) {
       if (!url) continue;
       try {
-        // referer 与请求 URL 同源（参考项目实证：伪装成同源请求，恒为 <host>/api/agent/v3/llm_utils_chat）
+        // referer 与请求 URL 同源（实测：伪装成同源请求，恒为 <host>/api/agent/v3/llm_utils_chat）
         return await this.chatOnce(url, { ...base, referer: url }, payload, model, emit);
       } catch (e) {
         lastErr = e;
@@ -703,7 +703,7 @@ const trae = {
             emit({ type: "delta", delta });
           }
         } else if (ev === "token_usage") {
-          // usage 透传完整对象（参考项目实证：含 reasoning_tokens / credit 等扩展字段），缺总数本地补
+          // usage 透传完整对象（实测：含 reasoning_tokens / credit 等扩展字段），缺总数本地补
           const usage = {
             prompt_tokens: Number(data.prompt_tokens ?? data.prompt ?? 0) || 0,
             completion_tokens: Number(data.completion_tokens ?? data.completion ?? 0) || 0,
@@ -721,11 +721,11 @@ const trae = {
           sawError = true;
           const code = Number(data.code) || 0;
           if (code === 1005) result.planLimit = true;
-          // 状态映射对齐参考项目 trae/forward.rs 的实测表 [4008→429, 4001→404, 20101→502]：
+          // 状态映射对齐 trae 的实测表 [4008→429, 4001→404, 20101→502]：
           // 4001 是「模型在 solo_work_lite 通道不存在」，不是服务端故障——报 502 会让客户端
           // 以为上游挂了并触发无意义重试；报 404 才符合语义（该模型在此渠道不存在），
           // 且与通用分类器的 not_found 短冷却/终态口径一致。20101 等其余业务码仍按 502。
-          // 输入过大（prompt is too long 族）优先于 code：参考项目 errors.rs 明写「4001 配
+          // 输入过大（prompt is too long 族）优先于 code：上游明写「4001 配
           // 'prompt is too long' 仍归过大」，那是请求问题而不是通道问题，故排在最前（1005 除外，
           // 它是额度耗尽、语义与请求长度无关）。判错会顺着换号链个罚整池账号。
           const msgText = String(data.message || data.msg || "");
@@ -769,7 +769,7 @@ const trae = {
   },
 
   /**
-   * 额度查询：CN 现行口径是 v2 pay 接口（v1 兜底），空体请求（参考项目实测）；
+   * 额度查询：CN 现行口径是 v2 pay 接口（v1 兜底），空体请求（实测）；
    * 余额 = 全部订阅包 (credits_limit - usage.credits_amount) 求和（老实现只取单一档位包，口径错）。
    * 实测关键：pay/ug 域对部分账号（scope=marscode 等）整体拒绝，HTTP 401 + code 1001，
    * 但同一 token 在 GetUserInfo/对话域完全正常 —— 这是「积分服务不开放」，不是凭证失效，
@@ -897,7 +897,7 @@ const trae = {
   },
 
   /**
-   * Token 刷新：ExchangeToken（对齐参考项目：ClientID + RefreshToken + ClientSecret "-"，x-cloudide-token 空串）。
+   * Token 刷新：ExchangeToken（对齐上游：ClientID + RefreshToken + ClientSecret "-"，x-cloudide-token 空串）。
    * 上游多域时依次尝试，避免某个域被墙/维护就整条链路失效；
    * extraOrigins（OAuth 回调 loginHost 的 origin）排最前——官方回调会指定换令牌的域
    */
@@ -914,7 +914,7 @@ const trae = {
     let lastErr = "";
     for (const base of candidates) {
       const r = await httpJson(`${base}/cloudide/api/v3/trae/oauth/ExchangeToken`, { method: "POST", headers, body }).catch((e) => ({ ok: false, status: 0, data: null, message: String((e && e.message) || e) }));
-      // 响应嵌套 Result.Token / Result.RefreshToken（参考项目实证），兼容扁平字段
+      // 响应嵌套 Result.Token / Result.RefreshToken（实测），兼容扁平字段
       const d = (r.data && (r.data.Result || r.data.result || r.data.data || r.data)) || null;
       const rawToken = d && (d.Token || d.access_token || d.accessToken);
       if (r.ok && rawToken) {
@@ -952,7 +952,7 @@ const trae = {
   },
 };
 
-// ===== WorkBuddy CN / AI 双实例（方案 §2.2/§2.3，共享适配器核心） =====
+// ===== WorkBuddy CN / AI 双实例（共享适配器核心） =====
 
 /**
  * 计费响应 → { credits, expiresAt }。
@@ -982,7 +982,7 @@ function parseWbResource(data, isEnterprise) {
   const packages = [];
   const num = (a, re) => Number(util.dig(a, re)) || 0;
   for (const a of accounts) {
-    // 单包口径（参考项目 packageRemainUsed）：Cycle 期套餐优先，缺 Cycle 退回 Capacity 三字段
+    // 单包口径（上游 packageRemainUsed）：Cycle 期套餐优先，缺 Cycle 退回 Capacity 三字段
     let r, u, s;
     const cycSize = num(a, /^CycleCapacitySize(Precise)?$/i);
     if (cycSize > 0) {
@@ -1024,7 +1024,7 @@ function parseWbResource(data, isEnterprise) {
   return { credits: Math.max(remain, 0), expiresAt: earliestEnd, packages };
 }
 
-/** 官方客户端会话头族（参考项目 ChatMeta 实证：后台按 X-Conversation-Request-ID 聚合请求，
+/** 官方客户端会话头族（ChatMeta 实证：后台按 X-Conversation-Request-ID 聚合请求，
  *  一次 user send 内的所有重试/换号必须复用同一个 ID）。meta 由 server 在轮转循环外生成一次，
  *  循环内换号沿用同值；B3 规范只认 16/32 hex TraceId，入站透传值非法时回落消息级 ID */
 function wbConversationHeaders(body, meta) {
@@ -1063,7 +1063,7 @@ function isWbAccountBlocked(e) {
   return /\b11140\b/.test(s) || /request illegal/i.test(s);
 }
 
-/** X-Device-Token 文件兜底（参考项目 device_token.go：≤1KB、5min 缓存） */
+/** X-Device-Token 文件兜底（≤1KB、5min 缓存） */
 let deviceTokenCache = { at: 0, value: "" };
 function readDeviceTokenFile() {
   if (deviceTokenCache.at && Date.now() - deviceTokenCache.at < 5 * 60000) return deviceTokenCache.value;
@@ -1123,7 +1123,7 @@ function makeWorkBuddy(channelId) {
             };
             return capsWithImages(img, base);
           })(),
-          // reasoning 元数据（参考项目 effort 降级原料）：supportedEfforts/defaultEffort 必须随目录落盘，
+          // reasoning 元数据（effort 降级原料）：supportedEfforts/defaultEffort 必须随目录落盘，
           // 否则 deepseek 系 reasoning_effort 档位无法按模型收敛，只认 high 的模型请求 low 会 400
           reasoning: it.reasoning && typeof it.reasoning === "object"
             ? {
@@ -1166,7 +1166,7 @@ function makeWorkBuddy(channelId) {
       return { ok: true, models };
     },
 
-    /** chat 出站头组：逐字段对齐官方 WorkBuddy 桌面端（参考项目逆向实证）。
+    /** chat 出站头组：逐字段对齐官方 WorkBuddy 桌面端（逆向实证）。
      *  渠道白名单校验（400 code 11128 "unapproved channel"）按这套指纹认客户端：
      *  ① 三段式 UA（WorkBuddy/ver 平台/ver CLI/ver，AI 版平台段必须 WorkBuddy AI 否则 11140）；
      *  ② X-CodeBuddy-Request: 1 风控闸门头全请求必带；
@@ -1197,7 +1197,7 @@ function makeWorkBuddy(channelId) {
         "x-ide-version": c.clientVersion || "5.5.4",
         "x-product": ideName,
       };
-      // 设备风控头（参考项目：auth 每号 > config 全局 > 文件兜底），空则不注入
+      // 设备风控头（auth 每号 > config 全局 > 文件兜底），空则不注入
       const devToken = (account && account.deviceToken) || c.deviceToken || readDeviceTokenFile();
       if (account && account.uid) {
         h["x-user-id"] = account.uid;
@@ -1249,14 +1249,14 @@ function makeWorkBuddy(channelId) {
       return h;
     },
 
-    /** OpenAI body → WB 改写（对齐参考项目 payload.go + sanitize.go + thinking.go + tool_pairing.go 全管线）。
+    /** OpenAI body → WB 改写（对齐上游全管线）。
      *  11128 的三类诱因都在这里拦截：role 白名单外的 developer、整句精确匹配的审核指纹、
      *  裸错误码数字（模板表 "11128"→"11-128"）与不成对的工具调用（上游对后续每条消息都 400） */
     rewriteBody(model, body, account) {
       const tpl = rules.get("wb_template_map.json") || {};
       const out = { ...body };
       out.model = model;
-      out.stream = true; // WB 只支持 SSE，非流式本地聚合模拟（方案 §2.2）
+      out.stream = true; // WB 只支持 SSE，非流式本地聚合模拟
       // 官方 CLI 流式必发：上游据此在末帧返回 usage
       if (!out.stream_options) out.stream_options = { include_usage: true };
       // max_completion_tokens → max_tokens 翻译（新版 OpenAI SDK/_codex_ 客户端发前者，上游不认）
@@ -1266,7 +1266,7 @@ function makeWorkBuddy(channelId) {
         delete out.max_completion_tokens;
       }
       // tool_choice 归一（对象报 400 code 11101）：{type:function} → name；none→none；any/required→required；其余→auto。
-      // 字符串 "none" 也要撤 tools/functions（对齐 trae rewriteBody 与参考 normalize 实测：
+      // 字符串 "none" 也要撤 tools/functions（对齐 trae rewriteBody 与 normalize 实测：
       // 上游语义是不调用工具时连声明一起撤，保留 tools 会报参数错误）
       if (out.tool_choice === "none") {
         delete out.tools;
@@ -1295,9 +1295,9 @@ function makeWorkBuddy(channelId) {
         t = t.replace(/x-anthropic-billing-header/gi, "x-anthropic-billing-hdr");
         return t;
       };
-      // 孤儿 tool_call↔tool 配对清理（参考项目实证：不成对会让上游对之后每条消息都返 400）
+      // 孤儿 tool_call↔tool 配对清理（实测：不成对会让上游对之后每条消息都返 400）
       const rawMsgs = (Array.isArray(body.messages) ? body.messages : []).map((m) => ({ ...m }));
-      // 工具结果组重排（参考项目 repackToolResultBlocks）：把插在 assistant.tool_calls 与 tool 结果
+      // 工具结果组重排（repackToolResultBlocks）：把插在 assistant.tool_calls 与 tool 结果
       // 之间的非 tool 消息挪到该组之后——Codex 类客户端会夹通知消息，不打散配对且语义顺序不变
       const repacked = [];
       let pendingAfterGroup = [];
@@ -1370,7 +1370,7 @@ function makeWorkBuddy(channelId) {
       }
       out.messages = merged;
       // console 域（国际版官方客户端路径）要求首条消息必须是 system，否则 400 code 11128
-      // "first message is not system prompt"（参考项目 ensureConsoleSystem 实证，吸收 PR #45）
+      // "first message is not system prompt"（ensureConsoleSystem 实证，吸收 PR #45）
       if (channelId === "workbuddy_ai" && out.messages.length) {
         const firstRole = String(out.messages[0].role || "").trim().toLowerCase();
         if (firstRole !== "system") {
@@ -1378,9 +1378,9 @@ function makeWorkBuddy(channelId) {
         }
       }
       // 会话 id：客户端已传则保留；否则按前 3 条消息指纹稳定派生——同一会话多轮复用，
-      // 结合 prompt_cache_key 使上游前缀缓存可命中（参考项目实证：命中后 credit≈0.02 vs 0.34）
+      // 结合 prompt_cache_key 使上游前缀缓存可命中（实测：命中后 credit≈0.02 vs 0.34）
       if (!out.conversation_id) out.conversation_id = util.stableConvId(body.messages) || util.uuid();
-      // deepseek 思维链管线（参考项目 thinking.go）：注入 thinking 开关 → effort 按目录档位
+      // deepseek 思维链管线：注入 thinking 开关 → effort 按目录档位
       // 降级 → 多轮 reasoning_content 回填（缺失会 400）。显式空 reasoning_effort 最后删除
       const catEntry = catalogMap(channelId).get(String(model).toLowerCase());
       if (util.isDeepSeekModel(model)) {
@@ -1389,14 +1389,14 @@ function makeWorkBuddy(channelId) {
       }
       util.normalizeReasoningEffort(out, catEntry && catEntry.reasoning);
       if (out.reasoning_effort != null && !out.reasoning_effort) delete out.reasoning_effort;
-      // prompt_cache_key（参考项目 cache_key.go：账号段硬隔离，跨账号绝不碰撞——防命中错账号前缀缓存）
+      // prompt_cache_key（账号段硬隔离，跨账号绝不碰撞——防命中错账号前缀缓存）
       if (!out.prompt_cache_key) {
         out.prompt_cache_key = util.promptCacheKey((account && account.uid) || "", String(out.conversation_id || ""));
       }
       return out;
     },
 
-    /** 对话主流程：WB 上游已近似 OpenAI 形态，透传归一（方案 §6.3 SSE 转换 WB）。
+    /** 对话主流程：WB 上游已近似 OpenAI 形态，透传归一（SSE 转换 WB）。
      *  国际版优先走 /v2/chat/completions：本机 5.8.4 官方桌面客户端的对话请求逐条实证
      *  都打这个路径；/console 是网页控制台路径，保留为 404/405 兜底。原先 console 优先
      *  与客户端真实请求面不一致，且两条入口的免费模型限频不保证同口径（6004 误报诱因之一）。
@@ -1546,7 +1546,7 @@ function makeWorkBuddy(channelId) {
       }
       const ent = account.enterpriseId || "";
       const path = ent ? "/billing/meter/get-enterprise-user-usage" : "/billing/meter/get-user-resource";
-      // 请求体对齐参考项目实证（workbuddy2api / cockpit-tools 同款）：分页 + p_tcaca + 有效期区间；
+      // 请求体对齐实测结论：分页 + p_tcaca + 有效期区间；
       // 企业版官方客户端发空体 {}
       const now = new Date();
       const p2 = (n) => String(n).padStart(2, "0");
@@ -1612,17 +1612,17 @@ function makeWorkBuddy(channelId) {
     },
 
     // ===== 国际版每日活跃（keepalive）=====
-    // 来源：参考项目 billing/activity.rs + providers/workbuddy/keepalive.rs 的实测结论（issue #277）。
+    // 来源：上游保活接口的实测结论（issue #277）。
     // 国际版没有「每日签到」体系，活跃判定分三个通道，缺一条就领不到每日奖励：
     //   ① 活跃上报 POST /v2/report（chat_request_send 事件）→ 点亮成长中心连登 streak
     //   ② 桌面端免费模型最小对话（保持「账号有调用」）
     //   ③ 网页通道建会话 POST /console/as/conversations/（**每日活跃计数只认它**）
     // 三条都是 best-effort：任一失败只进结果字段，绝不把签到结论翻成失败
-    // （参考项目同一取向：活动开关由上游控制，不该让定时任务整体中断）。
+    // （同一取向：活动开关由上游控制，不该让定时任务整体中断）。
     // 只在国际版触发：国内版的上游没有这条「活跃即发」的玩法，多发请求只是白撞。
 
     /** ① 活跃上报：POST /v2/report，body 是「一个事件的数组」。
-     *  事件形状逐字段对齐参考项目（chat_request_send + mode=craft + 各种计数字段），
+     *  事件形状逐字段对齐上游（chat_request_send + mode=craft + 各种计数字段），
      *  **不要「顺手精简」**：服务端按形状与判据字段归账，少一个键那次上报就可能不计。
      *  回读 GET /activity/growth/streak 复核（上报 200 ≠ 计分）。 */
     async reportActivity(account, secrets) {
@@ -1682,7 +1682,7 @@ function makeWorkBuddy(channelId) {
     },
 
     /** ② 桌面端保活：用免费模型发一次最小流式对话。
-     *  模型链取参考项目实测「不消耗积分」的免费模型，逐个尝试、第一个拿到 2xx 收口。
+     *  模型链取上游实测「不消耗积分」的免费模型，逐个尝试、第一个拿到 2xx 收口。
      *  deepseek-v4.1-flash 放在最后：它是用户真实对话最常用的免费模型、免费窗口最先被打满，
      *  保活没必要跟真实流量抢同一个账号×模型额度（hy3/hy4 同样免费，失败会自动往下试）。
      *  必须**读**响应体（不读的请求上游可能不计活跃），但只需读满首个上限即可——SSE 没必要读完。 */
@@ -1733,14 +1733,14 @@ function makeWorkBuddy(channelId) {
 
     /** ③ 网页会话保活：POST /console/as/conversations/。
      *  **只带 Authorization + X-User-Id 两个凭据头**，UA 用浏览器串——桌面端 X-IDE-* 指纹
-     *  正是网页链路要剥掉的东西（参考项目 issue #277 的抓包结论）。
+     *  正是网页链路要剥掉的东西（issue #277 的抓包结论）。
      *  会话体固定带 conversationOrigin 与 plugins（网页端建会话的抓包形态）。 */
     async webConversation(account, secrets) {
       const c = this.cfg();
       const uid = String((account && account.uid) || "");
       if (!secrets || !secrets.token) return { succeeded: false, message: "缺少 accessToken，无法走网页通道" };
       if (!uid) return { succeeded: false, message: "缺少账号 uid，无法走网页通道" };
-      // 网页域与 chat 域不同：国际版是 www.workbuddy.ai（参考项目 session_endpoint 同口径）。
+      // 网页域与 chat 域不同：国际版是 www.workbuddy.ai（session_endpoint 同口径）。
       // 用 c.webBase 可覆盖；缺省按 chatUrl 的 origin 推导，避免再引一份硬编码域名。
       const origin = c.webBase || (c.chatUrl ? new URL(c.chatUrl).origin : "https://www.workbuddy.ai");
       const headers = {
@@ -1784,7 +1784,7 @@ function makeWorkBuddy(channelId) {
 
     /**
      * 每日签到状态：checkin-activity-status（新）→ checkin-status（旧）逐路径降级。
-     * 参考 cockpit-tools 实测：code===0 为成功；code!=0 为业务失败（如已签到/未开放）
+     * 实测：code===0 为成功；code!=0 为业务失败（如已签到/未开放）
      */
     async checkinStatus(account, secrets) {
       const r = await this.billingCall(account, secrets, [
@@ -1854,8 +1854,8 @@ function makeWorkBuddy(channelId) {
     },
 
     /** Token 刷新：X-Refresh-Token 头 + 空体 {}（该头只允许出现在此端点）。
-     *  头组对齐参考项目 RefreshHeaders：CommonHeaders 完整形态（origin/referer/风控闸门/机器指纹）
-     *  + refresh 专属头；X-Auth-Refresh-Source 走 rules 配置（workbuddy2api="plugin"、TWA="workbuddy"） */
+     *  头组对齐上游 RefreshHeaders：CommonHeaders 完整形态（origin/referer/风控闸门/机器指纹）
+     *  + refresh 专属头；X-Auth-Refresh-Source 走 rules 配置（实测后固化为 "workbuddy"） */
     async refreshToken(account, secrets) {
       const c = this.cfg();
       if (!secrets.refreshToken) return { ok: false, message: "无 refreshToken，请重新登录或从本机导入" };
@@ -2004,7 +2004,7 @@ function raccoonRefreshHeaders(c, account) {
 }
 
 /** 手机端身份头（仅首次手机端登录奖励 mobileGrantUrl 用）：官方手机 App 壳的请求形态
- *  （示例项目 agent2api 从安卓包逆向实测）：platform 报 app-android、版本报 App 侧 v1.0.3。
+ *  （从官方安卓包逆向实测）：platform 报 app-android、版本报 App 侧 v1.0.3。
  *  手机端端点认的也是桌面端登录签发的同一把 Bearer token（token 无平台绑定），
  *  报哪端只影响走哪条端点，不影响凭证 —— 每个号两条一次性奖励各领一次。 */
 function raccoonMobileHeaders(c, account, secrets) {
@@ -2508,7 +2508,7 @@ const raccoon = {
   },
 };
 
-// ===== LobsterAI（网易有道龙虾，渠道 id: lobster） =====// 协议事实（2026-10-05 本机实测 + 参考实现 lobsterai2api@21c39a4 交叉验证，见 docs/lobster-反代）：
+// ===== LobsterAI（网易有道龙虾，渠道 id: lobster） =====// 协议事实（2026-10-05 本机实测，见 docs/lobster-反代）：
 //   · 鉴权 = Bearer JWT（OAuth 授权码换发；回环回调 http://127.0.0.1:<port>/auth/callback）
 //   · 对话 = 原生 OpenAI Chat Completions，但**上游只接受 stream=true**（非流式实测 500）
 //   · 业务错误可能藏在 HTTP 200 的 SSE 流里（event:error 帧）→ 必须窥探首块
@@ -2517,7 +2517,7 @@ const raccoon = {
 
 const LOBSTER_UA_FALLBACK = "2026.9.23";
 // 版本号缓存：签到活动按 clientVersion 下发，旧版本号会拿到 slotState=empty（实测 0.1.0 被隐藏）。
-// 1h TTL，失败 10min 后重试（与参考实现同口径）
+// 1h TTL，失败 10min 后重试（同口径）
 let lobsterVersionCache = { val: "", at: 0, failedAt: 0 };
 
 /**
@@ -2666,7 +2666,7 @@ const modelscope = {
    *  为什么有这个：魔搭端点分两族且**严格互斥**（实测确立，见 rules.cjs 注释）：
    *    「OAuth 可用族」推理 /v1/chat + 魔粒 /openapi/v1/*
    *    「仅 Cookie/ms- 可用族」点赞 /api/v1/mcpServers/* + 令牌管理 /api/v1/users/tokens*
-   *  且 ms- 令牌虽能点赞却不触发 daily_active（参考项目实测注释：
+   *  且 ms- 令牌虽能点赞却不触发 daily_active（实测注释：
    *  只有 Web 会话（Cookie）活动才触发日活奖励）⇒ **Cookie 是唯一两全的凭据**。 */
   cookieHeaderOf(secrets) {
     const meta = (secrets && (secrets.meta || secrets.accountMeta)) || {};
@@ -2702,9 +2702,9 @@ const modelscope = {
 
   /** Web 会话触碰（触发 daily_active）。
    *
-   *  daily_active 即「注册并登陆，每日登录即可获取」——参考项目 HAR 抓包确认前端每次页面加载
+   *  daily_active 即「注册并登陆，每日登录即可获取」——HAR 抓包确认前端每次页面加载
    *  都会调 /api/v1/users/login/info，故必须**真的走 Web 请求**才算登录事件；纯 OpenAPI
-   *  （Bearer）调用不计入日活（参考项目实测注释明确记录）。
+   *  （Bearer）调用不计入日活（实测记录）。
    *
    *  返回 { ok, touched, dead }：dead=true 表示 Cookie 已失效（供上层提示重新授权）。 */
   async webTouch(secrets) {
@@ -3765,7 +3765,7 @@ const lobster = {
   },
 
   /** Token 刷新：POST /api/auth/refresh（body 含 refreshToken + keyfrom 载荷，无需 Bearer）。
-   *  参考实现口径：响应 accessToken 缺失即视为 refresh 被拒（终止性，需重新登录） */
+   *  上游口径：响应 accessToken 缺失即视为 refresh 被拒（终止性，需重新登录） */
   async refreshToken(account, secrets) {
     const c = this.cfg();
     const refreshToken = (secrets && secrets.refreshToken) || "";
@@ -3821,7 +3821,7 @@ const lobster = {
 // 一个账号是双凭据——zcodejwttoken（token_enc：start-plan 对话 + billing/claim 控制面）与
 // coding-plan API key（refresh_enc：coding-plan 对话，"{apiKey}.{secret}"）。
 // 对话选路：有 coding-plan key 优先 coding-plan（正式付费套餐），否则 start-plan（免费/领取的套餐）。
-// 事实基线：zcode-api src/proxy/{upstream,identity}.ts + zcode-switch src-tauri/src/{quota,claim}.rs
+// 事实基线：官方客户端协议实测（2026-10）
 // + 本机 ~/.zcode/v2 实测（见 zcodeLocal.cjs 文件头注释）。
 
 const zcodeLocal = require("./zcodeLocal.cjs");
@@ -3931,7 +3931,7 @@ function getPendingCaptcha(accountId) {
   return hit;
 }
 
-/** zcode 业务码 → HTTP 语义（参考 zcode-api / quota.rs classify_biz_err 口径）：
+/** zcode 业务码 → HTTP 语义（quota.rs classify_biz_err 口径）：
  *  1005→402 额度尽；3002/3008/3009/3010→429 限流；3007→502 验证码挑战（双重特征检测，如实报，不冷却号）；
  *  401/1006/3012→401；3001/3006/3102→400 参数；2007→502 服务端 */
 function zcodeMapBizError(status, data, text) {
@@ -4151,7 +4151,7 @@ const zcode = {
         this.queryCreditsByJwt(account, secrets, c).catch((e) => ({ error: String((e && e.message) || e) })),
         this.queryCreditsByApiKey(account, secrets, c).catch((e) => ({ error: String((e && e.message) || e) })),
       ]);
-      // 若 API Key 成功：绝不报 authError 误判停用好号，且合并两路额度（参考 zcode-switch merge_parts）
+      // 若 API Key 成功：绝不报 authError 误判停用好号，且合并两路额度（上游 merge_parts）
       if (ra && !ra.authError && !ra.error) {
         const totalCredits = (Number(ra.credits) || 0) + (!rj.authError && !rj.error ? (Number(rj.credits) || 0) : 0);
         const exp = [ra.expiresAt, (!rj.authError && !rj.error ? rj.expiresAt : 0)].filter((t) => t > Date.now());
@@ -4809,7 +4809,7 @@ if (store.QODER_INTL_ENABLED) {
 // ===== AutoClaw 双区（国内版 / 国际版：同协议同签名，仅域名与登录方式不同）=====
 // 挂载必须与 store.AUTOCLAW_INTL_ENABLED 同步——ADAPTERS 参与 modelOwners/mergedModels，
 // 只在 CHANNELS 出现而无适配器会让双表一致性校验失败（与 qoder_intl 同口径）。
-// 刷新是「只读不回写」渠道（方案 §7）：refreshToken 返回 noPersist 标记，
+// 刷新是「只读不回写」渠道：refreshToken 返回 noPersist 标记，
 // server/credits 据此跳过 token 落库，新凭证只进适配器进程缓存。
 const { makeAutoClaw } = require("./autoclaw/adapter.cjs");
 const autoclawDeps = { fetchStream, pumpSse, httpJson, rules, util, store, deviceIds, firstByteBudgetMs };
@@ -4896,7 +4896,7 @@ function resolveModelTarget(model, channel, cfg) {
 }
 
 // ===== 刷新并发互斥（single-flight） =====
-// 上游 refreshToken 是轮换语义（参考项目实证：旧 refreshToken 可能一次性失效）：
+// 上游 refreshToken 是轮换语义（实测：旧 refreshToken 可能一次性失效）：
 // 并发 401 各自拿同一个旧 token 刷，后发者必然失败并把好号误判 relogin。
 // 按账号收敛为单飞——并发调用共享同一个 promise，成功者写库，其余复用结果
 const refreshInflight = new Map();

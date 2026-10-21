@@ -53,7 +53,7 @@ function offline() {
     const expect = crypto.createHash("md5").update(`100003&1760000000&38d2391985e2369a5fb8227d8e6cd5e5`).digest("hex");
     assert(sign === expect && sign === sign.toLowerCase(), "X-Auth-Sign = MD5(appId&ts&appKey) 小写");
     const neg = headers.authSign("100003", "38d2391985e2369a5fb8227d8e6cd5e5", -5);
-    assert(neg.ts === "0", "负时间戳取 0（对齐参照实现 .max(0)）");
+    assert(neg.ts === "0", "负时间戳取 0（对齐 .max(0)）");
   }
 
   // ② 两域头集合（互斥断言是最易踩的三处）
@@ -67,7 +67,7 @@ function offline() {
     assert(llm["x-tm"] === "win" || llm["x-tm"] === "mac", "LLM 域 X-Tm 只发 mac/win（禁 linux）");
     assert(llm["x-request-model"] === "zaicoding_glm-5.3", "LLM 域 X-Request-Model = 完整路由 ID");
     assert(llm["x-version"] === "1.17.8", "LLM 域 X-Version = llmVersion");
-    assert(llm.x_trace_id === "autoclaw-desktop", "LLM 域 trace 头照抄参照实现字面量");
+    assert(llm.x_trace_id === "autoclaw-desktop", "LLM 域 trace 头对齐上游字面量");
     assert(/^[0-9a-f-]{36}$/.test(llm["x-request-id"]), "X-Request-Id 为 UUID 形态");
     // userapi 域：小写 authorization、必发 X-Harness-Type、签名三件套、版本门控头
     assert(api.authorization === "Bearer tok-1" && !("x-authorization" in api), "userapi 域认证头是小写 authorization");

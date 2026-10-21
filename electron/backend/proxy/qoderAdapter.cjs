@@ -28,7 +28,7 @@ function osVersion() {
   }
 }
 
-/** 排队建议时长的读取（参考项目 qoder/errors.rs 的 QueueInfo，字段同名）：
+/** 排队建议时长的读取（qoder QueueInfo，字段同名）：
  *  上游在 10605 排队态的正文里给 `retryAfterSeconds` 或 `waitTime`（单位秒，实测 9~30），
  *  正文常是**多层嵌套的 JSON 字符串**（`{"code":"403","message":"{\"code\":\"10605\",…}"}`），
  *  所以要顺着 message / body / data 钻几层再取。
@@ -107,7 +107,7 @@ const newId = () => crypto.randomUUID();
 function toQoderMessages(messages) {
   const out = [];
   const systemHeads = [];
-  // system 统一前置（参考实测：上游只认首条 system，放中间会失效）；OpenAI 新协议的
+  // system 统一前置（实测：上游只认首条 system，放中间会失效）；OpenAI 新协议的
   // developer 角色归并为 system（静默丢弃会让用户的系统提示词无声消失）
   for (const m of Array.isArray(messages) ? messages : []) {
     if (!m || typeof m !== "object") continue;
@@ -505,9 +505,9 @@ function makeQoder(product, deps) {
               emit({ type: "error", status: 402, code: 116, message: msg });
               return;
             }
-            // 10605 免费模型排队中（参考实测 403+10605，官方 CLI 按可重试排队态处理）：
+            // 10605 免费模型排队中（实测 403+10605，官方 CLI 按可重试排队态处理）：
             // 按 429 归类走通用退避，**并把上游建议的重试间隔带上**。
-            // 参考项目 qoder/errors.rs 的实测：`retryAfterSeconds` / `waitTime` 是上游明示的
+            // 实测：`retryAfterSeconds` / `waitTime` 是上游明示的
             // 建议间隔（实测 9～30 秒浮动）。不带它，通用层会按「无明示 429」只退 1s 再打，
             // 高峰期每个号都要白撞一遍才知道还在排队；带上就落 10 分钟冷却（视上游值），
             // 由编排层直接换号。两个键都没有时不猜值（保持原行为）。
@@ -710,7 +710,7 @@ function makeQoder(product, deps) {
           continue;
         }
         if (r.status === 401 || r.status === 403) return { authError: true, message: "凭证失效" };
-        // 409 + ALREADY_CLAIMED 是上游并发/重放时的「今天已领过」成功语义（参考实测），
+        // 409 + ALREADY_CLAIMED 是上游并发/重放时的「今天已领过」成功语义（实测），
         // 落 !r.ok 会误报领取失败
         if (r.status === 409 && r.data && r.data.result === "ALREADY_CLAIMED") {
           replayedAny += 1;
