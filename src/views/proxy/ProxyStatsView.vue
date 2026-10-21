@@ -28,6 +28,10 @@ type Preset = (typeof PRESETS)[number]["key"];
 const DAY_MS = 86400000;
 const preset = ref<Preset>("7d");
 const customRange = ref<[string, string] | null>(null);
+// 响应式时间锚：Date.now() 不是响应式依赖，直接在 range computed 里取会让区间冻结在
+// 页面挂载时刻——「今天」档的 to 停在那一刻，之后的新请求 ts > to 永远查不到（点刷新
+// 也没用，重启组件重建才好）。每次刷新前先推进 nowTick，让区间跟着当下时刻走。
+const nowTick = ref(Date.now());
 
 function dayStart(ts: number): number {
   const d = new Date(ts);
@@ -40,9 +44,9 @@ function dateInput(ts: number): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
-/** 当前生效区间（毫秒闭区间）：档位或自定义日期变化时自动重算 */
+/** 当前生效区间（毫秒闭区间）：档位、自定义日期或时间锚变化时自动重算 */
 const range = computed<{ from: number; to: number }>(() => {
-  const now = Date.now();
+  const now = nowTick.value;
   if (preset.value === "custom") {
     const c = customRange.value;
     if (c && c[0] && c[1]) {
@@ -159,6 +163,7 @@ async function loadDetail() {
 }
 
 async function reload() {
+  nowTick.value = Date.now(); // 先推进时间锚再取数：手动刷新要看到「此刻」为止的数据
   await Promise.all([refresh(), loadDetail()]);
 }
 
@@ -224,11 +229,15 @@ async function doCleanup() {
 /** 本页是否处于前台：页面经 v-show 保活，事件刷新只在激活时跑，切走即停 */
 const active = computed(() => app.activeModule === "proxy" && app.activePage === "stats");
 
-// 事件合流：概览 + 明细一起拉，1s 窗口合并防重入
-const scheduleRefresh = coalesceAsync(() => Promise.all([refresh(), loadDetail()]), 1000);
+// 事件合流：概览 + 明细一起拉，1s 窗口合并防重入；先推进时间锚，让 range 拿到当下区间
+const scheduleRefresh = coalesceAsync(() => {
+  nowTick.value = Date.now();
+  return Promise.all([refresh(), loadDetail()]);
+}, 1000);
 
-// 区间变化：回到第 1 页并整体重拉
-watch(range, () => {
+// 档位/自定义日期变化：回到第 1 页并整体重拉。监听源头而不是 range 本身——
+// nowTick 推进也会重算 range，若 watch(range) 会造成「刷新→重算→再刷新」的循环
+watch([preset, customRange], () => {
   page.value = 1;
   scheduleRefresh();
 });
