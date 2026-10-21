@@ -4,6 +4,10 @@
 
 # AgentHub —— Agent 中控台
 
+<p align="center">
+  <a href="./README.md">简体中文</a> · <a href="./README.en.md">English</a>
+</p>
+
 > 把「技能、用量、额度、记忆」四件事收进一个 Windows 桌面应用。
 
 AgentHub 是本地运行的中控台（Electron + Vue 3 + TypeScript），自身不带模型，只把你散在各家 AI 编程工具里的东西管起来：Skill 重复安装、这个月 token 花在哪儿、订阅额度能不能给别的客户端用、Agent 记不住项目。这四件事对应下面四个板块。
@@ -16,6 +20,16 @@ AgentHub 是本地运行的中控台（Electron + Vue 3 + TypeScript），自身
 | **用量统计** | 汇总 21 个数据源的 token 用量与费用，按天 / 项目 / 模型看趋势 | 想知道这个月到底烧了多少的人 |
 | **反代网关** | 把本机已登录的订阅额度包成标准 API，任何客户端都能调 | 手里有订阅额度（Trae / WorkBuddy / 小浣熊 / 魔搭 / ZCode / Qoder / Cline 等 14 个渠道）、想让别的软件也用上的人 |
 | **记忆中枢** | 本地 Markdown 记忆库 + MCP 服务，让 Agent 记住项目和偏好 | 不想每次开新会话都重新交代背景的人 |
+
+---
+
+## 社区和支持
+
+- **QQ 群**：`110336924`（QQ 里搜群号即可加入）——使用答疑与问题反馈都在这里
+- **赞赏**：项目完全免费、开源，如果它帮你省下了 Token，欢迎[扫码请作者喝瓶快乐水](./SPONSOR.md)
+- **商务合作**：赞助、README 产品露出、定制开发（ERP、可视化大屏、微信小程序等），[加群联系作者](./SPONSOR.md)
+
+完整说明见 [SPONSOR.md](./SPONSOR.md)。
 
 ---
 
@@ -454,7 +468,7 @@ src/                 渲染层（Vue 3）
   components/        公共组件（侧栏 / 页签 / 配置中心）
 ```
 
-反代网关的协议细节参考 TraeWorkAssistant 等项目公开的逆向事实，代码独立实现。
+反代网关的协议细节来自对官方客户端的逆向分析，代码独立实现。
 
 ---
 
@@ -516,7 +530,7 @@ src/                 渲染层（Vue 3）
 
 ## 作者
 
-**沐辉**（GitHub: [@HUIdada1](https://github.com/HUIdada1)）
+**沐晖**（GitHub: [@HUIdada1](https://github.com/HUIdada1)）
 
 ## License
 
@@ -531,4 +545,4 @@ src/                 渲染层（Vue 3）
 
 商业场景使用须事先联系作者另行取得书面授权。完整条款（含 MIT 全文）见 [LICENSE](./LICENSE)。
 
-Copyright (c) 2026 沐辉 (HUIdada1)
+Copyright (c) 2026 沐晖 (HUIdada1)
