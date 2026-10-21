@@ -117,8 +117,10 @@ function pickAccount(channel, strategy, excludeIds, maxInFlight) {
       continue;
     }
     if (a.expiresAt > 0 && a.expiresAt <= now) {
-      // ② 余额已到期：标记失效（靠额度刷新复活），自动切换下一账号
-      store.updateAccount(a.id, { status: "exhausted", coolUntil: 0, coolReason: "余额已到期，已自动切换" });
+      // ② 余额已到期：标记失效（靠额度刷新复活），自动切换下一账号。
+      // coolUntil 不能写 0：effectiveStatus 的派生复活判据要求 cool_until 非 0，写 0 会让
+      // 这类 exhausted 永远失去「次日 04:00 复活」兜底，只剩余额刷新一条独木桥（#152）
+      store.updateAccount(a.id, { status: "exhausted", coolUntil: nextDay4AM(), coolReason: "余额已到期，已自动切换" });
       continue;
     }
     candidates.push(a);

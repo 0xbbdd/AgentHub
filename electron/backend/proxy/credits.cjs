@@ -99,7 +99,11 @@ async function refreshAccount(id) {
   // 剩余 = Σ未过期包剩余，最近到期 = min(剩余>0 且未过期 的包到期)。返回里没有 packages 的渠道
   // （上游接口就不拆包）走原口径，账号级聚合值不受影响。
   let credits = r.credits;
-  let expiresAt = r.expiresAt || 0;
+  // adapter 明确返回的 expiresAt（含 0 = 无到期/长期有效）要信；只有字段缺省（undefined/null）
+  // 才沿用库里旧值。0 被 || 当成缺省会把旧到期时间永久回填——AutoClaw 积分无到期、接口恒回 0，
+  // 登录写入的 token 有效期（约 24h）因此清不掉，被 pickAccount 判「余额已到期」锁死（#152）
+  const hasExpiry = r.expiresAt !== undefined && r.expiresAt !== null;
+  let expiresAt = hasExpiry ? (Number(r.expiresAt) || 0) : 0;
   // 派生成功就整体信派生值：expiresAt=0 是「长期/没有在用到期」，不得回填旧账号级到期——
   // 否则混合包场景（有限包过期 + 不限量包）下，pickAccount 的「余额已到期」会把不限量号
   // 永久标死，跟下面的复活判据打乒乓。回填只属于无包集的原口径（adapter 没给就沿用旧值）。
@@ -128,7 +132,7 @@ async function refreshAccount(id) {
   store.updateAccount(acc.id, {
     credits,
     creditsAt: Date.now(),
-    expiresAt: fromPackages ? expiresAt : expiresAt || cur.expires_at,
+    expiresAt: fromPackages ? expiresAt : hasExpiry ? expiresAt : cur.expires_at,
     ...(revive ? { status: "online", coolUntil: 0, coolReason: "" } : {}),
   });
   store.snapshotCredits(acc.channel, acc.id, credits, expiresAt || 0);
