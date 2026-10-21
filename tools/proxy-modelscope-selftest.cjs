@@ -144,7 +144,7 @@ async function T(name, fn) {
   // ===== T7 配置键齐备 =====
   await T("T7 rules 配置键齐备（魔粒控制面 + 任务规则键 + 安全阀）", () => {
     const c = rules.get("headers.json").modelscope;
-    for (const k of ["chatUrl", "modelsUrl", "apiBase", "balancePath", "earnRulesPath", "transactionsPath", "mcpServersPath", "starPathPrefix", "ruleDailyActive", "ruleAliyunBind", "ruleLike", "likeHardCap"]) {
+    for (const k of ["chatUrl", "modelsUrl", "apiBase", "balancePath", "earnRulesPath", "transactionsPath", "mcpServersPath", "starPathPrefix", "ruleDailyActive", "ruleAliyunBind", "ruleLike", "likeHardCap", "mcpMaxScanPages"]) {
       assert.ok(c[k] !== undefined && c[k] !== "", `配置缺 ${k}`);
     }
     assert.strictEqual(c.ruleDailyActive, "daily_active");
@@ -179,6 +179,12 @@ async function T(name, fn) {
   await T("T9 checkin 幂等：按 today_used/today_remain 计算剩余额度", () => {
     const body = fnBody("async checkin(account, secrets) {", "async fetchLikeTargets");
     assert.ok(body.length > 0, "应能定位 checkin 函数体");
+    assert.ok(/const progressed = confirmedLikes > 0 \|\| \(likeUsedAfter > used\) \|\| \(gained > 0\)/.test(body), "社区动作成功不能冒充魔粒入账，必须由发放记录、规则计数或余额确认");
+    assert.ok(/ok: progressed \|\| remain === 0/.test(body), "未到账且仍有剩余任务时必须如实返回失败");
+    assert.ok(/fetchLikeTargetsResult/.test(body), "空目标与目标查询失败必须使用可诊断结果区分");
+    assert.ok(/fetchEarnTransactions/.test(body), "应读取官网同款 EARN 发放记录作为到账凭据");
+    assert.ok(/waitMagicubeReward/.test(body), "每次社区互动后必须轮询规则、余额和发放记录");
+    assert.ok(/已停止继续操作/.test(body), "首个未确认奖励的互动后必须停止，避免批量制造无奖励星标");
     assert.ok(/today_used/.test(body), "checkin 应读 today_used");
     assert.ok(/remain/.test(body), "checkin 应算剩余额度");
     assert.ok(/likeHardCap/.test(body), "checkin 应受安全阀约束");
@@ -379,6 +385,8 @@ async function T(name, fn) {
     assert.ok(/starHeaders/.test(likeFn), "点赞应用 starHeaders（Cookie 优先）");
     assert.ok(/starHeaders/.test(tgtFn), "列目标应用 starHeaders");
     assert.ok(!/this\.apiHeaders/.test(likeFn), "点赞不得再用 apiHeaders（OAuth 令牌会被上游 401）");
+    assert.ok(/TotalCount/.test(tgtFn), "目标列表必须按 Data.McpServer.TotalCount 动态翻页，不能硬编码前三页");
+    assert.ok(/mcpMaxScanPages/.test(tgtFn), "动态翻页必须保留最大扫描页数安全阀");
 
     // ② 日活必须靠 webTouch 触碰 Web 页面 + login/info（Bearer 不计日活）
     assert.ok(/async webTouch/.test(body), "应实现 webTouch");
