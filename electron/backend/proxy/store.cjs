@@ -1,3 +1,13 @@
+/**
+ * ============================================================
+ *  作者：沐晖
+ *  日期：2026-10-21
+ *  版权声明：本代码归沐晖所有。
+ *    · 禁止滥用本人代码（含用于违法违规、恶意攻击、侵犯他人权益等用途）；
+ *    · 禁止在未经本人授权的情况下直接搬运本代码（含复制、转载、用于商业项目）。
+ *    此注释为版权与授权声明，禁止删除。
+ * ============================================================
+ */
 // 反代网关 · 存储层：SQLite（WAL）+ DPAPI 加密凭据
 // 表结构：keys / agents / accounts / credits_history / usage_requests
 // 驱动优先 better-sqlite3（方案选型），ABI 不匹配等加载失败时回退 Node 22 内置 node:sqlite（接口对齐）
@@ -191,6 +201,18 @@ const CHANNELS = [
   // 桌面导入时哪边登录了就是哪边的账号，靠用户选对目标渠道（与 Qoder 双区同口径）。
   { id: "autoclaw", display: "AutoClaw 国内版", domain: "autoglm-acceleration-api.zhipuai.cn" },
   ...(AUTOCLAW_INTL_ENABLED ? [{ id: "autoclaw_intl", display: "AutoClaw 国际版", domain: "autoglm-api.autoglm.ai" }] : []),
+  // Accio（阿里）双区：国际版 / 国内版是**同一个网关**（phoenix-gw.alibaba.com），差别只在
+  // x-package-region 头与登录站点（www.accio.com / www.accio-ai.com），账号与额度两区独立。
+  // 上游不是 OpenAI 协议而是阿里 ADK 的 Gemini 风格信封，走会话式转发（stateful）。
+  // 成本档暂不标注（套餐口径未实测）。
+  { id: "accio", display: "Accio", domain: "phoenix-gw.alibaba.com" },
+  { id: "accio_cn", display: "Accio 国内版", domain: "phoenix-gw.alibaba.com" },
+  // CodeArts（华为云 AI 代码助手 / snap-access）：SDK-HMAC-SHA256 签名 + DPoP + 有状态会话
+  // （每账号 3 路并发），临时凭据到期前 15 分钟续，走会话式转发（stateful）。无地区分叉。
+  { id: "codearts", display: "CodeArts（华为云）", domain: "snap-access.cn-north-4.myhuaweicloud.com" },
+  // Loomy（讯飞）：无状态 OpenAI 兼容，HMAC-SHA1 签名（账号域），手机验证码登录，每日签到
+  // 刷赠送积分。无地区分叉。
+  { id: "loomy", display: "Loomy（讯飞）", domain: "loomyad.xunfei.cn", costTier: "low" },
 ];
 
 // 内置渠道 id 的只读名单：凡是「这一行是不是提供商」的判定都走它，而不是看 kind 列——

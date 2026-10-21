@@ -64,6 +64,10 @@ jobs:
           run_sbx tools/proxy-cost-route-selftest.cjs
           run_sbx tools/proxy-empty-pool-route-selftest.cjs
           run_sbx tools/proxy-stats-rename-selftest.cjs
+          # 新渠道（Accio 双区 / CodeArts / Loomy）纯函数自测：签名向量、协议翻译、SSE 首帧预读与流内错误
+          run_sbx tools/proxy-channels-selftest.cjs
+          # 号池页渠道切换的源码契约（收起/展开形态、图标单一来源、定高与横向滚动约束）
+          run_sbx tools/proxy-agents-switch-selftest.cjs
 
   docker:
     runs-on: ubuntu-latest

@@ -1,3 +1,13 @@
+<!--
+  ============================================================
+   作者：沐晖
+   日期：2026-10-22
+   版权声明：本代码归沐晖所有。
+     · 禁止滥用本人代码（含用于违法违规、恶意攻击、侵犯他人权益等用途）；
+     · 禁止在未经本人授权的情况下直接搬运本代码（含复制、转载、用于商业项目）。
+     此注释为版权与授权声明，禁止删除。
+  ============================================================
+-->
 <!-- 上游启闭弹窗（渠道级开关）：各渠道图标 + 名称 + 启用开关
      开关 = 该渠道在反代网关中是否启用与可见：关闭后反代网关全部页面动态隐藏该渠道
      （卡片/下拉/调用等一律不存在），重新打开立即恢复。
@@ -8,40 +18,12 @@ import { ref, watch } from "vue";
 import * as api from "../api/ipc";
 import type { ProxyChannelView } from "../types";
 import { channelName } from "../views/proxy/format";
-import traeIcon from "../assets/channels/trae.png";
-import workbuddyIcon from "../assets/channels/workbuddy.png";
-import raccoonIcon from "../assets/channels/raccoon.png";
-import qoderIcon from "../assets/channels/qoder.png";
-import zcodeIcon from "../assets/channels/zcode.png";
-// CatPaw 无官方客户端图标可提取，为自绘（tools/gen-catpaw-icon.cjs 生成，可复现）
-import catpawIcon from "../assets/channels/catpaw.png";
-// AutoClaw 双区共用爪印图形，地区角标区分（tools/gen-autoclaw-icon.cjs 生成，可复现）
-import autoclawIcon from "../assets/channels/autoclaw.png";
-import autoclawIntlIcon from "../assets/channels/autoclaw_intl.png";
-// Cline 双池共用「终端窗」图形，池角标区分（tools/gen-cline-icon.cjs 生成，可复现）
-import clineFreeIcon from "../assets/channels/cline_free.png";
-import clinePassIcon from "../assets/channels/cline_pass.png";
+// 渠道图标与首字母徽章统一从 channelIcons 取：号池页顶部切换条也用同一份，
+// 免得两处各存一张映射表、新渠道只补了一边
+import { CHANNEL_ICONS, channelInitial as initial } from "../views/proxy/channelIcons";
 
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<{ (e: "close"): void }>();
-
-// 渠道图标（取自各客户端安装目录内嵌的同一张图，与系统里显示的为一致；
-// 没收录图标的渠道回落首字母徽章）
-const CHANNEL_ICONS: Record<string, string> = {
-  trae: traeIcon,
-  workbuddy: workbuddyIcon,
-  workbuddy_ai: workbuddyIcon,
-  raccoon: raccoonIcon,
-  qoder: qoderIcon,
-  qoder_intl: qoderIcon,
-  zcode: zcodeIcon,
-  catpaw: catpawIcon,
-  autoclaw: autoclawIcon,
-  autoclaw_intl: autoclawIntlIcon,
-  cline_free: clineFreeIcon,
-  cline_pass: clinePassIcon,
-};
-const initial = (id: string) => (channelName(id) || id || "?").trim().slice(0, 1).toUpperCase() || "?";
 
 const rows = ref<ProxyChannelView[]>([]);
 const loading = ref(false);
@@ -125,7 +107,7 @@ async function toggle(row: ProxyChannelView, next: boolean) {
           <div v-for="row in rows" :key="row.id" class="up-row">
             <span class="up-icon has-icon" :class="{ off: row.enabled === false }">
               <img v-if="CHANNEL_ICONS[row.id]" :src="CHANNEL_ICONS[row.id]" alt="" loading="lazy" />
-              <b v-else>{{ initial(row.id) }}</b>
+              <b v-else>{{ initial(row.id, row.display) }}</b>
             </span>
             <div class="up-info">
               <div class="up-name">{{ row.display || channelName(row.id) }}</div>

@@ -1,3 +1,13 @@
+/**
+ * ============================================================
+ *  作者：沐晖
+ *  日期：2026-10-21
+ *  版权声明：本代码归沐晖所有。
+ *    · 禁止滥用本人代码（含用于违法违规、恶意攻击、侵犯他人权益等用途）；
+ *    · 禁止在未经本人授权的情况下直接搬运本代码（含复制、转载、用于商业项目）。
+ *    此注释为版权与授权声明，禁止删除。
+ * ============================================================
+ */
 // 反代网关 · 编排层：模块装配 + IPC 命令注册（对应前端 src/views/proxy/* 与 src/api/ipc.ts）
 // 设置统一存框架整体配置 config.json 的 proxy 段（config.cjs 默认值深合并），每次读取走磁盘 = 热生效；
 // 端口属例外：改端口由 proxy_restart 同进程 stop→listen 秒级完成（第②层）
@@ -1093,6 +1103,30 @@ function register(ipcMain) {
     const login = require("./autoclaw/login.cjs");
     const r = await login.oauthCaptchaConfig({ cfg: (rules.get("headers.json") || {})[ch] || {}, httpJson: adapters.httpJson });
     return r.ok ? ok(r) : fail(r.message);
+  }));
+  // ===== Loomy（讯飞）登录辅助：手机验证码两跳（账号域 HMAC-SHA1 签名，见 loomy/login.cjs）=====
+  ipcMain.handle("proxy_loomy_sms_send", handle(async ({ phone }) => {
+    if (!adapters.get("loomy")) return fail("未知渠道 loomy");
+    try {
+      const r = await discovery.loomySendCode(phone);
+      oplog.log("info", "Loomy 发码", `验证码已发送（${r.phoneTail || ""}）`, { channel: "loomy" });
+      return ok(r);
+    } catch (e) {
+      return fail(String((e && e.message) || e));
+    }
+  }));
+  ipcMain.handle("proxy_loomy_sms_login", handle(async ({ phone, code, msgid }) => {
+    if (!adapters.get("loomy")) return fail("未知渠道 loomy");
+    try {
+      const saved = await discovery.loomyLoginWithCode(phone, code, msgid);
+      credits.refreshAccount(saved.id).catch(() => {});
+      checkinBatch({ accountId: saved.id, action: "checkin" }).catch(() => {});
+      oplog.log("info", "Loomy 登录", "短信登录成功", { channel: "loomy" });
+      events.emit({ type: "oauth-done", channel: "loomy", ok: true, id: saved.id, uid: saved.uid });
+      return ok({ id: saved.id, uid: saved.uid });
+    } catch (e) {
+      return fail(String((e && e.message) || e));
+    }
   }));
   // 浏览器没跳回回环地址时的兜底：把地址栏内容整段粘回来完成登录
   ipcMain.handle("proxy_oauth_submit_callback", handle(async ({ channel, url }) => {

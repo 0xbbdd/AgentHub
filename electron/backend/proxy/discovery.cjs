@@ -1,3 +1,13 @@
+/**
+ * ============================================================
+ *  作者：沐晖
+ *  日期：2026-10-21
+ *  版权声明：本代码归沐晖所有。
+ *    · 禁止滥用本人代码（含用于违法违规、恶意攻击、侵犯他人权益等用途）；
+ *    · 禁止在未经本人授权的情况下直接搬运本代码（含复制、转载、用于商业项目）。
+ *    此注释为版权与授权声明，禁止删除。
+ * ============================================================
+ */
 // 反代网关 · 凭据接入：本机软件导入（首选）→ OAuth 登录（兜底）→ 手动粘贴
 //
 // 三条渠道各自独立的登录方式（官方客户端实证口径）：
@@ -3247,6 +3257,10 @@ async function beginOAuth(channel, onDone, helpers, opts) {
   if (ch === "qoder" || ch === "qoder_intl") return beginQoderOAuth(ch, onDone);
   // Cline 双池：WorkOS 设备授权（显示用户码 + 浏览器确认，无本地回调端口，少一处失败面）
   if (ch === "cline_free" || ch === "cline_pass") return beginClineOAuth(ch, onDone);
+  // Accio 双区：OAuth 2.0 授权码 + PKCE（S256），回环回调（见 beginAccioOAuth）
+  if (ch === "accio" || ch === "accio_cn") return beginAccioOAuth(ch, onDone);
+  // CodeArts：OAuth + PKCE（SHA-256）+ DPoP，回环回调（见 beginCodeArtsOAuth）
+  if (ch === "codearts") return beginCodeArtsOAuth(ch, onDone);
   // AutoClaw 国际版：前端先跑完阿里云滑块（captchaVerifyParam 经 IPC 传入）再进本流程
   if (ch === "autoclaw_intl") return beginAutoClawOauth(ch, onDone, opts);
   // AutoClaw 国内版：官方主登录是手机验证码（IPC 两跳直调，不走 oauthSession）；
@@ -3324,6 +3338,340 @@ function cancelOAuth() {
   return true;
 }
 
+// ===== Accio 双区：OAuth 2.0 授权码 + PKCE（S256），回环回调 =====
+//
+// 授权页在 {loginBase}/login（国际版 www.accio.com / 国内版 www.accio-ai.com），回调把
+// ?code=…&state=… 拼到 return_url 跳回本机 loopback。state + code_verifier 双闸在 accio/oauth.cjs
+// 的 pending 表（内存态、不落盘）。token 不走 Authorization 头（Accio 特有）。
+
+// 回调路径由发起方随授权请求带上（登录页只把 code/state 拼回来），故可用别家不会撞的名字
+const ACCIO_CALLBACK_PATH = "/auth/callback-accio";
+
+/** 落库：同渠道同 uid 已存在则更新凭据；uid 缺失时退回凭证指纹，保证同一串凭证重复添加命中同一条 */
+function saveAccioAccount(channel, ex) {
+  const token = String(ex.token || "").trim();
+  if (!token) return { ok: false, message: "登录结果缺少 accessToken" };
+  const uid = String(ex.uid || "").trim() || crypto.createHash("sha256").update(token).digest("hex").slice(0, 16);
+  const name = String(ex.name || `Accio ${String(uid).slice(-6)}`).trim();
+  const meta = { edition: ex.edition || (channel === "accio_cn" ? "cn" : "intl") };
+  const existing = store.listAccounts(channel).find((a) => a.uid === uid);
+  if (existing) {
+    store.updateAccount(existing.id, {
+      token,
+      refreshToken: ex.refreshToken || "",
+      expiresAt: ex.expiresAt || 0,
+      status: "online",
+      coolUntil: 0,
+      coolReason: "",
+      meta: { ...(existing.meta || {}), ...meta },
+    });
+    return { ok: true, id: existing.id, uid };
+  }
+  const id = store.addAccount({
+    channel,
+    uid,
+    name,
+    token,
+    refreshToken: ex.refreshToken || "",
+    source: "oauth",
+    expiresAt: ex.expiresAt || 0,
+    meta,
+  });
+  return { ok: true, id, uid };
+}
+
+async function beginAccioOAuth(channel, onDone) {
+  const accioAdapter = adapters.get(channel);
+  if (!accioAdapter || typeof accioAdapter.beginOAuth !== "function") {
+    return { ok: false, message: `渠道 ${channel} 未实现 OAuth 登录` };
+  }
+  // 浏览器回调与「手动粘贴回调地址」两条入口共用这一步：换码 + 落库
+  const settle = async (input) => {
+    const r = await accioAdapter.submitCallbackUrl(input);
+    const saved = saveAccioAccount(channel, r);
+    if (!saved.ok) return { ok: false, message: saved.message };
+    return { ok: true, id: saved.id, uid: saved.uid };
+  };
+  const server = http.createServer((req, res) => {
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    const u = new URL(req.url || "/", "http://127.0.0.1");
+    if (u.pathname !== ACCIO_CALLBACK_PATH) {
+      res.statusCode = 404;
+      res.end("not found");
+      return;
+    }
+    const errParam = u.searchParams.get("error") || u.searchParams.get("error_code");
+    if (errParam) {
+      const msg = `授权被拒绝（${errParam}）`;
+      endPageThenFinish(res, 400, ERR_PAGE(`登录失败：${msg}`), { ok: false, message: msg });
+      return;
+    }
+    // 授权页在用户登录前会空参探测回调地址可达性：回挂起页继续等，按失败收尾会把这一轮登录提前作废
+    if (!u.searchParams.get("code")) {
+      res.end(PENDING_PAGE);
+      return;
+    }
+    settle(u.toString())
+      .then((r) => {
+        if (!r.ok) return endPageThenFinish(res, 200, ERR_PAGE(`登录失败：${r.message}`), r);
+        endPageThenFinish(res, 200, OK_PAGE("登录成功，已加入 Accio 号池，可关闭本页"), r);
+      })
+      .catch((e) => {
+        const msg = String((e && e.message) || e);
+        endPageThenFinish(res, 200, ERR_PAGE(`登录失败：${msg}`), { ok: false, message: msg });
+      });
+  });
+  let port;
+  try {
+    port = await listenLoopback(server);
+  } catch (e) {
+    return { ok: false, message: `回环端口监听失败：${(e && e.message) || e}` };
+  }
+  // redirectUri 必须与授权时逐字相同（oauth.cjs 跟着 pending 原样回传）
+  const returnUrl = `http://127.0.0.1:${port}${ACCIO_CALLBACK_PATH}`;
+  const begun = accioAdapter.beginOAuth(returnUrl); // { authUrl, state }
+  oauthSession = {
+    mode: "loopback",
+    channel,
+    state: begun.state,
+    server,
+    onDone,
+    timer: setTimeout(() => finishOAuth({ ok: false, message: "登录超时（6 分钟），请重新发起" }), 6 * 60 * 1000),
+    submit: async (input) => {
+      try {
+        return await settle(input);
+      } catch (e) {
+        return { ok: false, message: String((e && e.message) || e) };
+      }
+    },
+  };
+  return { ok: true, url: begun.authUrl, mode: "loopback" };
+}
+
+// ===== CodeArts：OAuth + PKCE（SHA-256）+ DPoP，回环回调 =====
+//
+// 与 Accio 同构（都走 listenLoopback + 回环回调），差别在：授权页是 portal 拼的
+// 127.0.0.1:<port>/oauth/callback（路径我们不能改）；challenge 方法名是 SHA-256（不是 S256）；
+// 换码与续期都要 DPoP proof + 当初登录的 code_verifier + DPoP 私钥（凭据是一整块）。
+
+// portal 的两次回调：第一趟只带 secret + redirect（要求 307 跳到它给的地址，不跳就没有第二趟），
+// 第二趟才带 code；路径与参数名都由它定（路径见 codearts/oauth.cjs 的 CALLBACK_PATH）。
+
+/** 回调要求的跳转目的地来自免鉴权路由的查询参数：不校验等于把网关做成开放重定向
+ *  （还挂着华为云登录这一跳的品牌信任）。按解析后的 host 判定，字符串前缀能被
+ *  `huaweicloud.com.evil.tld` 这类写法骗过。 */
+function trustedCodeArtsRedirect(raw) {
+  try {
+    const u = new URL(String(raw || ""));
+    if (u.protocol !== "https:" && u.protocol !== "http:") return false;
+    return /(^|\.)huaweicloud\.com$/i.test(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
+/** 落库：凭据是**一整块**（AK/SK/STS + refresh_token + DPoP 私钥与 PKCE verifier），
+ *  少一半就续不回来。store 只有 token/refreshToken 两个加密列，故整块 JSON 走 token 列
+ *  （与 zcode 同款处置：列本身由 store 加密落盘），refresh_token 另存 refresh 列，
+ *  供号池同步按通用键搬运。 */
+function saveCodeArtsAccount(cred, context) {
+  const accessKeyId = String((cred && cred.accessKeyId) || "").trim();
+  if (!accessKeyId) return { ok: false, message: "登录结果缺少 accessKeyId" };
+  const domainId = String((cred && cred.domainId) || "").trim();
+  const userId = String((cred && cred.userId) || "").trim();
+  const uid = domainId && userId ? `${domainId}:${userId}` : crypto.createHash("sha256").update(accessKeyId).digest("hex").slice(0, 16);
+  const name = String((cred && cred.userName) || `CodeArts ${String(uid).slice(-6)}`).trim();
+  const refreshToken = String((cred && cred.refreshToken) || "");
+  const expiresAt = Number(cred && cred.expiresAt) || 0;
+  const packed = JSON.stringify({
+    accessKeyId,
+    secretAccessKey: String((cred && cred.secretAccessKey) || ""),
+    securityToken: String((cred && cred.securityToken) || ""),
+    refreshToken,
+    expiresAt,
+    oauthContext: context || null,
+  });
+  const meta = { domainId, userId, userName: String((cred && cred.userName) || ""), loginType: "WEB" };
+  const existing = store.listAccounts("codearts").find((a) => a.uid === uid);
+  if (existing) {
+    store.updateAccount(existing.id, {
+      token: packed,
+      refreshToken,
+      expiresAt,
+      status: "online",
+      coolUntil: 0,
+      coolReason: "",
+      meta: { ...(existing.meta || {}), ...meta },
+    });
+    return { ok: true, id: existing.id, uid };
+  }
+  const id = store.addAccount({
+    channel: "codearts",
+    uid,
+    name,
+    token: packed,
+    refreshToken,
+    source: "oauth",
+    expiresAt,
+    meta,
+  });
+  return { ok: true, id, uid };
+}
+
+async function beginCodeArtsOAuth(channel, onDone) {
+  const codeartsDpop = require("./codearts/dpop.cjs");
+  const codeartsOauth = require("./codearts/oauth.cjs");
+  // 登录发起时生成 DPoP 密钥对 + PKCE verifier（凭据是一整块，少一半就是死的）
+  const dpopKeyPair = codeartsDpop.generateKeyPair();
+  const codeVerifier = crypto.randomBytes(32).toString("base64url");
+  const codeChallenge = crypto.createHash("sha256").update(codeVerifier).digest("base64url");
+  const state = crypto.randomBytes(16).toString("hex");
+  const context = { dpop_key_pair: dpopKeyPair, code_verifier: codeVerifier };
+
+  // 换码 + 落库：浏览器回调与「手动粘贴回调地址」两条入口共用
+  const settle = async (params) => {
+    const code = String(params.get("code") || "").trim();
+    const gotState = String(params.get("state") || "").trim();
+    if (!code) return { ok: false, message: "回调没有携带授权码" };
+    // portal 实测可能只带回 code、不带任何配对信息；同时只允许一轮登录在进行，
+    // 故 state 缺省时按当前这一轮换码，带了就必须逐字对上（否则是别人的回调打进来）
+    if (gotState && gotState !== state) return { ok: false, message: "state 校验不通过（非本应用发起的授权回调）" };
+    const cred = await codeartsOauth.exchangeAuthorizationCode(code, redirectUri, context);
+    const saved = saveCodeArtsAccount(
+      {
+        accessKeyId: cred.access_key_id,
+        secretAccessKey: cred.secret_access_key,
+        securityToken: cred.security_token,
+        refreshToken: cred.refresh_token,
+        expiresAt: Date.parse(cred.expires_at) || 0,
+        domainId: cred.domain_id || "",
+        userId: cred.user_id || "",
+        userName: cred.user_name || "",
+      },
+      context,
+    );
+    if (!saved.ok) return { ok: false, message: saved.message };
+    return { ok: true, id: saved.id, uid: saved.uid };
+  };
+
+  const server = http.createServer((req, res) => {
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    const u = new URL(req.url || "/", "http://127.0.0.1");
+    if (u.pathname !== codeartsOauth.CALLBACK_PATH) {
+      res.statusCode = 404;
+      res.end("not found");
+      return;
+    }
+    const handle = (params) => {
+      // 第一趟：portal 只带 secret + redirect，要求原样跳出去——不跳，链路停在半路，永远等不到 code
+      if (!params.get("code") && params.get("secret")) {
+        const redirect = String(params.get("redirect") || "").trim();
+        if (!redirect) {
+          res.statusCode = 400;
+          res.end(ERR_PAGE("登录失败：请把浏览器地址栏里那条回调地址（带 code）整段粘贴回应用"));
+          return;
+        }
+        if (!trustedCodeArtsRedirect(redirect)) {
+          res.statusCode = 400;
+          res.end(ERR_PAGE("登录失败：回调要求跳转的地址不是华为云站点，已拒绝"));
+          return;
+        }
+        res.statusCode = 307;
+        res.setHeader("Location", redirect);
+        res.end();
+        return;
+      }
+      settle(params)
+        .then((r) => {
+          if (!r.ok) return endPageThenFinish(res, 200, ERR_PAGE(`登录失败：${r.message}`), r);
+          endPageThenFinish(res, 200, OK_PAGE("登录成功，已加入 CodeArts 号池，可关闭本页"), r);
+        })
+        .catch((e) => {
+          const msg = String((e && e.message) || e);
+          endPageThenFinish(res, 200, ERR_PAGE(`登录失败：${msg}`), { ok: false, message: msg });
+        });
+    };
+    if (req.method === "POST") {
+      // 某些链路上游把 code 放在表单体里送回来，只收 GET 会在那种链路上永远等不到码
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+        if (body.length > 64 * 1024) req.destroy();
+      });
+      req.on("end", () => {
+        let params = new URLSearchParams(body);
+        if (![...params.keys()].length) {
+          const query = body.split("?")[1];
+          if (query) params = new URLSearchParams(query);
+        }
+        handle(params);
+      });
+      return;
+    }
+    handle(u.searchParams);
+  });
+  let port;
+  try {
+    port = await listenLoopback(server);
+  } catch (e) {
+    return { ok: false, message: `回环端口监听失败：${(e && e.message) || e}` };
+  }
+  const redirectUri = `http://127.0.0.1:${port}${codeartsOauth.CALLBACK_PATH}`;
+  const authUrl = codeartsOauth.buildAuthorizeUrl(port, state, codeChallenge);
+  oauthSession = {
+    mode: "loopback",
+    channel,
+    state,
+    server,
+    onDone,
+    timer: setTimeout(() => finishOAuth({ ok: false, message: "登录超时（10 分钟），请重新发起" }), 10 * 60 * 1000),
+    submit: async (input) => {
+      try {
+        const q = typeof input === "string" ? new URLSearchParams(input.split("?")[1] || "") : new URLSearchParams(input || {});
+        return await settle(q);
+      } catch (e) {
+        return { ok: false, message: String((e && e.message) || e) };
+      }
+    },
+  };
+  return { ok: true, url: authUrl, mode: "loopback" };
+}
+
+// ===== Loomy（讯飞）：手机验证码登录（IPC 两跳直调，不走 oauthSession）=====
+//
+// 发码返回 msgid 由前端随登录请求带回（网关不替用户保存这个中间态）；验码成功拿到 session
+// （14 天、无续期接口）。短信登录不走 oauthSession（与 AutoClaw 国内版同口径）。
+async function loomySendCode(phone) {
+  const loomyLogin = require("./loomy/login.cjs");
+  return loomyLogin.sendCode(phone);
+}
+async function loomyLoginWithCode(phone, code, msgid) {
+  const loomyLogin = require("./loomy/login.cjs");
+  const cred = await loomyLogin.loginWithCode(phone, code, msgid);
+  const existing = store.listAccounts("loomy").find((a) => a.uid === cred.userid);
+  const meta = { phone: cred.phone, phoneTail: cred.phoneTail };
+  if (existing) {
+    store.updateAccount(existing.id, {
+      token: cred.session,
+      status: "online",
+      coolUntil: 0,
+      coolReason: "",
+      meta: { ...(existing.meta || {}), ...meta },
+    });
+    return { ok: true, id: existing.id, uid: cred.userid };
+  }
+  const id = store.addAccount({
+    channel: "loomy",
+    uid: cred.userid,
+    name: `手机 ${cred.phoneTail}`,
+    token: cred.session,
+    source: "oauth",
+    expiresAt: Date.now() + 14 * 24 * 3600 * 1000,
+    meta,
+  });
+  return { ok: true, id, uid: cred.userid };
+}
+
 module.exports = {
   scanAll,
   scanWorkBuddy,
@@ -3346,6 +3694,13 @@ module.exports = {
   saveModelScopeAccount,
   importModelScopeToken,
   cancelOAuth,
+  // Accio 双区：OAuth 登录（begin 由 beginOAuth 分派）+ 落库
+  saveAccioAccount,
+  // CodeArts：OAuth 登录（begin 由 beginOAuth 分派）+ 落库
+  saveCodeArtsAccount,
+  // Loomy（讯飞）：手机验证码登录两跳（IPC 直调，不走 oauthSession）
+  loomySendCode,
+  loomyLoginWithCode,
   bindRaccoonDevice,
   byteCryptoDecrypt,
   validateTraeCallback,

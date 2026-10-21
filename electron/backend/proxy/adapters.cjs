@@ -1,3 +1,13 @@
+/**
+ * ============================================================
+ *  作者：沐晖
+ *  日期：2026-10-21
+ *  版权声明：本代码归沐晖所有。
+ *    · 禁止滥用本人代码（含用于违法违规、恶意攻击、侵犯他人权益等用途）；
+ *    · 禁止在未经本人授权的情况下直接搬运本代码（含复制、转载、用于商业项目）。
+ *    此注释为版权与授权声明，禁止删除。
+ * ============================================================
+ */
 // 反代网关 · 渠道适配器（IR 内核 + 协议事实基线）
 // 进线 OpenAI body → 归一 → 渠道改写 → 上游 fetch → SSE 事件流转换 → 统一 OpenAI 输出
 // 三渠道（trae / workbuddy / workbuddy_ai）差异收敛为「配置（rules/headers.json）+ 改写函数」，
@@ -4830,6 +4840,29 @@ const { makeCline } = require("./cline/adapter.cjs");
 const clineDeps = { fetchStream, pumpSse, httpJson, rules, util, firstByteBudgetMs };
 ADAPTERS.cline_free = makeCline("cline_free", clineDeps);
 ADAPTERS.cline_pass = makeCline("cline_pass", clineDeps);
+
+// ===== Loomy（讯飞）=====
+// 无状态 OpenAI 兼容上游（模型网关 /api/v1/chat/completions），鉴权双头 token + Bearer。
+// HMAC-SHA1 签名只在账号域（短信登录用），转发链不用签名。短信登录见 loomy/login.cjs。
+const { makeLoomy } = require("./loomy/adapter.cjs");
+const loomyDeps = { fetchStream, pumpSse, httpJson, rules, util, firstByteBudgetMs };
+ADAPTERS.loomy = makeLoomy(loomyDeps);
+
+// ===== Accio 双区（accio 国际版 / accio_cn 国内版）=====
+// 同套实现按渠道参数化（与 qoder/autoclaw 双区同款手法）：上游是阿里 ADK 的 Gemini 风格信封
+// （非 OpenAI 协议），声明 stateful 走会话式转发 chatSession。两地同网关，差别只在
+// x-package-region 头与登录站点（见 accio/endpoints.cjs）。登录走 OAuth + PKCE（S256）。
+const { makeAccio } = require("./accio/adapter.cjs");
+const accioDeps = { fetchStream, pumpSse, httpJson, rules, util, firstByteBudgetMs };
+ADAPTERS.accio = makeAccio("accio", accioDeps);
+ADAPTERS.accio_cn = makeAccio("accio_cn", accioDeps);
+
+// ===== CodeArts（华为云 AI 代码助手 / snap-access）=====
+// SDK-HMAC-SHA256 签名 + DPoP + 有状态会话（每账号 3 路并发），临时凭据到期前 15 分钟续。
+// 声明 stateful 走会话式转发 chatSession；登录走 OAuth + PKCE（SHA-256）+ DPoP（见 codearts/oauth.cjs）。
+const { makeCodeArts } = require("./codearts/adapter.cjs");
+const codeartsDeps = { fetchStream, pumpSse, httpJson, rules, util, firstByteBudgetMs, store };
+ADAPTERS.codearts = makeCodeArts(codeartsDeps);
 
 // 启动期契约校验：全员必需方法缺失在 require 阶段即抛错（fail-fast），
 // 人为删掉某个适配器的 chat() 后应用启动即崩在明面上，而不是运行期才 404/TypeError

@@ -1,3 +1,13 @@
+/**
+ * ============================================================
+ *  作者：沐晖
+ *  日期：2026-10-21
+ *  版权声明：本代码归沐晖所有。
+ *    · 禁止滥用本人代码（含用于违法违规、恶意攻击、侵犯他人权益等用途）；
+ *    · 禁止在未经本人授权的情况下直接搬运本代码（含复制、转载、用于商业项目）。
+ *    此注释为版权与授权声明，禁止删除。
+ * ============================================================
+ */
 // 反代网关 · 外置规则热加载（第②层）
 // rules/*.json 首次启动从内置默认值拷贝，用户可直接改文件；chokidar 监听变更即重载内存态，无需重启
 // 坏 JSON 回退上次快照并在面板警示（status 里带 error）
@@ -631,6 +641,37 @@ const DEFAULTS = {
       // Google 变体（国际版第二登录方式；回调端口按 RFC 8252 loopback 宽松匹配，端口任意）
       oauthGoogleUrlPath: "/userapi/overseasv1/google-oauth-url",
       oauthGoogleLoginPath: "/userapi/overseasv1/google-oauth-login",
+    },
+    // Accio 双区（国际版 / 国内版）：同网关，差别只在 x-package-region 与登录站点。
+    // token 不走 Authorization 头（GET 拼 query / POST 放 body / 推理放 body），见 accio/auth.cjs。
+    accio: {
+      gatewayBase: "https://phoenix-gw.alibaba.com",
+      llmBase: "https://phoenix-gw.alibaba.com/api/adk/llm",
+    },
+    accio_cn: {
+      gatewayBase: "https://phoenix-gw.alibaba.com",
+      llmBase: "https://phoenix-gw.alibaba.com/api/adk/llm",
+    },
+    // CodeArts（华为云）：SDK-HMAC-SHA256 签名 + DPoP + 有状态会话（每账号 3 路并发）。
+    // base 域与 token 签发地必须同为 cn-north-4；临时凭据到期前 15 分钟续。见 codearts/。
+    codearts: {
+      base: "https://snap-access.cn-north-4.myhuaweicloud.com",
+      tokenUrl: "https://sts.cn-north-4.myhuaweicloud.com/v1/oauth2/tokens",
+      identityUrl: "https://sts.cn-north-4.myhuaweicloud.com/v5/caller-identity",
+      webLoginBase: "https://codearts.huaweicloud.com",
+      chatPath: "/api/v2/chat/completions",
+      region: "cn-north-4",
+      pluginName: "snap_vscode",
+      pluginVersion: "26.9.101",
+      language: "en-us",
+      sessionConcurrency: 3,
+      refreshMarginMs: 900000,
+    },
+    // Loomy（讯飞）：无状态 OpenAI 兼容，签名只用于账号域（短信登录），转发走 token + Bearer 双头。
+    loomy: {
+      xfyunBase: "https://account.xfinfr.com",
+      integrationBase: "https://loomyad.xunfei.cn",
+      modelBase: "https://loomyad.xunfei.cn/api/v1",
     },
   },
 };

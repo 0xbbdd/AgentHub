@@ -1,3 +1,13 @@
+/**
+ * ============================================================
+ *  作者：沐晖
+ *  日期：2026-10-21
+ *  版权声明：本代码归沐晖所有。
+ *    · 禁止滥用本人代码（含用于违法违规、恶意攻击、侵犯他人权益等用途）；
+ *    · 禁止在未经本人授权的情况下直接搬运本代码（含复制、转载、用于商业项目）。
+ *    此注释为版权与授权声明，禁止删除。
+ * ============================================================
+ */
 // 浏览器 mock：dev:web 纯前端预览用；配置落 localStorage，语义与主进程 config.cjs 对齐
 // 技能仓库命令返回贴真实的样例数据（打包产物走不到这里）；未覆盖的命令返回 null 让页面降级
 import type { AppConfig, UpdateStatus } from "../types";
@@ -385,6 +395,47 @@ const PROXY_POOL = [
     summary: { channel: "cline_pass", totalCredits: 128.75, accountCount: 1, onlineCount: 1, earliestExpire: NOW + 30 * 86400000, expiringSoon: false, todayReq: 15, todayTokens: 46200, lastCreditsAt: ago(6) },
     accounts: [
       { id: "a14", channel: "cline_pass", uid: "usr-01M2VWEDWF", name: "demo@example.com", status: "online", credits: 128.75, creditsAt: ago(6), expiresAt: NOW + 30 * 86400000, coolUntil: 0, coolReason: "", source: "oauth", lastUsed: ago(3), todayReq: 15, todayTokens: 46200, createdAt: NOW - 5 * 86400000, hasToken: true },
+    ],
+  },
+  {
+    // Accio（阿里）双区：额度是「用量百分比」而非积分（credits 存 0-100 的余量百分比），
+    // 国际版演示有订阅、国内版演示免费账号（无订阅）。无签到活动。
+    id: "accio", display: "Accio", domain: "phoenix-gw.alibaba.com", costTier: "", poolStrategy: "expire_first",
+    health: null as { until: number; reason: string; streak: number } | null,
+    checkinAuto: { enabled: false, time: "09:00", jitterMin: 0 },
+    summary: { channel: "accio", totalCredits: 62, accountCount: 1, onlineCount: 1, earliestExpire: 0, expiringSoon: false, todayReq: 18, todayTokens: 40200, lastCreditsAt: ago(2) },
+    accounts: [
+      { id: "a15", channel: "accio", uid: "acc_55001", name: "accio-work 主号", status: "online", credits: 62, creditsAt: ago(2), expiresAt: NOW + 20 * 86400000, coolUntil: 0, coolReason: "", source: "oauth", lastUsed: ago(1), todayReq: 18, todayTokens: 40200, createdAt: NOW - 12 * 86400000, hasToken: true },
+    ],
+  },
+  {
+    id: "accio_cn", display: "Accio 国内版", domain: "phoenix-gw.alibaba.com", costTier: "", poolStrategy: "expire_first",
+    health: null as { until: number; reason: string; streak: number } | null,
+    checkinAuto: { enabled: false, time: "09:00", jitterMin: 0 },
+    summary: { channel: "accio_cn", totalCredits: 35, accountCount: 1, onlineCount: 1, earliestExpire: 0, expiringSoon: false, todayReq: 6, todayTokens: 12800, lastCreditsAt: ago(5) },
+    accounts: [
+      { id: "a16", channel: "accio_cn", uid: "acc_77002", name: "accio 国内号", status: "online", credits: 35, creditsAt: ago(5), expiresAt: 0, coolUntil: 0, coolReason: "", source: "oauth", lastUsed: ago(2), todayReq: 6, todayTokens: 12800, createdAt: NOW - 9 * 86400000, hasToken: true },
+    ],
+  },
+  {
+    // CodeArts（华为云）：临时凭据（AK/SK/STS）1 小时级到期、提前 15 分钟续；福利是独立「领取」入口，
+    // 不进每日签到。演示账号临期（expiringSoon）。
+    id: "codearts", display: "CodeArts（华为云）", domain: "snap-access.cn-north-4.myhuaweicloud.com", costTier: "", poolStrategy: "expire_first",
+    health: null as { until: number; reason: string; streak: number } | null,
+    checkinAuto: { enabled: false, time: "09:00", jitterMin: 0 },
+    summary: { channel: "codearts", totalCredits: 4800, accountCount: 1, onlineCount: 1, earliestExpire: NOW + 14 * 60000, expiringSoon: true, todayReq: 11, todayTokens: 27600, lastCreditsAt: ago(1) },
+    accounts: [
+      { id: "a17", channel: "codearts", uid: "ca_domain:user_88", name: "华为云主账号", status: "online", credits: 4800, creditsAt: ago(1), expiresAt: NOW + 14 * 60000, coolUntil: 0, coolReason: "", source: "oauth", lastUsed: ago(1), todayReq: 11, todayTokens: 27600, createdAt: NOW - 7 * 86400000, hasToken: true },
+    ],
+  },
+  {
+    // Loomy（讯飞）：积分口径（永久 + 每日赠送），每日「签到」= 每日首次登录刷新赠送积分（按天幂等报成功）。
+    id: "loomy", display: "Loomy（讯飞）", domain: "loomyad.xunfei.cn", costTier: "low", poolStrategy: "expire_first",
+    health: null as { until: number; reason: string; streak: number } | null,
+    checkinAuto: { enabled: true, time: "09:00", jitterMin: 0 },
+    summary: { channel: "loomy", totalCredits: 10000, accountCount: 1, onlineCount: 1, earliestExpire: NOW + 6 * 86400000, expiringSoon: false, todayReq: 21, todayTokens: 51800, lastCreditsAt: ago(0) },
+    accounts: [
+      { id: "a18", channel: "loomy", uid: "lm_139****8000", name: "手机 139****8000", status: "online", credits: 10000, creditsAt: ago(0), expiresAt: NOW + 6 * 86400000, coolUntil: 0, coolReason: "", source: "oauth", lastUsed: ago(1), todayReq: 21, todayTokens: 51800, createdAt: NOW - 6 * 86400000, hasToken: true, checkin: { day: TODAY, at: NOW - 1800000, action: "checkin", ok: true, already: false, credit: 5000, message: "每日赠送积分已刷新" } },
     ],
   },
 ];
