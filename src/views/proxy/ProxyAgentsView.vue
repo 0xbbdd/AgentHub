@@ -503,6 +503,21 @@ function checkinTagText(r: ProxyCheckinRow) {
   return "成功";
 }
 
+/** CodeArts 福利：领取前先只读探测今天有什么可领（写请求仍然只有「一键领福利」那条路） */
+const welfareBusy = ref(false);
+async function previewWelfare() {
+  if (welfareBusy.value) return;
+  welfareBusy.value = true;
+  try {
+    const r = await api.proxyCodeartsWelfarePreview();
+    toast(r.message || (r.ok ? "已查询" : "查询失败"), r.ok ? "info" : "err");
+  } catch (e) {
+    toast(String((e as Error).message || e), "err");
+  } finally {
+    welfareBusy.value = false;
+  }
+}
+
 /** 渠道级一键签到（只对当前渠道），跑完弹弹窗逐账号展示、结果只记在该渠道名下 */
 async function runCheckinChannel() {
   if (checkinBusy.value) return;
@@ -1641,6 +1656,10 @@ onUnmounted(() => {
               >
                 {{ checkinBusy ? "签到中…" : channelCheckinDone(ch) ? labelsOf(ch.id).done : labelsOf(ch.id).run }}
               </button>
+            </el-tooltip>
+            <!-- CodeArts 福利：领取前先只读探测可领项（写请求仍走左侧「一键领福利」） -->
+            <el-tooltip v-if="ch.id === 'codearts'" content="只读探测今天有什么可领（不发写请求）；真正领取点左侧「一键领福利」" placement="top">
+              <button class="btn btn-sm" :disabled="welfareBusy" @click="previewWelfare">{{ welfareBusy ? "查询中…" : "查看可领" }}</button>
             </el-tooltip>
             <!-- 自动签到设置（按渠道：每天几点自动执行 + 抖动分钟；开启后按钮点亮） -->
             <el-tooltip v-if="!NO_CHECKIN_CHANNELS.includes(ch.id)" :content="`${labelsOf(ch.id).auto}设置：自定义每天执行时间与抖动`" placement="top">

@@ -386,6 +386,9 @@ export const proxyLoomySmsSend = (phone: string) =>
 /** Loomy（讯飞）：验证码登录（msgid 沿用发码返回值） */
 export const proxyLoomySmsLogin = (phone: string, code: string, msgid: string) =>
   call<{ ok: boolean; id?: string; uid?: string; message?: string }>("proxy_loomy_sms_login", { phone, code, msgid }, 0);
+/** CodeArts 每日福利：只读探测可领项（领取走既有的批量签到链路，主进程串行换 token） */
+export const proxyCodeartsWelfarePreview = (accountId = "") =>
+  call<{ ok: boolean; rows?: { name: string; ok: boolean; message: string }[]; message?: string }>("proxy_codearts_welfare_preview", { accountId }, 0);
 export const proxyOauthCancel = () => call<{ ok: boolean; cancelled?: boolean }>("proxy_oauth_cancel");
 /** 兜底：浏览器没跳回回环地址时，把地址栏内容整段粘回来完成登录（串行换 token，可能多次上游请求） */
 export const proxyOauthSubmitCallback = (channel: ProxyChannelId, url: string) =>

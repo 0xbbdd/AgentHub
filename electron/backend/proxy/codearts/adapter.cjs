@@ -368,6 +368,14 @@ function makeCodeArts(deps) {
       };
     },
 
+    // 只读探测：界面在领取前先看清有什么可领（写请求仍然只有 claim 一条路）
+    async previewWelfare(account, secrets) {
+      const fresh = await credentialOf(account, secrets, false);
+      if (!fresh.ok) return { ok: false, message: fresh.message };
+      if (!credentials.valid(fresh.credential)) return { ok: false, message: "CodeArts 账号缺少可用的临时凭据，请重新登录" };
+      return welfare.previewWelfare(baseOf(), fresh.credential, account);
+    },
+
     // 续期：提前 15 分钟、凭据整块回写。返回通用形态（token/refreshToken）交给编排层的
     // 单飞与落库路径——CodeArts 的凭据是一整块，故 token 列存的是整块 JSON（见 credentials.cjs）
     async refreshToken(account, secrets) {

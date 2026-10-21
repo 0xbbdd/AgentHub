@@ -111,4 +111,4 @@ function parseCallback(query) {
   return { code, state };
 }
 
-module.exports = { beginLogin, takePending, dropPending, exchangeCode, parseCallback, buildAuthorizeUrl, CALLBACK_NOTE: "redirectUri 必须与授权时逐字相同" };
+module.exports = { beginLogin, takePending, exchangeCode, parseCallback, buildAuthorizeUrl };

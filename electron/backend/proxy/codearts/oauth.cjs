@@ -31,7 +31,6 @@ const redact = require("./redact.cjs");
 
 const CLIENT_ID = "vscode-codebot";
 const TOKEN_URL = "https://sts.cn-north-4.myhuaweicloud.com/v1/oauth2/tokens";
-const IDENTITY_URL = "https://sts.cn-north-4.myhuaweicloud.com/v5/caller-identity";
 const WEB_LOGIN_BASE = "https://codearts.huaweicloud.com";
 const CALLBACK_PATH = "/oauth/callback";
 // portal 只认这一种 challenge 方法名（不是 OAuth 标准的 S256）
@@ -176,6 +175,6 @@ function identityFromRefreshToken(refreshToken) {
 }
 
 module.exports = {
-  CLIENT_ID, TOKEN_URL, IDENTITY_URL, WEB_LOGIN_BASE, CALLBACK_PATH, PKCE_METHOD,
+  CLIENT_ID, TOKEN_URL, WEB_LOGIN_BASE, CALLBACK_PATH, PKCE_METHOD,
   exchangeAuthorizationCode, refreshCredential, buildAuthorizeUrl, identityFromRefreshToken,
 };

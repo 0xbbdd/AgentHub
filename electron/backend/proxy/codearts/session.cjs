@@ -18,7 +18,6 @@
 "use strict";
 
 const DEFAULT_SESSION_LIMIT = 3;
-const HEARTBEAT_INTERVAL_MS = 30000; // 会话心跳间隔（占位；真上游的会话续约参数未逐行核，取保守值）
 
 // 进程级本地准入闸：identity -> 当前在占会话数
 const gate = new Map();
@@ -53,4 +52,4 @@ function identityOf(credential, accountId) {
   return `account:${accountId}`;
 }
 
-module.exports = { acquire, release, identityOf, DEFAULT_SESSION_LIMIT, HEARTBEAT_INTERVAL_MS };
+module.exports = { acquire, release, identityOf, DEFAULT_SESSION_LIMIT };

@@ -1128,6 +1128,19 @@ function register(ipcMain) {
       return fail(String((e && e.message) || e));
     }
   }));
+  // ===== CodeArts 福利：领取前先只读探测可领项（写请求仍然只有「一键领福利」那条路）=====
+  ipcMain.handle("proxy_codearts_welfare_preview", handle(async ({ accountId }) => {
+    const ad = adapters.get("codearts");
+    if (!ad || typeof ad.previewWelfare !== "function") return fail("CodeArts 适配器未就绪");
+    const accounts = (accountId ? [store.getAccount(accountId)] : store.listAccounts("codearts")).filter((a) => a && a.hasToken);
+    if (!accounts.length) return fail("该渠道还没有可用账号");
+    const rows = [];
+    for (const acc of accounts) {
+      const r = await ad.previewWelfare(acc, store.accountSecrets(acc)).catch((e) => ({ ok: false, message: String((e && e.message) || e) }));
+      rows.push({ name: acc.name, ok: r.ok !== false, message: r.message || "" });
+    }
+    return ok({ rows, message: rows.map((r) => `${r.name}：${r.message}`).join("；") });
+  }));
   // 浏览器没跳回回环地址时的兜底：把地址栏内容整段粘回来完成登录
   ipcMain.handle("proxy_oauth_submit_callback", handle(async ({ channel, url }) => {
     const r = await discovery.submitCallbackUrl(url, channel);

@@ -56,6 +56,24 @@ function claimableOf(items) {
   return (Array.isArray(items) ? items : []).filter((it) => it && it.status !== "CONFIRMED" && it.auto_claimable !== false && it.type);
 }
 
+/** 只读探测：领取前先看清有什么可领（只发一个 GET，不写任何东西）。
+ *  与 claim 共用 claimableOf 口径，避免「预览说可领、领取却跳过」这种两套判据的分叉。 */
+async function previewWelfare(base, credential, account) {
+  const delivery = await models.signedJson(credential, base, "GET", "/api/v1/welfare/delivery");
+  if (!delivery.ok) return { ok: false, message: `福利列表读取失败（HTTP ${delivery.status}）` };
+  const items = (delivery.data && delivery.data.list) || [];
+  const claimable = claimableOf(items);
+  const ledger = readLedger(account);
+  const names = claimable.map((it) => String(it.type || it.name || "福利"));
+  return {
+    ok: true,
+    total: items.length,
+    claimable: names,
+    attemptsToday: ledger.day === todayKey() ? ledger.attempts : 0,
+    message: names.length ? `可领取 ${names.length} 项：${names.join("、")}` : "今天没有可领取的福利（或已全部确认）",
+  };
+}
+
 // 三段式：delivery → 挑可自动领的 → claim → confirm → 回读核实
 async function claimWelfare(base, credential, store, account) {
   const now = Date.now();
@@ -118,4 +136,4 @@ async function claimWelfare(base, credential, store, account) {
   };
 }
 
-module.exports = { claimWelfare, todayKey, LEDGER_VERSION, MAX_ATTEMPTS_PER_DAY, MIN_INTERVAL_MS };
+module.exports = { claimWelfare, previewWelfare, todayKey, LEDGER_VERSION, MAX_ATTEMPTS_PER_DAY, MIN_INTERVAL_MS };

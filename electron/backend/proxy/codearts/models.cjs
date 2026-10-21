@@ -30,7 +30,6 @@ const path = require("node:path");
 const signer = require("./signer.cjs");
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_TTL_WARN_MS = 30 * 1000;
 
 // 出站统一走它：签名、脱敏与错误信封只在这一处发生，调用点不必各自重复
 async function signedJson(credential, base, method, p, body, fetchImpl) {
@@ -110,4 +109,4 @@ function resolveModelId(catalog, requested) {
   return hit ? hit.id : null;
 }
 
-module.exports = { signedJson, mergeCatalog, isBenefitId, resolveModelId, normalizeEntry, CACHE_TTL_MS, CACHE_TTL_WARN_MS };
+module.exports = { signedJson, mergeCatalog, isBenefitId, resolveModelId, normalizeEntry, CACHE_TTL_MS };

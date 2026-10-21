@@ -97,24 +97,4 @@ function profileIdentity(profile) {
   };
 }
 
-// 「填写凭证」路径入口：解析 payload → 补资料 → 补齐身份。
-// token 是不透明串，账号列表上总得显示「这是谁」；查一次资料就有 userId / 昵称 / 邮箱三样。
-// 查询失败不算失败：拿不到资料照常建账号（uid 走凭证指纹兜底、名字走备注名），只是少一行副标题。
-async function prepareAccount(channel, payload) {
-  const token = String((payload && (payload.accessToken || payload.token)) || "").trim();
-  if (!token) throw Object.assign(new Error("Accio 凭证缺少 accessToken"), { status: 400 });
-  let identity = { userId: "", name: String((payload && payload.name) || ""), email: "", deviceId: "" };
-  try {
-    const profile = await fetchProfile(channel, token);
-    const fromProfile = profileIdentity(profile);
-    identity = {
-      userId: fromProfile.userId,
-      name: fromProfile.name || identity.name,
-      email: fromProfile.email,
-      deviceId: fromProfile.deviceId,
-    };
-  } catch { /* 拿不到资料不阻断添加 */ }
-  return { token, identity };
-}
-
-module.exports = { request, getWithToken, postJson, unwrapData, fetchProfile, profileIdentity, prepareAccount, REQUEST_TIMEOUT_MS };
+module.exports = { request, getWithToken, postJson, unwrapData, fetchProfile, profileIdentity, REQUEST_TIMEOUT_MS };
