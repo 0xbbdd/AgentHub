@@ -119,6 +119,31 @@ function offline() {
     assert(b3.messages[0].content.includes("## Tooling"), "改写后仍前置 ## Tooling 段");
     assert(!/claude/i.test(b3.messages[1].content[0].text), "数组形态 system 同样被改写");
     assert(b3.messages[2].content === "You are ZCode btw", "user 消息里的身份句不碰（闸门只看 system/developer）");
+    // CodeBuddy CLI 身份句：上游对 "You are CodeBuddy Code." 逐字指纹 406（桌面 Craft 形态
+    // "You are CodeBuddy, a highly skilled…" 实测 200 放行，指纹是整句不是产品名泛匹配）
+    const b3b = { messages: [
+      { role: "system", content: "You are CodeBuddy Code.You are an interactive CLI tool that helps users with software engineering tasks." },
+      { role: "user", content: "hi" },
+    ] };
+    prompt.normalizeSystemMessages(b3b);
+    assert(!/codebuddy/i.test(b3b.messages[0].content), "CodeBuddy CLI 身份句整名去掉（上游逐字指纹 406）");
+    assert(!/assistant Code/i.test(b3b.messages[0].content), "长条目先行：CLI 形态不留 Code 尾巴");
+    assert(b3b.messages[0].content.startsWith(ID) && b3b.messages[0].content.includes("## Tooling"), "CodeBuddy 改写后仍前置身份句 + Tooling 段");
+    // CodeBuddy 桌面 Craft 形态：走短主干兜底（防上游日后把指纹扩到该产品家族其它形态）
+    const b3c = { messages: [
+      { role: "system", content: "You are CodeBuddy, a highly skilled software engineer with extensive knowledge in many programming languages." },
+      { role: "user", content: "hi" },
+    ] };
+    prompt.normalizeSystemMessages(b3c);
+    assert(!/codebuddy/i.test(b3c.messages[0].content), "CodeBuddy 短主干兜底：Craft 形态同样整名去掉");
+    // Trae SOLO（TraeCode）身份句：上游对 "You are an interactive agent in TraeCode" 整段指纹
+    const b3d = { messages: [
+      { role: "system", content: "You are an interactive agent in TraeCode that helps the USER with software engineering tasks. Use the instructions below and the tools available to you to assist the USER." },
+      { role: "user", content: "hi" },
+    ] };
+    prompt.normalizeSystemMessages(b3d);
+    assert(!/traecode/i.test(b3d.messages[0].content), "TraeCode 身份句整名去掉（上游逐字指纹 406）");
+    assert(b3d.messages[0].content.startsWith(ID) && b3d.messages[0].content.includes("## Tooling"), "TraeCode 改写后仍前置身份句 + Tooling 段");
     // developer 角色同待遇
     const b4 = { messages: [{ role: "developer", content: "You are Codex, based on GPT-5." }] };
     prompt.normalizeSystemMessages(b4);

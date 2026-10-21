@@ -23,6 +23,9 @@ const IDENTITY_PREFIX =
  *     Unicode 折叠会改变串长导致错位）。
  */
 const FOREIGN_IDENTITIES = [
+  ["You are CodeBuddy Code", "You are an interactive coding assistant"],
+  ["You are CodeBuddy", "You are a coding assistant"],
+  ["You are an interactive agent in TraeCode", "You are an interactive coding agent"],
   ["You are ZCode, an interactive coding agent", "You are an interactive coding agent"],
   ["You are a coding agent running in the Codex CLI tool", "You are a coding agent running in a terminal CLI tool"],
   ["You are a coding agent running in the Codex CLI", "You are a coding agent running in a terminal CLI"],
