@@ -25,6 +25,15 @@ function togglePkg(id: string) {
   else next.add(id);
   expandedIds.value = next;
 }
+/** 整行点击切换展开：有套餐明细的账号行，点行内任意空白（副行 / 余额 / 到期等）即展开收起，不必点中箭头。
+ *  行内交互元素（按钮 / 输入框 / 重命名 / UID / 备注 / 状态标签）经 closest 统一豁免，
+ *  新增按钮无需逐个 .stop，天然不误触 */
+function onRowClick(e: MouseEvent, acc: ProxyAccount) {
+  if (!acc.packages || !acc.packages.length) return;
+  const t = e.target as HTMLElement | null;
+  if (t && t.closest("button, input, .acc-name, .status-tag, .acc-uid, .acc-note")) return;
+  togglePkg(acc.id);
+}
 /** 已用占比（进度条宽度 %）：total<=0 或「不限」时不画条（模板那端已用 v-if 拦住） */
 function pkgUsedPct(pkg: { used: number; total: number }): number {
   if (!pkg.total || pkg.total <= 0) return 0;
@@ -1628,7 +1637,7 @@ onUnmounted(() => {
               </tr>
               <template v-else>
                 <template v-for="(acc, i) in ch.accounts" :key="acc.id">
-                <tr :style="{ '--i': i }">
+                <tr :style="{ '--i': i }" @click="onRowClick($event, acc)">
                   <td class="sel-col">
                     <input type="checkbox" :checked="selectedIds.has(acc.id)" @change="toggleSelect(acc.id)" />
                   </td>
@@ -1639,7 +1648,9 @@ onUnmounted(() => {
                       placement="top"
                     >
                       <button class="pkg-caret" :class="{ open: expandedIds.has(acc.id) }" @click="togglePkg(acc.id)">
-                        <i class="ph ph-caret-right" />
+                        <!-- inline SVG 代替 icon font：字形光栅化按整物理像素吸附（中心差只有 ±0.5 物理px 两个台阶），
+                             SVG 几何真居中且位置连续，任意 DPI 下都与 checkbox 同线 -->
+                        <svg viewBox="0 0 24 24" width="14" height="14"><path d="M9 5 L15 12 L9 19" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
                       </button>
                     </el-tooltip>
                     <el-tooltip v-if="renamingId !== acc.id" :content="acc.name + '（点击重命名）'" placement="top">
@@ -3225,15 +3236,31 @@ onUnmounted(() => {
   border: none;
   background: none;
   cursor: pointer;
-  color: var(--text-3);
-  padding: 0 4px 0 0;
-  font-size: 12px;
+  color: var(--text-2);
+  padding: 0;
   transition: transform 0.15s;
-  display: inline-block;
+  /* 脱离文本流钉在单元格最左、垂直居中：原先 inline-block 跟随列值居中，箭头会单独一行悬在账号名上方 */
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  /* 固定方形热区 + flex 居中，与 checkbox / 各列值同处一条 td 中线 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+}
+.pkg-caret svg {
+  display: block;
+  /* 像素校准（1.25 DPI 实测）：SVG 墨迹包围盒中心比自绘 checkbox 方块中心低 0.5 物理px，
+     上移 0.4 CSS（= 0.5 物理）对齐；SVG 渲染位置连续，该位移精确生效 */
+  transform: translateY(-0.4px);
 }
 .pkg-caret.open {
-  transform: rotate(90deg);
-  color: var(--text-1);
+  transform: translateY(-50%) rotate(90deg);
+  /* var(--text-1) 全项目未定义（颜色一直失效回退继承），展开高亮用主文本色 */
+  color: var(--text);
 }
 .pkg-row > .pkg-cell {
   padding: 0 0 8px 26px;
@@ -3277,11 +3304,44 @@ onUnmounted(() => {
   text-align: center;
 }
 .sel-col input[type="checkbox"] {
-  vertical-align: middle;
+  /* 自绘替换原生：原生控件自绘的可见边界随 DPI 有 ±0.5 物理px 的量化漂移，
+     与 SVG 箭头无法稳定同线；矢量自绘后方块边界 = 盒边界，中心精确锚定 td 中心 */
+  appearance: none;
+  display: block;
+  margin: 0 auto;
+  width: 13px;
+  height: 13px;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  background: var(--bg-2, rgba(127, 127, 127, 0.08));
   cursor: pointer;
-  accent-color: var(--accent);
+  position: relative;
+}
+.sel-col input[type="checkbox"]:hover {
+  border-color: var(--accent-line);
+}
+.sel-col input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+/* 对勾：border 旋转 45° 的 L 形，随方块几何居中 */
+.sel-col input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 4px;
+  height: 8px;
+  border: solid #fff;
+  border-width: 0 1.5px 1.5px 0;
+  transform: translate(-50%, -60%) rotate(45deg);
+}
+.sel-col input[type="checkbox"]:focus-visible {
+  outline: 1px solid var(--accent-line);
+  outline-offset: 1px;
 }
 .acc-cell {
+  position: relative;
   line-height: 1.3;
   /* 列宽建议值：账号列给足展示空间，压缩操作列的富余占比（auto 布局下的分配 hint） */
   width: 280px;
