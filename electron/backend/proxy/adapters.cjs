@@ -10,6 +10,9 @@ const util = require("./util.cjs");
 const raccoonAuth = require("./raccoonAuth.cjs");
 const config = require("../config.cjs");
 const platform = require("./platform/index.cjs");
+// 出网统一入口：网关向上游的每一次请求都从这里出去，出口策略（直连 / 固定 / 轮询）
+// 由「网络代理」页决定。没有可用出口时它原样转给全局 fetch，与改造前逐字节一致。
+const netproxy = require("./netproxy.cjs");
 
 function proxyConfig() {
   try {
@@ -77,12 +80,14 @@ async function fetchStream(url, opts) {
     // 故它传 redirect:"error" 要明确报错而非跟随。原先写死 "follow" 会吃掉该参数。
     // 统一出口兜底：header 值必须是 ByteString，中文机器名/设备名会让 fetch 在发请求前抛错。
     // 只在值含非 Latin-1 时改写，ASCII 请求逐字节不变（issue #148）。
-    resp = await fetch(url, { redirect: "follow", ...rest, headers: util.byteSafeHeaders(rest.headers), signal: ctrl.signal });
+    resp = await netproxy.fetchThrough(url, { redirect: "follow", ...rest, headers: util.byteSafeHeaders(rest.headers), signal: ctrl.signal });
   } catch (e) {
     clearTimeout(timer);
     const timedOut = !!(e && e.name === "AbortError");
+    // 走了出口就把它带进文案：代理不通与上游不通在日志里必须能一眼分开（netproxy 挂上来的标记）
+    const via = e && e.netproxy ? `（出口：${e.netproxy.name}）` : "";
     throw Object.assign(
-      new Error(timedOut ? `上游首字节超时（${Math.round(budgetMs / 1000)}s）` : `网络错误：${e.message}`),
+      new Error(timedOut ? `上游首字节超时（${Math.round(budgetMs / 1000)}s）` : `网络错误：${e.message}${via}`),
       {
         network: true,
         // 首字节超时是"这次请求太大 / 上游这一刻慢"，不是账号故障：分类器据此**不计入熔断**、
@@ -113,7 +118,7 @@ async function httpJson(url, opts) {
   const timer = setTimeout(() => ctrl.abort(), budget);
   try {
     // 同 fetchStream：header 值统一转 ByteString（仅非 Latin-1 项变化）
-    const resp = await fetch(url, { ...opts, headers: util.byteSafeHeaders(opts && opts.headers), signal: ctrl.signal });
+    const resp = await netproxy.fetchThrough(url, { ...opts, headers: util.byteSafeHeaders(opts && opts.headers), signal: ctrl.signal });
     const text = await resp.text();
     let data = null;
     try { data = JSON.parse(text); } catch { /* 非 JSON 响应留原文 */ }

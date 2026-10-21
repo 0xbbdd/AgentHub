@@ -520,8 +520,38 @@ const PROXY_MODELS = [
   { id: "cline-pass/glm-5.3", object: "model", created: 0, owned_by: "cline_pass", sources: ["cline_pass"], name: "GLM-5.3（ClinePass）", rate: null, capabilities: { images: true, reasoning: true, tools: true }, contextLength: 200000, maxOutputTokens: 0, enabled: true, override: "", fallback: "" },
 ];
 
-const PROXY_RULES = [
-  { file: "model_map.json", desc: "Trae 模型映射（显示名 → config_name/model_name）", size: 642, mtimeMs: NOW - 86400000, ok: true, error: "" },
+/** 网络代理（出口池）预览数据：结构对齐后端 netproxy.json，增删改只在内存里生效 */
+const NETPROXY_MOCK: {
+  mode: "off" | "fixed" | "rotate";
+  fixedId: string;
+  settings: { testUrl: string; timeoutMs: number; defaultTestUrl: string; defaultTimeoutMs: number };
+  items: {
+    id: string; name: string; protocol: "http" | "socks5"; host: string; port: number;
+    username: string; hasPassword: boolean; enabled: boolean;
+    lastTest: { success: boolean; status: number | null; ip: string; durationMs: number; error: string; at: number } | null;
+    createdAt: number; updatedAt: number;
+  }[];
+} = {
+  mode: "off",
+  fixedId: "",
+  settings: { testUrl: "", timeoutMs: 15000, defaultTestUrl: "https://api.deepseek.com/", defaultTimeoutMs: 15000 },
+  items: [
+    {
+      id: "np-demo-1", name: "本机 Clash（混合端口）", protocol: "http", host: "127.0.0.1", port: 7890,
+      username: "", hasPassword: false, enabled: true,
+      lastTest: { success: true, status: 200, ip: "23.106.44.177", durationMs: 318, error: "", at: NOW - 600000 },
+      createdAt: NOW - 86400000, updatedAt: NOW - 600000,
+    },
+    {
+      id: "np-demo-2", name: "公司出口（需认证）", protocol: "socks5", host: "10.0.0.8", port: 1080,
+      username: "demo", hasPassword: true, enabled: false,
+      lastTest: { success: false, status: null, ip: "", durationMs: 15012, error: "连接超时（15 秒）", at: NOW - 3600000 },
+      createdAt: NOW - 172800000, updatedAt: NOW - 3600000,
+    },
+  ],
+};
+
+const PROXY_RULES = [  { file: "model_map.json", desc: "Trae 模型映射（显示名 → config_name/model_name）", size: 642, mtimeMs: NOW - 86400000, ok: true, error: "" },
   { file: "wb_models.json", desc: "WorkBuddy 双区模型目录（兜底，catalog.json 优先）", size: 318, mtimeMs: NOW - 86400000, ok: true, error: "" },
   { file: "catalog.json", desc: "模型权威目录（拉取模型写回：倍率/能力/上下文，可手编）", size: 2048, mtimeMs: NOW - 3600000, ok: true, error: "" },
   { file: "wb_template_map.json", desc: "WorkBuddy 审核模板最小改写表", size: 274, mtimeMs: NOW - 2 * 86400000, ok: true, error: "" },
@@ -1538,6 +1568,70 @@ export const mock = {
         return { ok: true };
       case "proxy_vault_status":
         return { encrypted: true, driver: "node:sqlite", dataDir: "(浏览器预览)" };
+      case "proxy_netproxy_list":
+        return JSON.parse(JSON.stringify(NETPROXY_MOCK));
+      case "proxy_netproxy_save": {
+        const d = args || {};
+        const port = Number(d.port);
+        if (!String(d.name || "").trim()) throw new Error("请填写代理名称");
+        if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("代理端口必须是 1-65535 的整数");
+        if (d.id) {
+          const hit = NETPROXY_MOCK.items.find((i) => i.id === d.id);
+          if (!hit) throw new Error("代理不存在（可能已被删除）");
+          Object.assign(hit, {
+            name: String(d.name), protocol: d.protocol === "socks5" ? "socks5" : "http",
+            host: String(d.host || ""), port, username: String(d.username || ""),
+            hasPassword: d.clearPassword ? false : hit.hasPassword || !!d.password,
+            enabled: d.enabled !== false, updatedAt: Date.now(),
+          });
+          return { ok: true, item: JSON.parse(JSON.stringify(hit)) };
+        }
+        const item = {
+          id: `np-demo-${Date.now()}`, name: String(d.name), protocol: (d.protocol === "socks5" ? "socks5" : "http") as "http" | "socks5",
+          host: String(d.host || ""), port, username: String(d.username || ""), hasPassword: !!d.password,
+          enabled: d.enabled !== false, lastTest: null, createdAt: Date.now(), updatedAt: Date.now(),
+        };
+        NETPROXY_MOCK.items.push(item);
+        return { ok: true, item: JSON.parse(JSON.stringify(item)) };
+      }
+      case "proxy_netproxy_remove": {
+        const idx = NETPROXY_MOCK.items.findIndex((i) => i.id === args?.id);
+        if (idx < 0) throw new Error("代理不存在（可能已被删除）");
+        NETPROXY_MOCK.items.splice(idx, 1);
+        if (NETPROXY_MOCK.fixedId === args?.id) {
+          NETPROXY_MOCK.fixedId = "";
+          if (NETPROXY_MOCK.mode === "fixed") NETPROXY_MOCK.mode = "off";
+        }
+        return { ok: true };
+      }
+      case "proxy_netproxy_toggle": {
+        const hit = NETPROXY_MOCK.items.find((i) => i.id === args?.id);
+        if (!hit) throw new Error("代理不存在（可能已被删除）");
+        hit.enabled = args?.enabled !== false;
+        hit.updatedAt = Date.now();
+        return { ok: true, item: JSON.parse(JSON.stringify(hit)) };
+      }
+      case "proxy_netproxy_test": {
+        const target = args?.id ? NETPROXY_MOCK.items.find((i) => i.id === args.id) : args?.draft;
+        if (!target) throw new Error("缺少要测试的代理");
+        const result = {
+          ok: true, success: true, status: 200, ip: "23.106.44.177",
+          durationMs: 260 + Math.round(Math.random() * 180), error: "",
+        };
+        if (args?.id) {
+          const hit = NETPROXY_MOCK.items.find((i) => i.id === args.id);
+          if (hit) hit.lastTest = { ...result, at: Date.now() };
+        }
+        return result;
+      }
+      case "proxy_netproxy_settings": {
+        if (args?.mode) NETPROXY_MOCK.mode = args.mode as "off" | "fixed" | "rotate";
+        if (args?.fixedId != null) NETPROXY_MOCK.fixedId = String(args.fixedId);
+        if (args?.mode === "fixed" && !NETPROXY_MOCK.fixedId) throw new Error("选择「固定出口」时必须指定一条出口");
+        if (args?.testUrl != null) NETPROXY_MOCK.settings.testUrl = String(args.testUrl);
+        if (args?.timeoutMs != null) NETPROXY_MOCK.settings.timeoutMs = Math.max(1000, Math.min(120000, Number(args.timeoutMs) || 15000));
+        return JSON.parse(JSON.stringify(NETPROXY_MOCK));
+      }
       case "webdav_shared_get":
         return {
           type: "webdav",

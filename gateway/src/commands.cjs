@@ -21,6 +21,7 @@ const READ = new Set([
   "proxy_rules_list",
   "proxy_oplog_list",
   "proxy_oplog_ops",
+  "proxy_netproxy_list",
   "proxy_recent",
   "proxy_stats_overview",
   "proxy_stats_detail",

@@ -22,6 +22,8 @@ const poolsync = require("./poolsync.cjs");
 const poolsched = require("./poolsched.cjs");
 const ccswitch = require("./ccswitch.cjs");
 const oplog = require("./oplog.cjs");
+// 网络代理池（出口池 + 出站策略）：adapters 的每次上游请求都经它取出口
+const netproxy = require("./netproxy.cjs");
 const xlsx = require("./xlsx.cjs"); // xlsx 写入器在本目录（v1.57.0 误写 ../xlsx.cjs，顶层 require 抛错 → 启动即崩）
 const zcodeLocal = require("./zcodeLocal.cjs");
 const zip = require("../zip.cjs");
@@ -498,6 +500,8 @@ function stopTimers() {
 function shutdown() {
   stopTimers();
   server.stop();
+  // 出口连接池随进程一起收：不关会让容器退出前的 close 等待 keep-alive 连接超时
+  netproxy.closeAll();
 }
 
 /**
@@ -1330,6 +1334,16 @@ function register(ipcMain) {
     fs.writeFileSync(file, buf);
     return ok({ path: file, count: rows.length, message: rows.length ? `导出成功（${rows.length} 条记录）：${file}` : "导出成功，但当前筛选条件下没有任何记录" });
   }));
+
+  // ===== 网络代理（反代网关「网络代理」页签）：出口池 CRUD / 启停 / 连通性测试 / 策略 =====
+  // 与日志页签相邻注册（页面顺序也是「日志 → 网络代理」）；测试会写 lastTest，故归 write，
+  // 容器只读令牌不放开（list 是 read，只读面板能看见池子但改不了）。
+  ipcMain.handle("proxy_netproxy_list", handle(() => netproxy.list()));
+  ipcMain.handle("proxy_netproxy_save", handle((args) => netproxy.save(args)));
+  ipcMain.handle("proxy_netproxy_remove", handle((args) => netproxy.remove(args)));
+  ipcMain.handle("proxy_netproxy_toggle", handle((args) => netproxy.toggle(args)));
+  ipcMain.handle("proxy_netproxy_test", handle(async (args) => netproxy.test(args)));
+  ipcMain.handle("proxy_netproxy_settings", handle((args) => netproxy.saveSettings(args)));
 
   // ===== 统计 =====
   // 区间化总览：一次回 KPI / 序列 / 四维排行 / 各 Key / 状态分布 / Token 构成
