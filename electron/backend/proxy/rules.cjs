@@ -478,6 +478,9 @@ const DEFAULTS = {
       ruleLike: "interaction_like",
       // 点赞目标分页大小（实测 30 可一次拿够 20 个未星标目标）
       mcpPageSize: 30,
+      // 列表响应给 Data.McpServer.TotalCount；按总数动态翻页，但保留扫描安全阀，
+      // 避免上游总数异常时无限请求。实测热门排序前 3 页可能全部 AlreadyStar=true。
+      mcpMaxScanPages: 20,
       // 必须带浏览器上下文，否则风控中间件忽略请求（实测）
       userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
       refererPath: "/my/overview",

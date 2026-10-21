@@ -3041,6 +3041,44 @@ const modelscope = {
     return { ok: true, rules: list };
   },
 
+  /** 读取最近的魔粒发放记录。官网当前使用 type=EARN + page/page_size。 */
+  async fetchEarnTransactions(secrets, pageSize) {
+    const query = new URLSearchParams({ type: "EARN", page: "1", page_size: String(Number(pageSize) || 20) }).toString();
+    const r = await this.magicubesGet(secrets, this.cfg().transactionsPath, query);
+    if (!r.ok) return r;
+    const d = (r.data && r.data.data) || {};
+    const records = Array.isArray(d.records) ? d.records : (Array.isArray(d.list) ? d.list : []);
+    return { ok: true, records };
+  },
+
+  transactionKey(row) {
+    if (!row || typeof row !== "object") return "";
+    return String(row.id || row.transaction_id || row.request_id || [row.gmt_created, row.rule_key, row.amount, row.description].join("|"));
+  },
+
+  /** 动作后等待上游结算：规则计数、余额、EARN 发放记录任一前进即确认到账。 */
+  async waitMagicubeReward(secrets, before, attempts) {
+    const max = Math.max(1, Number(attempts) || 4);
+    for (let i = 0; i < max; i++) {
+      if (i > 0) await new Promise((resolve) => setTimeout(resolve, 1200));
+      const [rulesResult, balanceResult, txResult] = await Promise.all([
+        this.fetchEarnRules(secrets),
+        this.magicubesGet(secrets, this.cfg().balancePath),
+        this.fetchEarnTransactions(secrets, 20),
+      ]);
+      const like = rulesResult.ok ? this.ruleOf(rulesResult.rules, this.cfg().ruleLike) : null;
+      const used = Number(like && like.today_used) || 0;
+      const balance = Number(balanceResult.ok && balanceResult.data && balanceResult.data.data && balanceResult.data.data.total_balance) || 0;
+      const newTransactions = txResult.ok
+        ? txResult.records.filter((row) => !before.transactionKeys.has(this.transactionKey(row)))
+        : [];
+      if (used > before.likeUsed || balance > before.balance || newTransactions.length) {
+        return { confirmed: true, used, balance, newTransactions };
+      }
+    }
+    return { confirmed: false, used: before.likeUsed, balance: before.balance, newTransactions: [] };
+  },
+
   /** 从规则表里取某个 rule_key */
   ruleOf(rules, key) {
     return (rules || []).find((x) => String(x && x.rule_key) === String(key)) || null;
@@ -3127,22 +3165,46 @@ const modelscope = {
     const dailyAmt = Number(daily && daily.amount) || 0;
     const bindAmt = Number(bind && bind.amount) || 0;
 
+    const beforeTransactions = await this.fetchEarnTransactions(secrets, 20);
+    const transactionKeys = new Set((beforeTransactions.ok ? beforeTransactions.records : []).map((row) => this.transactionKey(row)));
+
     // ② 点赞：按剩余额度补做（需要星标族凭据）
     const cap = Math.min(Number(like && like.daily_cap) || 0, Number(c.likeHardCap) || 25);
     const used = Number(like && like.today_used) || 0;
     const remain = Math.max(cap - used, 0);
     let liked = 0;
+    let confirmedLikes = 0;
     let likeErr = "";
+    let confirmedBalance = balBefore;
+    let confirmedUsed = used;
     if (remain > 0 && !canStar) {
       // 无星标族凭据：如实说明，而不是伪装成「无目标」
       likeErr = "点赞需 Web 会话（Cookie）或 ms- 令牌，当前账号只有 OAuth 令牌——请重新 OAuth 授权（应用内窗口会自动获取会话）";
     } else if (remain > 0) {
-      const targets = await this.fetchLikeTargets(secrets, remain + 5);
-      if (!targets.length) likeErr = "无可点赞目标（上游列表为空）";
+      const targetResult = await this.fetchLikeTargetsResult(secrets, remain + 5);
+      if (!targetResult.ok) {
+        return { ok: false, message: targetResult.message || "点赞目标查询失败" };
+      }
+      const targets = targetResult.targets;
+      if (!targets.length) likeErr = "未找到可执行的社区互动目标，且本次未获得魔粒";
       for (const t of targets) {
         if (liked >= remain) break;
         const okOne = await this.likeOne(secrets, t).catch(() => false);
-        if (okOne) liked++;
+        if (!okOne) continue;
+        liked++;
+        const verified = await this.waitMagicubeReward(secrets, {
+          balance: confirmedBalance,
+          likeUsed: confirmedUsed,
+          transactionKeys,
+        }, 4);
+        if (!verified.confirmed) {
+          likeErr = "社区互动已完成，但官方规则、余额和发放记录均未确认奖励；已停止继续操作";
+          break;
+        }
+        confirmedLikes++;
+        confirmedBalance = verified.balance;
+        confirmedUsed = verified.used;
+        for (const row of verified.newTransactions) transactionKeys.add(this.transactionKey(row));
         await new Promise((r) => setTimeout(r, (Number(c.likeDelayMinMs) || 400) + Math.floor(Math.random() * ((Number(c.likeDelayMaxMs) || 900) - (Number(c.likeDelayMinMs) || 400)))));
       }
       if (liked === 0 && !likeErr) likeErr = "点赞未成功（凭据可能无权调用该端点）";
@@ -3157,21 +3219,24 @@ const modelscope = {
     const delta = balAfter - balBefore;
     const gained = delta > 0 ? delta : 0;
 
-    // 成功判定：至少推进了一件事（点赞计数前进，或余额增长）
-    const progressed = (likeUsedAfter > used) || (gained > 0);
+    // 星标接口成功只代表社区动作成功，不能证明魔粒已经发放。只有规则计数或余额
+    // 实际前进才算任务领取成功，避免把「点赞成功但官网仍为 0」误报为签到成功。
+    const progressed = confirmedLikes > 0 || (likeUsedAfter > used) || (gained > 0);
     const msgs = [];
     if (dailyAmt && Number(daily && daily.today_used) > 0) msgs.push(`登录奖励 ${dailyAmt} 已领`);
     if (bindAmt && Number(bind && bind.today_used) > 0) msgs.push(`绑云奖励 ${bindAmt} 已领`);
-    if (liked > 0) msgs.push(`点赞 ${liked} 次 +${liked * (Number(like && like.amount) || 2)} 魔粒`);
+    if (confirmedLikes > 0) msgs.push(`完成并确认奖励 ${confirmedLikes} 次`);
+    if (liked > confirmedLikes) msgs.push(likeErr || `另有 ${liked - confirmedLikes} 次互动未确认奖励`);
     else if (likeErr) msgs.push(likeErr);
     if (gained > 0) msgs.push(`余额 +${gained}`);
     // 降级提示：无 Cookie 时明确告知日活拿不到（避免用户以为签到成功了）
     if (!hasCookie && canStar) msgs.push("（当前无 Web 会话，daily_active 登录奖励需 Cookie 才能触发；重新 OAuth 授权可自动获取）");
     return {
-      ok: progressed || (liked === 0 && remain === 0),
-      already: liked === 0 && remain === 0 && !gained,
+      ok: progressed || remain === 0,
+      already: remain === 0 && !progressed,
       claimed: progressed,
       liked,
+      confirmedLikes,
       gained,
       balance: balAfter,
       hasCookie,
@@ -3184,16 +3249,33 @@ const modelscope = {
    *  过滤掉已星标（AlreadyStar），按需取够 needed 个
    *  ⚠ 走 Cookie 通道：该端点在「仅 Cookie/ms- 可用族」里，OAuth 令牌调会 401 */
   async fetchLikeTargets(secrets, needed) {
+    const r = await this.fetchLikeTargetsResult(secrets, needed);
+    return r.ok ? r.targets : [];
+  },
+
+  /** 列目标的诊断形态：空数组与请求失败必须区分，避免把 Cookie 失效伪装成今日已完成。 */
+  async fetchLikeTargetsResult(secrets, needed) {
     const c = this.cfg();
     const base = String(c.apiBase || "https://www.modelscope.cn").replace(/\/+$/, "");
     const out = [];
     const seen = new Set();
-    for (let page = 1; page <= 3 && out.length < needed; page++) {
-      const body = JSON.stringify({ PageSize: Number(c.mcpPageSize) || 30, PageNumber: page, Query: "", Criterion: [] });
+    const pageSize = Math.max(1, Number(c.mcpPageSize) || 30);
+    const maxScanPages = Math.max(1, Number(c.mcpMaxScanPages) || 20);
+    let totalPages = maxScanPages;
+    for (let page = 1; page <= Math.min(totalPages, maxScanPages) && out.length < needed; page++) {
+      const body = JSON.stringify({ PageSize: pageSize, PageNumber: page, Query: "", Criterion: [] });
       const r = await httpJson(`${base}${c.mcpServersPath}`, { method: "PUT", headers: this.starHeaders(secrets), body })
-        .catch(() => ({ ok: false, data: null }));
-      if (!r.ok || !r.data) break;
-      const servers = (((r.data.Data || {}).McpServer || {}).McpServers) || [];
+        .catch((e) => ({ ok: false, status: 0, data: null, message: String((e && e.message) || e) }));
+      if (!r.ok || !r.data) {
+        return { ok: false, targets: [], message: r.status === 401 || r.status === 403 ? "Web 会话已失效，请重新 OAuth 授权" : `点赞目标查询失败：${r.message || `HTTP ${r.status || 0}`}` };
+      }
+      if (r.data.Success === false) {
+        return { ok: false, targets: [], message: String(r.data.Message || r.data.message || "点赞目标查询被上游拒绝") };
+      }
+      const bucket = ((r.data.Data || {}).McpServer || {});
+      const servers = Array.isArray(bucket.McpServers) ? bucket.McpServers : [];
+      const totalCount = Number(bucket.TotalCount);
+      if (Number.isFinite(totalCount) && totalCount >= 0) totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
       if (!servers.length) break;
       for (const s of servers) {
         if (out.length >= needed) break;
@@ -3207,7 +3289,7 @@ const modelscope = {
         out.push({ path, name, key });
       }
     }
-    return out;
+    return { ok: true, targets: out };
   },
 
   /** 点赞单个 MCP 服务：PUT /api/v1/mcpServers/{path}/{name}/stars
