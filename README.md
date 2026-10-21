@@ -35,16 +35,12 @@ AgentHub 是本地运行的中控台（Electron + Vue 3 + TypeScript），自身
 
 ## Windows 版下载与安装
 
-### 安装版（推荐）
+### 安装版
 
 1. 打开 [Releases 页面](https://github.com/HUIdada1/AgentHub/releases/latest)
 2. 下载 `AgentHub-Setup-x.y.z.exe`
 3. 双击安装。安装过程中可以改安装目录，装完会在桌面和开始菜单创建「AgentHub」快捷方式
 4. 启动后程序常驻系统托盘，关窗口不会退出；托盘图标双击可唤回窗口，右键菜单里能暂停同步、看今日用量
-
-### 便携版
-
-下载 `AgentHub-x.y.z-portable.exe`，双击即用、免安装，适合放 U 盘或临时机器。便携版同样会检查并提示新版本，但不支持自动下载安装，按提示到 Releases 下载新文件替换即可。
 
 ### 系统要求
 
@@ -399,7 +395,7 @@ npm install
 npm run dev          # 桌面端开发（Electron + Vite HMR）
 npm run dev:web      # 纯浏览器预览 UI（mock 数据，不启动 Electron）
 npm run build        # 类型检查 + 前端构建
-npm run electron:build   # 打包安装版与便携版到 release/
+npm run electron:build   # 打包安装版到 release/
 ```
 
 反代网关后端全链路自测（含假上游端到端：换号 / 自动切换 / 流式双态 / 指纹头）：
