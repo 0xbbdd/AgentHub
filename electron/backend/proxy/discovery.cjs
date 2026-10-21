@@ -3429,7 +3429,7 @@ async function beginAccioOAuth(channel, onDone) {
   }
   // redirectUri 必须与授权时逐字相同（oauth.cjs 跟着 pending 原样回传）
   const returnUrl = `http://127.0.0.1:${port}${ACCIO_CALLBACK_PATH}`;
-  const begun = accioAdapter.beginOAuth(returnUrl); // { authUrl, state }
+  const begun = await accioAdapter.beginOAuth(returnUrl); // { authUrl, state }
   oauthSession = {
     mode: "loopback",
     channel,
