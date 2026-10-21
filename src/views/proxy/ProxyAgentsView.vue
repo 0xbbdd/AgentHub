@@ -3376,6 +3376,13 @@ onUnmounted(() => {
   font-size: 10.5px;
   color: var(--text-3);
 }
+/* 展开箭头是绝对定位在单元格左内边距里的（热区 20px，比 td 的 12px 内边距多出 8px）。
+   账号名/副行占满整列时文字从内容盒左边缘起排，首字会被箭头压住、左侧点击也会被箭头吃掉。
+   给「有箭头」的行左右对称内缩 12px：居中不变，只把文字让出箭头热区（无箭头的行完全不受影响）。 */
+.acc-cell:has(.pkg-caret) .acc-name,
+.acc-cell:has(.pkg-caret) .acc-sub {
+  padding-inline: 12px;
+}
 .acc-sub i {
   font-style: normal;
   opacity: 0.6;
