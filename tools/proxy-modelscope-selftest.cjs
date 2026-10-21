@@ -185,6 +185,13 @@ async function T(name, fn) {
     assert.ok(/fetchEarnTransactions/.test(body), "应读取官网同款 EARN 发放记录作为到账凭据");
     assert.ok(/waitMagicubeReward/.test(body), "每次社区互动后必须轮询规则、余额和发放记录");
     assert.ok(/已停止继续操作/.test(body), "首个未确认奖励的互动后必须停止，避免批量制造无奖励星标");
+    // 复核加固：① 确认基线要在 webTouch 之后重取余额，否则日活 200 的异步到账会冒充首个点赞的入账；
+    //            ② EARN 基线拉取失败时不得把全量记录当增量（会直接假确认）。
+    assert.ok(/const likeBase = await this\.magicubesGet\(secrets, this\.cfg\(\)\.balancePath\)/.test(body), "确认基线必须在 webTouch/规则读取之后重取余额");
+    assert.ok(/const txBaselineOk = !!beforeTransactions\.ok/.test(body), "EARN 基线失败必须显式记录并停用增量信号");
+    assert.ok(/transactionKeys: txBaselineOk \? transactionKeys : null/.test(body), "EARN 基线失败时不得把全量记录当增量比较");
+    const waitBody = fnBody("async waitMagicubeReward(secrets, before, attempts) {", "ruleOf(rules, key)");
+    assert.ok(/txResult\.ok && before\.transactionKeys/.test(waitBody), "waitMagicubeReward 必须忽略基线不可用时的发放记录信号");
     assert.ok(/today_used/.test(body), "checkin 应读 today_used");
     assert.ok(/remain/.test(body), "checkin 应算剩余额度");
     assert.ok(/likeHardCap/.test(body), "checkin 应受安全阀约束");

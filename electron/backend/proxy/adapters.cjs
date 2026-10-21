@@ -3069,7 +3069,9 @@ const modelscope = {
       const like = rulesResult.ok ? this.ruleOf(rulesResult.rules, this.cfg().ruleLike) : null;
       const used = Number(like && like.today_used) || 0;
       const balance = Number(balanceResult.ok && balanceResult.data && balanceResult.data.data && balanceResult.data.data.total_balance) || 0;
-      const newTransactions = txResult.ok
+      // before.transactionKeys 为 null = 基线那次拉取失败：不能把「全量记录」当增量，
+      // 否则第一轮轮询会把历史 EARN 记录整体误判成新到账（宁可少一个信号，不可假确认）
+      const newTransactions = txResult.ok && before.transactionKeys
         ? txResult.records.filter((row) => !before.transactionKeys.has(this.transactionKey(row)))
         : [];
       if (used > before.likeUsed || balance > before.balance || newTransactions.length) {
@@ -3165,8 +3167,16 @@ const modelscope = {
     const dailyAmt = Number(daily && daily.amount) || 0;
     const bindAmt = Number(bind && bind.amount) || 0;
 
+    // 点赞确认基线必须在 webTouch / 规则读取之后再取：daily_active 的 200 魔粒是 webTouch
+    // 触发的异步入账，拿 checkin 开头（webTouch 之前）的余额当基线，会把日活奖励的余额跳变
+    // 误算成首个点赞的到账凭据，放过一个其实没发分的星标。gained 的口径仍用开头的
+    // balBefore（它本来就该包含日活/绑云奖励的总增量）。
+    const likeBase = await this.magicubesGet(secrets, this.cfg().balancePath);
+    const likeBaseBal = Number((likeBase.ok && likeBase.data && likeBase.data.data && likeBase.data.data.total_balance)) || 0;
     const beforeTransactions = await this.fetchEarnTransactions(secrets, 20);
-    const transactionKeys = new Set((beforeTransactions.ok ? beforeTransactions.records : []).map((row) => this.transactionKey(row)));
+    // 基线失败时不启用「发放记录增量」信号（见 waitMagicubeReward 里的 null 判据）
+    const txBaselineOk = !!beforeTransactions.ok;
+    const transactionKeys = new Set((txBaselineOk ? beforeTransactions.records : []).map((row) => this.transactionKey(row)));
 
     // ② 点赞：按剩余额度补做（需要星标族凭据）
     const cap = Math.min(Number(like && like.daily_cap) || 0, Number(c.likeHardCap) || 25);
@@ -3175,7 +3185,7 @@ const modelscope = {
     let liked = 0;
     let confirmedLikes = 0;
     let likeErr = "";
-    let confirmedBalance = balBefore;
+    let confirmedBalance = likeBase.ok ? likeBaseBal : balBefore;
     let confirmedUsed = used;
     if (remain > 0 && !canStar) {
       // 无星标族凭据：如实说明，而不是伪装成「无目标」
@@ -3195,7 +3205,7 @@ const modelscope = {
         const verified = await this.waitMagicubeReward(secrets, {
           balance: confirmedBalance,
           likeUsed: confirmedUsed,
-          transactionKeys,
+          transactionKeys: txBaselineOk ? transactionKeys : null,
         }, 4);
         if (!verified.confirmed) {
           likeErr = "社区互动已完成，但官方规则、余额和发放记录均未确认奖励；已停止继续操作";
@@ -3204,7 +3214,7 @@ const modelscope = {
         confirmedLikes++;
         confirmedBalance = verified.balance;
         confirmedUsed = verified.used;
-        for (const row of verified.newTransactions) transactionKeys.add(this.transactionKey(row));
+        if (txBaselineOk) for (const row of verified.newTransactions) transactionKeys.add(this.transactionKey(row));
         await new Promise((r) => setTimeout(r, (Number(c.likeDelayMinMs) || 400) + Math.floor(Math.random() * ((Number(c.likeDelayMaxMs) || 900) - (Number(c.likeDelayMinMs) || 400)))));
       }
       if (liked === 0 && !likeErr) likeErr = "点赞未成功（凭据可能无权调用该端点）";
