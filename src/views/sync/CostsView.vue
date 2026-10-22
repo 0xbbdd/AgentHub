@@ -138,7 +138,7 @@ function goBilling() {
 
       <!-- 费用 KPI -->
       <div class="kpis cost-kpis" v-if="summary">
-        <div class="kpi"><i class="k-line-glow"></i>
+        <div class="kpi">
           <div class="k-label"><span class="kdot"></span>本月费用</div>
           <div class="k-value mono">{{ fmtCost(summary.monthCost) }}</div>
           <div class="k-foot">
@@ -147,17 +147,17 @@ function goBilling() {
             较上月同期 · 本月 1 日至今
           </div>
         </div>
-        <div class="kpi"><i class="k-line-glow"></i>
+        <div class="kpi">
           <div class="k-label"><span class="kdot"></span>今日费用</div>
           <div class="k-value mono">{{ fmtCost(summary.todayCost) }}</div>
           <div class="k-foot">今日 0 点起 · {{ formatInteger(summary.todayRecordCount) }} 次调用</div>
         </div>
-        <div class="kpi"><i class="k-line-glow"></i>
+        <div class="kpi">
           <div class="k-label"><span class="kdot"></span>累计费用</div>
           <div class="k-value mono">{{ fmtCost(summary.totalCost) }}</div>
           <div class="k-foot">全部记录 · {{ currency === "CNY" ? "USD 部分按汇率折算" : "CNY 部分按汇率折算" }}</div>
         </div>
-        <div class="kpi" :class="{ 'warn-kpi': summary.unpricedModels > 0 }"><i class="k-line-glow"></i>
+        <div class="kpi" :class="{ 'warn-kpi': summary.unpricedModels > 0 }">
           <div class="k-label"><span class="kdot"></span>未配置价格</div>
           <div class="k-value mono">{{ summary.unpricedModels }} <span class="unit">个模型</span></div>
           <div class="k-foot">{{ formatInteger(summary.unpricedRecords) }} 条记录 · {{ formatToken(summary.unpricedTokens) }} tokens 未计入</div>

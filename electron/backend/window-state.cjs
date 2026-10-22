@@ -15,7 +15,7 @@
 // 体验上不可接受（改造前 hide() 不丢状态，所以这是引入 destroy 必须一起补的功课）。
 //
 // 职责边界：这里只管**窗口几何**（只有主进程知道）。用户停留的页面由渲染层的
-// localStorage 自己记住（与 agenthub.fx 同款镜像做法），无需 IPC 往来。
+// localStorage 自己记住，无需 IPC 往来。
 //
 // 越界保护：显示器拔掉/分辨率变化后，旧坐标可能落在已不存在的屏幕上（窗口"打开但看不见"）。
 // clampBounds 是纯函数，不 require electron —— displays 由调用方从 screen 模块传入，

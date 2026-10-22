@@ -38,8 +38,6 @@
   --cta-1: #3ebcd0;
   --cta-2: #58d6eb;
   --cta-3: #79e2f3;
-  --cursor-core: #dffbff;
-  --cursor-glow: rgba(88, 214, 235, 0.55);
 
   --r-sm: 6px;
   --r-md: 8px;
@@ -61,17 +59,7 @@
   --glass-edge: #37485a;
   --modal-a: #111922;
   --modal-b: #0c1219;
-  --ripple: transparent;
-  --grain: 0;
   --code-bg: #0b1016;
-  --grid-dot: transparent;
-  --spot-wash: transparent;
-  --spot-line: transparent;
-  --blob-a: transparent;
-  --blob-b: transparent;
-  --blob-c: transparent;
-  --pool-a: transparent;
-  --pool-b: transparent;
 
   --font-ui: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", system-ui, -apple-system, sans-serif;
   --font-mono: ui-monospace, "Cascadia Code", "SFMono-Regular", "SF Mono", Menlo, Consolas, monospace;
@@ -108,8 +96,6 @@
   --cta-1: #087f94;
   --cta-2: #078ca3;
   --cta-3: #16a5bd;
-  --cursor-core: #073b45;
-  --cursor-glow: rgba(7, 140, 163, 0.45);
   --glass-a: #ffffff;
   --glass-b: #ffffff;
   --glass-bd: #d5dee5;
@@ -164,36 +150,6 @@ body {
   background-image: radial-gradient(circle at 50% -20%, var(--accent-dim), transparent 42rem);
   font-size: 13.5px;
   line-height: 1.5;
-}
-
-/* 参考界面本身是静态审计台，不叠加液态色块、球体、颗粒与跟手光池。 */
-.ambient,
-.pool,
-.orb,
-.grain,
-.particles,
-.cursor,
-.dropwave {
-  display: none !important;
-}
-
-body.cursor-on,
-body.cursor-on * {
-  cursor: auto !important;
-}
-body.cursor-on a,
-body.cursor-on button,
-body.cursor-on [role="button"],
-body.cursor-on .module-card,
-body.cursor-on .chip {
-  cursor: pointer !important;
-}
-body.cursor-on input,
-body.cursor-on textarea,
-body.cursor-on select,
-body.cursor-on .el-input__inner,
-body.cursor-on .el-textarea__inner {
-  cursor: text !important;
 }
 
 /* ===== 应用骨架：左侧固定控制栏 + 顶部页签条 + 内容舞台 ===== */
@@ -277,22 +233,6 @@ body.cursor-on .el-textarea__inner {
   border-radius: 1px;
   background: var(--accent);
   vertical-align: -0.09em;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .app > .side-col .brand-name::after {
-    animation: auditCaret 1.15s steps(1, end) infinite;
-  }
-  @keyframes auditCaret {
-    0%,
-    55% {
-      opacity: 1;
-    }
-    56%,
-    100% {
-      opacity: 0;
-    }
-  }
 }
 
 .app > .side-col .brand-sub {
@@ -708,10 +648,12 @@ body.cursor-on .el-textarea__inner {
 }
 
 .card-title {
+  flex-wrap: wrap;
   margin-bottom: 10px;
   color: var(--text);
   font-family: var(--font-mono);
   font-size: 13px;
+  row-gap: 4px;
 }
 
 .card-title::before {
@@ -977,6 +919,14 @@ body.cursor-on .el-textarea__inner {
   border-radius: 999px;
   font-family: var(--font-mono);
   box-shadow: none;
+  white-space: nowrap;
+}
+
+.card-title > .tag,
+.card-title > .pill,
+.card-title > .chip,
+.card-title > .el-tag {
+  flex-shrink: 0;
 }
 
 .tag,
@@ -1152,29 +1102,6 @@ html[data-theme="light"] .el-overlay {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-3);
   background-clip: content-box;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .app > .glass,
-  .app > .side-col > .glass,
-  .app > .tabs.glass,
-  .app > .main.glass {
-    animation: none;
-  }
-
-  .page-anim {
-    animation: auditPageIn 0.18s ease-out both;
-  }
-  @keyframes auditPageIn {
-    from {
-      opacity: 0;
-      transform: translateY(3px);
-    }
-    to {
-      opacity: 1;
-      transform: none;
-    }
-  }
 }
 
 @media (max-width: 1100px) {

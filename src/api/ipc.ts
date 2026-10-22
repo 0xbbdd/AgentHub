@@ -158,9 +158,6 @@ export const downloadUpdate = () => call<UpdateStatus>("download_update");
 export const installUpdate = () => call<UpdateStatus>("install_update");
 export const openReleasePage = () => call<void>("open_release_page");
 export const openRepoPage = () => call<void>("open_repo_page");
-/** 用系统默认浏览器打开本项目仓库的链接（设置 · 反馈与需求；主进程侧有域名白名单） */
-export const openExternalUrl = (url: string) =>
-  call<{ ok: boolean; message?: string }>("open_external_url", { url });
 
 /** 订阅主进程广播（更新状态 / WebDAV 进度 / focus-update 跳转信号），返回退订函数。
  *  Web 托管形态走 SSE（信封同形）；纯静态预览（mock）没有事件源 */

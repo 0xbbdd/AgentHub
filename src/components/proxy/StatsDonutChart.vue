@@ -60,8 +60,7 @@ function render() {
 
   chart.clear();
   chart.setOption({
-    animation: ui.config.fx,
-    animationDuration: 500,
+    animation: false,
     tooltip: {
       ...glassTooltip(),
       trigger: "item",
@@ -117,7 +116,6 @@ onBeforeUnmount(() => {
 
 watch(items, () => nextTick(render), { deep: true });
 watch(() => ui.isDark, () => nextTick(render));
-watch(() => ui.config.fx, () => nextTick(render));
 </script>
 
 <template>

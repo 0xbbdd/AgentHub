@@ -1,13 +1,9 @@
-/* ===== AgentHub 设计系统 v3 =====
-   方向：简约科技 / 液态玻璃 / 单一绿色 accent / 大厂氛围 / 克制动效。
-   深色默认，亮色对称。尺寸刻度收敛成三套，新元素一律从中取值，不再出现散值：
+/* ===== AgentHub 设计 token =====
+   方向：深色 / 浅色双主题，静态面板与清晰的信息层级。
+   尺寸刻度收敛成三套，新元素一律从中取值，不再出现散值：
    - 圆角四档：壳 18 / 卡片 12 / 控件与外嵌面 8 / 胶囊 999
    - 控件两档高度：常规 30 / 小号 24（按钮、输入框、chip、pill 共用）
-   - 间距一套 4 的倍数：壳间距 14 / 区块间距 12 / 页面左右内边距 22
-   液态玻璃的"实时计算"全部发生在底板与玻璃壳之间，没有盖在内容上的浮层：
-   最底层是随机涌动的超淡色块 + 两团跟随光标的光池，玻璃壳再把这层实时折射出来；
-   同时壳内有一块反光跟着光标走（唯一光源）、卡片悬停时卡内聚光并向外扩散一圈光晕。
-   动效克制：壳进场错峰、页面切换淡入、悬停一次扩散，均 <1s。 */
+   - 间距一套 4 的倍数：壳间距 14 / 区块间距 12 / 页面左右内边距 22 */
 
 /* ===== 统一 token：暗色（默认） ===== */
 :root {
@@ -24,9 +20,6 @@
   --accent-strong: #6ae89c;
   --accent-dim: rgba(68, 224, 127, 0.12);
   --accent-line: rgba(68, 224, 127, 0.35);
-  /* 液滴光标：实心核颜色 + 外环/光晕辉光色 */
-  --cursor-core: #eafff2;
-  --cursor-glow: rgba(68, 224, 127, 0.55);
   /* 主行动按钮（.btn-cta）三段渐变：深绿 → 主色 → 高光带，亮斑横移做均匀渐变动效 */
   --cta-1: #12a150;
   --cta-2: #3ddc84;
@@ -57,25 +50,10 @@
   --glass-bd: rgba(255, 255, 255, 0.09);
   --glass-hi: rgba(255, 255, 255, 0.09);
   --glass-shadow: inset 0 1px 0 var(--glass-hi), 0 24px 56px -16px rgba(0, 0, 0, 0.55);
-  /* 玻璃面上的移动高光（光标驱动的"光源"）+ 受光边 + 按钮点击涟漪 */
-  --glass-sheen: rgba(255, 255, 255, 0.09);
-  --glass-edge: rgba(255, 255, 255, 0.16);
   /* 弹窗玻璃面：比普通玻璃更实，保证盖住底下内容后文字可读 */
   --modal-a: rgba(22, 27, 34, 0.95);
   --modal-b: rgba(11, 14, 18, 0.97);
-  --ripple: rgba(255, 255, 255, 0.18);
-  --grain: 0.035;
   --code-bg: #0c0f12;
-  --grid-dot: rgba(255, 255, 255, 0.04);
-  /* 液态玻璃交互（wash=卡内聚光 / line=边缘流光）与环境液态色块（超淡） */
-  --spot-wash: rgba(255, 255, 255, 0.05);
-  --spot-line: rgba(106, 232, 156, 0.45);
-  --blob-a: rgba(68, 224, 127, 0.055);
-  --blob-b: rgba(92, 157, 255, 0.05);
-  --blob-c: rgba(68, 224, 127, 0.035);
-  /* 跟随光标的光池：比静态色块略亮一档，隔着玻璃才看得出来在动（液态玻璃增强后略再提一档） */
-  --pool-a: rgba(68, 224, 127, 0.1);
-  --pool-b: rgba(92, 157, 255, 0.09);
   --font-ui: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", system-ui, -apple-system, sans-serif;
   /* 全站统一字体：字体族只有 --font-ui 一套（就是左下角「渠道额度」面板用的那套）。
      --font-mono 保留为别名，让历史样式里的引用一并收敛过来，不再出现第二种字形；
@@ -117,8 +95,6 @@
   --accent-strong: #167a49;
   --accent-dim: rgba(30, 158, 95, 0.1);
   --accent-line: rgba(30, 158, 95, 0.35);
-  --cursor-core: #0b3d24;
-  --cursor-glow: rgba(30, 158, 95, 0.5);
   --cta-1: #0f7a45;
   --cta-2: #1e9e5f;
   --cta-3: #6ee0a4;
@@ -133,21 +109,9 @@
   --glass-bd: rgba(15, 23, 42, 0.08);
   --glass-hi: rgba(255, 255, 255, 0.95);
   --glass-shadow: inset 0 1px 0 var(--glass-hi), 0 20px 48px -20px rgba(15, 23, 42, 0.28);
-  --glass-sheen: rgba(255, 255, 255, 0.85);
-  --glass-edge: rgba(255, 255, 255, 0.98);
   --modal-a: rgba(255, 255, 255, 0.96);
   --modal-b: rgba(243, 246, 250, 0.98);
-  --ripple: rgba(15, 23, 42, 0.1);
-  --grain: 0.02;
   --code-bg: #eef1f5;
-  --grid-dot: rgba(15, 23, 42, 0.05);
-  --spot-wash: rgba(15, 23, 42, 0.035);
-  --spot-line: rgba(30, 158, 95, 0.4);
-  --blob-a: rgba(30, 158, 95, 0.07);
-  --blob-b: rgba(37, 99, 235, 0.06);
-  --blob-c: rgba(30, 158, 95, 0.05);
-  --pool-a: rgba(30, 158, 95, 0.1);
-  --pool-b: rgba(37, 99, 235, 0.09);
   /* Element Plus 主题桥的别名（亮色一套） */
   --panel-2: #f1f4f8;
   --panel-3: #e7ecf3;
@@ -175,15 +139,7 @@ body,
 }
 body {
   font-family: var(--font-ui);
-  /* 环境光一团 + 细点阵底纹（科技感基底），其余交给纯色底 */
-  background:
-    radial-gradient(1200px 640px at 16% -12%, var(--accent-dim), transparent 58%),
-    radial-gradient(var(--grid-dot) 1px, transparent 1.4px),
-    var(--bg);
-  background-size:
-    auto,
-    26px 26px,
-    auto;
+  background: var(--bg);
   color: var(--text);
   overflow: hidden;
   font-size: 13px;
@@ -196,281 +152,12 @@ body {
   color: var(--text);
 }
 
-/* ===== 底板 · 液态环境层：超淡主题色圆斑在最底层缓慢漂移 =====
-   位置尺寸写死，漂移路径 / 周期 / 延迟由 App.vue 在每个色块上随机写 CSS 变量：
-   每次启动轨迹都不同，像背面有液体在慢慢涌动。
-   只用柔和的径向渐变（不叠 filter: blur），避免大面积重绘掉帧；
-   整层的 transform 由 JS 按光标写（±14px 视差），玻璃壳会把这层实时折射出来 */
-.ambient {
-  position: fixed;
-  inset: -28%;
-  z-index: -1;
-  pointer-events: none;
-  will-change: transform;
-}
-.ambient i {
-  position: absolute;
-  border-radius: 50%;
-  will-change: transform;
-}
-.ambient i:nth-child(1) {
-  width: 48vmax;
-  height: 48vmax;
-  left: -2%;
-  top: 2%;
-  background: radial-gradient(closest-side, var(--blob-a), transparent 76%);
-}
-.ambient i:nth-child(2) {
-  width: 42vmax;
-  height: 42vmax;
-  right: 0;
-  bottom: 0;
-  background: radial-gradient(closest-side, var(--blob-b), transparent 76%);
-}
-.ambient i:nth-child(3) {
-  width: 30vmax;
-  height: 30vmax;
-  left: 38%;
-  top: 40%;
-  background: radial-gradient(closest-side, var(--blob-c), transparent 74%);
-}
-.ambient i:nth-child(4) {
-  width: 26vmax;
-  height: 26vmax;
-  left: 14%;
-  bottom: 4%;
-  background: radial-gradient(closest-side, var(--blob-b), transparent 74%);
-  opacity: 0.85;
-}
-.ambient i:nth-child(5) {
-  width: 22vmax;
-  height: 22vmax;
-  right: 16%;
-  top: 8%;
-  background: radial-gradient(closest-side, var(--blob-a), transparent 74%);
-  opacity: 0.75;
-}
-/* 三段式漂移：起点 / 折返点 / 终点全部来自随机变量，配合 alternate 来回游动。
-   timing 用 steps 阶梯化：色块漂移以分钟计，步距不足 2px 肉眼无差，但背景不再
-   每帧变化，玻璃壳的 backdrop-filter 采样频率从 60fps 降到个位数 */
-@media (prefers-reduced-motion: no-preference) {
-  .ambient i {
-    animation: blobDrift var(--dur, 72s) steps(180, end) var(--delay, 0s) infinite alternate;
-  }
-  @keyframes blobDrift {
-    0% {
-      transform: translate3d(var(--fx, -5%), var(--fy, -3%), 0) scale(var(--fs, 0.94));
-    }
-    46% {
-      transform: translate3d(var(--gx, 5%), var(--gy, 6%), 0) scale(var(--gs, 1.08));
-    }
-    100% {
-      transform: translate3d(var(--tx, 11%), var(--ty, 8%), 0) scale(var(--ts, 1.2));
-    }
-  }
-}
-
-/* ===== 颗粒质感：极淡噪点铺在最上层，压掉大面积渐变上的"数字感" ===== */
-/* ===== 粒子尘场：canvas 铺在最底层（z-index: -2），液态色块与光池盖在它上面，
-   玻璃壳再把整层折射出来；每帧由 App.vue 的 bindParticles 绘制 ===== */
-.particles {
-  position: fixed;
-  inset: 0;
-  z-index: -2;
-  pointer-events: none;
-}
-
-/* ===== 3D 球体：氛围层，浮在主区右上的玻璃之下 =====
-   纯 CSS 球：径向渐变做体积光、内阴影压出背光面，高光点绕球心公转 + 球体缓慢浮沉；
-   外侧再挂两圈不同倾角的轨道环（rotateX 把圆压成椭圆，两条倾角不同就成了「球 + 环」的
-   立体结构，而不是平面上一个圆），一颗卫星点沿外侧环的椭圆路径匀速绕行。
-   隔着毛玻璃只剩一团柔化的光球轮廓，有空间感但不抢主体信息 */
-.orb {
-  position: fixed;
-  right: 7%;
-  top: 11%;
-  width: 190px;
-  height: 190px;
-  z-index: -1;
-  pointer-events: none;
-  border-radius: 50%;
-  background:
-    radial-gradient(circle at 32% 28%, var(--pool-a), transparent 52%),
-    radial-gradient(circle at 68% 74%, var(--pool-b), transparent 56%),
-    radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.05), transparent 68%);
-  box-shadow:
-    inset -18px -22px 44px rgba(0, 0, 0, 0.35),
-    inset 10px 12px 30px rgba(255, 255, 255, 0.05),
-    0 0 90px -18px var(--pool-a);
-}
-:root[data-theme="light"] .orb {
-  box-shadow:
-    inset -18px -22px 44px rgba(15, 23, 42, 0.14),
-    inset 10px 12px 30px rgba(255, 255, 255, 0.5),
-    0 0 90px -18px var(--pool-a);
-}
-/* 两圈轨道环：只描边不填充，倾角不同才有前后穿插的立体感 */
-.orb::before,
-.orb::after {
-  content: "";
-  position: absolute;
-  border-radius: 50%;
-  border: 1px solid var(--accent-line);
-  pointer-events: none;
-}
-.orb::before {
-  inset: -11%;
-  opacity: 0.45;
-  transform: rotateX(74deg) rotateZ(-14deg);
-}
-.orb::after {
-  inset: -20%;
-  opacity: 0.26;
-  transform: rotateX(70deg) rotateZ(38deg);
-}
-/* 高光点：绕球心公转的小亮斑，球的"光源" */
-.orb i {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-}
-.orb i::before {
-  content: "";
-  position: absolute;
-  left: 24%;
-  top: 18%;
-  width: 34%;
-  height: 26%;
-  border-radius: 50%;
-  background: radial-gradient(closest-side, rgba(255, 255, 255, 0.35), transparent 72%);
-}
-/* 卫星点：带着与外环相同的 rotateX 倾角绕行，走的才是环本身的椭圆而不是正圆 */
-.orb i::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 5px;
-  height: 5px;
-  margin: -2.5px 0 0 -2.5px;
-  border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 10px var(--accent);
-  opacity: 0.7;
-}
-@media (prefers-reduced-motion: no-preference) {
-  /* 三个动画同样 steps 阶梯化（理由同 blobDrift）：orb 隔着毛玻璃只剩柔化轮廓，
-     步进间隔 0.1s 上下的微差完全不可辨，玻璃 backdrop 却不必逐帧重采样 */
-  .orb {
-    animation: orbFloat 11s steps(60, end) infinite;
-  }
-  .orb i {
-    animation: orbSheen 26s steps(120, end) infinite;
-  }
-  .orb i::after {
-    animation: orbSat 17s steps(240, end) infinite;
-  }
-  @keyframes orbFloat {
-    0%,
-    100% {
-      transform: translateY(0);
-    }
-    50% {
-      transform: translateY(-16px);
-    }
-  }
-  @keyframes orbSheen {
-    from {
-      transform: rotate(0deg);
-    }
-    to {
-      transform: rotate(360deg);
-    }
-  }
-  @keyframes orbSat {
-    from {
-      transform: rotateX(74deg) rotate(0deg) translateX(116px);
-    }
-    to {
-      transform: rotateX(74deg) rotate(360deg) translateX(116px);
-    }
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .particles {
-    display: none;
-  }
-}
-.grain {
-  position: fixed;
-  inset: 0;
-  z-index: 2;
-  pointer-events: none;
-  opacity: var(--grain);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)'/%3E%3C/svg%3E");
-  background-size: 180px 180px;
-}
-
-/* ===== 底板光池：两团跟着光标游走的光斑 =====
-   位置每帧由 App.vue 算，两团速度一慢一快：慢的像底层液体，快的像浮在上面的一层。
-   与静态色块同在最底层（z-index: -1），只会从玻璃壳里透出来，不覆盖任何内容 */.pool {
-  position: fixed;
-  left: 0;
-  top: 0;
-  width: 34vmax;
-  height: 34vmax;
-  margin: -17vmax 0 0 -17vmax;
-  z-index: -1;
-  border-radius: 50%;
-  pointer-events: none;
-  background: radial-gradient(closest-side, var(--pool-a), transparent 74%);
-  transform: translate3d(-60vmax, -60vmax, 0);
-  will-change: transform;
-}
-.pool + .pool {
-  width: 24vmax;
-  height: 24vmax;
-  margin: -12vmax 0 0 -12vmax;
-  background: radial-gradient(closest-side, var(--pool-b), transparent 72%);
-}
-
-/* ===== 毛玻璃壳（含左栏两张卡 / 主舞台 / 顶部横条 / 设置弹窗） =====
-   玻璃的"实时计算"分两层：
-   1) 壳内 ::before 一块柔光斑，位置跟着光标在窗口里的相对位置走（全窗口只有一个光源），
-      0.6s 缓动追随 —— 鼠标移动时玻璃面上的反光会顺着扫过去；
-   2) 上 / 左受光边比下 / 右亮，模拟同一光源照出的玻璃厚度 */
+/* 静态面板外壳：当前视觉不包含液态背景或光标驱动的光影层。 */
 .glass {
   position: relative;
-  /* 液态玻璃增强：饱和度 160→185（玻璃把底面色"泡"得更浓），双层环境投影（近影+长影）
-     压出悬浮层级；受光边换双层（顶边更亮的 hi + 通用 edge），玻璃厚度感更立体 */
-  background: linear-gradient(165deg, var(--glass-a), var(--glass-b));
-  backdrop-filter: blur(30px) saturate(185%);
-  -webkit-backdrop-filter: blur(30px) saturate(185%);
+  background: var(--panel);
   border: 1px solid var(--glass-bd);
-  border-top-color: var(--glass-hi);
-  border-left-color: var(--glass-edge);
-  box-shadow:
-    var(--glass-shadow),
-    0 4px 12px -6px rgba(0, 0, 0, 0.35);
   transition: background 0.35s ease, border-color 0.35s ease;
-}
-/* z-index: -1 让光斑落在壳背景之上、内容之下；五处壳自身都 overflow: hidden，不会溢出圆角。
-   用显式椭圆尺寸而不是 closest-side：顶部横条这类宽扁的壳上，closest-side 会缩成一个小圆点 */
-.glass::before {
-  content: "";
-  position: absolute;
-  inset: -30%;
-  z-index: -1;
-  border-radius: 50%;
-  pointer-events: none;
-  /* 液态玻璃增强：光斑主体加一圈极淡的主题色描边渐变，
-     鼠标扫过时玻璃面除白反光外还有一层微弱的"液面油彩" */
-  background:
-    radial-gradient(ellipse 62% 62% at 50% 50%, var(--glass-sheen), transparent 74%),
-    radial-gradient(ellipse 78% 78% at 50% 50%, transparent 62%, var(--accent-dim), transparent 78%);
-  transform: translate3d(var(--sx, -14%), var(--sy, -20%), 0);
-  transition: transform 0.6s var(--ease);
-  will-change: transform;
 }
 
 /* ===== 骨架：左栏 + 顶部横条（子页面切换）+ 主舞台 ===== */
@@ -494,28 +181,6 @@ body {
      只有"可滚动容器"（hidden/auto/scroll）才会把自动最小尺寸压成 0。改成 clip 后它不再算滚动容器，
      轨道被内容撑到内容高度（实测 812 → 928），主舞台整体溢出窗口下方与右侧 —— 这一条踩过一次，别再动 */
   overflow: hidden;
-}
-/* 主舞台的光斑不外溢（其他玻璃壳保持 inset:-30% 的溢光）：
-   那圈溢光是"可滚动溢出区"的来源，会让人点一下靠右的控件就被 scrollIntoView 横向推走几十像素，
-   没有滚动条就再也拉不回来。这里把光斑限制在壳内，既不影响观感，也不产生可滚动区域 */
-.main::before {
-  inset: 0;
-}
-/* 主舞台内侧的渐变网格（gradient mesh）：四团极淡的主题色被压在同一层里，
-   只负责把大片玻璃面分出层次，不参与交互、不吃点击、也不抢内容对比 */
-.main::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  border-radius: inherit;
-  pointer-events: none;
-  background:
-    radial-gradient(58% 46% at 10% 4%, var(--blob-a), transparent 70%),
-    radial-gradient(50% 44% at 92% 98%, var(--blob-b), transparent 72%),
-    radial-gradient(38% 34% at 80% 8%, var(--blob-c), transparent 74%),
-    radial-gradient(42% 38% at 28% 92%, var(--blob-b), transparent 76%);
-  opacity: 0.85;
 }
 .pages {
   flex: 1;
@@ -605,38 +270,17 @@ body {
   transform: none;
   box-shadow: none;
 }
-/* 点击涟漪：App.vue 在 pointerdown 时往按钮里塞一个 .ripple，动画结束自清 */
-.btn .ripple {
-  position: absolute;
-  border-radius: var(--r-pill);
-  background: radial-gradient(closest-side, var(--ripple), transparent 72%);
-  pointer-events: none;
-  transform: scale(0);
-  animation: btnRipple 0.62s var(--ease) forwards;
-}
-@keyframes btnRipple {
-  from {
-    transform: scale(0);
-    opacity: 0.95;
-  }
-  to {
-    transform: scale(1);
-    opacity: 0;
-  }
-}
 .btn-primary {
   background: var(--accent);
   border-color: var(--accent);
   color: #06130b;
-  /* 涟漪在实心绿底上换成深色，不然看不见 */
-  --ripple: rgba(6, 19, 11, 0.22);
 }
 .btn-primary:hover {
   background: var(--accent-strong);
   border-color: var(--accent-strong);
   box-shadow: 0 0 22px -4px var(--accent-line), 0 6px 20px -8px var(--accent-line);
 }
-/* 表格/列表行内文字操作按钮（改价/历史/删除等）：不占按钮高度，也不吃点击涟漪 */
+/* 表格/列表行内文字操作按钮（改价/历史/删除等）：不占按钮高度 */
 .btn-link {
   display: inline-flex;
   align-items: center;
@@ -764,11 +408,10 @@ body {
   background: var(--bg-soft);
   padding: 12px 14px 11px;
   position: relative;
-  transition: border-color 0.25s ease, transform 0.25s var(--ease);
+  transition: border-color 0.25s ease;
 }
 .kpi:hover {
   border-color: var(--line-strong);
-  transform: translateY(-1px);
 }
 .kpi span {
   font-size: 11.5px;
@@ -802,71 +445,18 @@ body {
   gap: var(--gap-block);
   margin-top: 0;
 }
-/* 卡片：全站统一液态玻璃（与记忆中枢 mem-card / 用量统计卡同一配方） */
+/* 卡片：全站统一的静态面板 */
 .card {
   border-radius: var(--r-lg);
   border: 1px solid var(--glass-bd);
-  background: var(--glass-a);
-  backdrop-filter: blur(18px) saturate(160%);
-  -webkit-backdrop-filter: blur(18px) saturate(160%);
-  box-shadow: var(--glass-glow), var(--glass-shadow);
+  background: var(--panel);
+  box-shadow: none;
   padding: 14px 16px;
   position: relative;
-  transition: border-color 0.25s ease, transform 0.25s var(--ease), box-shadow 0.2s var(--ease);
+  transition: border-color 0.25s ease;
 }
 .card:hover {
   border-color: var(--line-strong);
-  transform: translateY(-1px);
-}
-/* ===== 卡片的液态玻璃：悬停时卡内聚光 + 边缘流光 + 一次向外扩散的光晕 =====
-   --mx/--my（聚光落点）由 App.vue 的全局 mousemove 委托写入；只在卡内，不覆盖内容 */
-.card::after,
-.kpi::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: radial-gradient(260px circle at var(--mx, 50%) var(--my, 50%), var(--spot-wash), transparent 68%);
-  opacity: 0;
-  transition: opacity 0.35s ease;
-  pointer-events: none;
-}
-.card::before,
-.kpi::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  padding: 1px;
-  background: radial-gradient(230px circle at var(--mx, 50%) var(--my, 50%), var(--spot-line), transparent 72%);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  opacity: 0;
-  transition: opacity 0.35s ease;
-  pointer-events: none;
-}
-.card:hover::after,
-.card:hover::before,
-.kpi:hover::after,
-.kpi:hover::before {
-  opacity: 1;
-}
-/* 悬停瞬间从卡片边缘荡开一圈极淡的主题色光晕（一次，不循环），是"扩散"那一口呼吸 */
-@media (prefers-reduced-motion: no-preference) {
-  .card:hover,
-  .kpi:hover {
-    animation: cardDiffuse 0.95s var(--ease);
-  }
-  @keyframes cardDiffuse {
-    from {
-      box-shadow: 0 0 0 0 var(--accent-dim);
-    }
-    to {
-      box-shadow: 0 0 0 10px transparent;
-    }
-  }
 }
 .card-title {
   font-size: 12px;
@@ -1335,59 +925,6 @@ body {
     padding: 10px 16px 14px;
   }
 }
-
-/* ===== 动效（克制） =====
-   壳级进场错峰上浮（侧栏双卡片 → 顶部横条 → 主舞台）；页面切换淡入；悬停微亮在各组件 transition */
-@media (prefers-reduced-motion: no-preference) {
-  .app > .glass,
-  .app > .side-col > .glass {
-    animation: shellIn 0.5s var(--ease) both;
-  }
-  .app > .tabs.glass {
-    animation-delay: 70ms;
-  }
-  .app > .side-col > .side-overview {
-    animation-delay: 70ms;
-  }
-  .app > .main.glass {
-    animation-delay: 140ms;
-  }
-  @keyframes shellIn {
-    from {
-      opacity: 0;
-      transform: translateY(10px) scale(0.997);
-    }
-    to {
-      opacity: 1;
-      transform: none;
-    }
-  }
-  .page-anim {
-    animation: pageFadeIn 0.32s var(--ease) both;
-  }
-  /* 页面入场升级：上浮 + 轻微模糊消散，切换页面像玻璃从雾里显影（只动 opacity/transform/filter） */
-  @keyframes pageFadeIn {
-    from {
-      opacity: 0;
-      transform: translateY(8px) scale(0.995);
-      filter: blur(5px);
-    }
-    to {
-      opacity: 1;
-      transform: none;
-      filter: blur(0);
-    }
-  }
-}
-
-/* 关掉动效时：环境色块停在初始位置（漂移动画本身已按 no-preference 关闭），
-   光池是纯装饰，直接不显示（它的 transform 由 JS 每帧写） */
-@media (prefers-reduced-motion: reduce) {
-  .pool {
-    display: none;
-  }
-}
-
 
 /* ===== 设置：配置页 / 设置弹窗共用的 section 版式（各 Config*Section 与 SkillsWebdavView 外的配置页） ===== */
 /* section 的标题行：标题 + 说明 + 右侧动作（保存 / 状态标签） */
@@ -1897,42 +1434,6 @@ body {
   transition: background 0.18s ease;
 }
 
-/* --- 6) 玻璃壳顶部流光：一道柔光沿壳顶周期性横扫（概念稿"扫描光带"的产品级形态）---
-   与 KPI 的 .k-line-glow 同一种语言（background-position 动画，画在伪元素盒内），
-   不需要壳 overflow:hidden、不产生位移溢出；.main 的 ::after 已被渐变网格占用，显式排除。
-   亮色主题下换彩虹渐变 = 概念稿的"棱镜彩光"，深色保持单一绿光（克制动效纪律） */
-@media (prefers-reduced-motion: no-preference) {
-  .glass:not(.main)::after {
-    content: "";
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 2px;
-    border-radius: var(--r-pill) var(--r-pill) 0 0;
-    pointer-events: none;
-    background: linear-gradient(90deg, transparent, var(--spot-line), transparent);
-    background-size: 45% 100%;
-    background-repeat: no-repeat;
-    animation: glassScan 7s var(--ease) infinite;
-  }
-  /* 单一主题色流光（克制动效纪律：全站只有绿一个动效色）；亮色同色不换彩虹 */
-  :root[data-theme="light"] .glass:not(.main)::after {
-    background: linear-gradient(90deg, transparent, var(--accent-line), transparent);
-    background-size: 45% 100%;
-    background-repeat: no-repeat;
-  }
-  @keyframes glassScan {
-    0% {
-      background-position: -45% 0;
-    }
-    55%,
-    100% {
-      background-position: 145% 0;
-    }
-  }
-}
-
 /* --- 7) 均衡器：五柱错峰弹跳，"运行中 / 流式"的活性标识（工具类，按需取用） --- */
 .eq {
   display: inline-flex;
@@ -2091,114 +1592,6 @@ body {
   }
 }
 
-/* --- 9) 液滴光标 + 点击涟漪（液态玻璃设计稿 v5 的标志性鼠标交互）---
-   DOM 与行为由 src/motion/cursor.ts 创建（触屏 / 减弱动效下不安装，系统光标不受影响）；
-   cursor:none 只挂在 body.cursor-on 上 —— 安装成功且 rAF 已启动才加类，JS 异常时系统光标兜底。
-   输入框保留 text 光标（输入场景需要 I-beam） */
-.cursor {
-  position: fixed;
-  left: 0;
-  top: 0;
-  z-index: 2147483000;
-  pointer-events: none;
-}
-/* x-halo：一团更大更慢的光晕垫底（位置由 JS lerp 驱动） */
-.cursor .x-halo {
-  position: fixed;
-  left: 0;
-  top: 0;
-  width: 90px;
-  height: 90px;
-  margin: -45px 0 0 -45px;
-  border-radius: 50%;
-  background: radial-gradient(closest-side, var(--accent-dim), transparent 72%);
-  will-change: transform;
-}
-/* x-drop：外环液滴，弹簧追赶 + 按速度方向压扁拉伸（transform 由 JS 驱动），
-   尺寸 / 配色过渡交给 CSS —— 悬停可交互元素时融化放大成柔光斑 */
-.cursor .x-drop {
-  position: fixed;
-  left: 0;
-  top: 0;
-  width: 30px;
-  height: 30px;
-  margin: -15px 0 0 -15px;
-  border-radius: 50%;
-  border: 1.5px solid var(--cursor-glow);
-  box-shadow: 0 0 14px -2px var(--cursor-glow), inset 0 0 8px -4px var(--cursor-glow);
-  will-change: transform;
-  transition: width 0.28s var(--ease-spring), height 0.28s var(--ease-spring),
-    margin 0.28s var(--ease-spring), border-color 0.2s, background 0.25s, box-shadow 0.25s;
-}
-/* 悬停可交互元素：液滴融化放大成柔光斑 */
-.cursor.hot .x-drop {
-  width: 46px;
-  height: 46px;
-  margin: -23px 0 0 -23px;
-  background: var(--accent-dim);
-  border-color: var(--accent-line);
-  box-shadow: 0 0 22px -2px var(--accent-line), inset 0 0 12px -4px var(--accent-line);
-}
-/* x-core：实心核，即时跟随保证操作精度 */
-.cursor .x-core {
-  position: fixed;
-  left: 0;
-  top: 0;
-  width: 6px;
-  height: 6px;
-  margin: -3px 0 0 -3px;
-  border-radius: 50%;
-  background: var(--cursor-core);
-  box-shadow: 0 0 8px var(--cursor-glow);
-  will-change: transform;
-  transition: opacity 0.2s;
-}
-.cursor.hot .x-core {
-  opacity: 0.9;
-}
-/* cursor:none 通配到 body 下全部元素：Element 弹层 / 自绘下拉 / Teleport 挂到 body 的
-   浮层都是 body 子孙，漏掉任何一张都会露出系统箭头造成"双光标"割裂。
-   输入类控件保留 text（I-beam 输入场景需要），其余全部交给液滴光标 */
-body.cursor-on,
-body.cursor-on *,
-body.cursor-on *::before,
-body.cursor-on *::after {
-  cursor: none !important;
-}
-body.cursor-on input,
-body.cursor-on textarea,
-body.cursor-on select,
-body.cursor-on .el-input__inner,
-body.cursor-on .el-textarea__inner {
-  cursor: text;
-}
-/* 点击涟漪：从光标荡开的扩散环（dropWave 动画占用 transform，居中用负 margin） */
-.dropwave {
-  position: fixed;
-  z-index: 2147482999;
-  width: 10px;
-  height: 10px;
-  margin: -5px 0 0 -5px;
-  border-radius: 50%;
-  border: 1.5px solid var(--accent);
-  pointer-events: none;
-}
-@media (prefers-reduced-motion: no-preference) {
-  .dropwave {
-    animation: dropWave 0.55s var(--ease) forwards;
-  }
-  @keyframes dropWave {
-    from {
-      transform: scale(0.4);
-      opacity: 0.9;
-    }
-    to {
-      transform: scale(5.2);
-      opacity: 0;
-    }
-  }
-}
-
 /* --- 5) prefers-reduced-motion 全局兜底 ---
    global.css 自身的动效均已按 no-preference 门控，但 sync.css / skills.css / element.css
    存在十余个未约束的 infinite 动画（shimmer / pulse / sheen 等），这里统一收口：
@@ -2215,84 +1608,6 @@ body.cursor-on .el-textarea__inner {
     animation-duration: 1.2s !important;
     animation-iteration-count: infinite !important;
   }
-}
-
-/* --- 6) 界面动效开关（设置 · 通用，html.fx-off 由 store.applyFx 切换）---
-   与上面 reduced-motion 同一套收口：装饰动画压停（时长近零 + 只播一次）、粒子隐藏。
-   差异：手动关闭的用户只是不想要动效，"进行中"的功能指示（转圈 / loading / 骨架屏 /
-   同步进度）必须保留可读，豁免清单比 reduced 下更宽。仅展示层，业务逻辑不受影响。
-   注意：豁免的时长须与各处原始动画保持一致，改原始动画时同步这里。
-   粒子尘场 / 光池追随两个子开关的单独收口见下面 6.1 */
-html.fx-off *,
-html.fx-off *::before,
-html.fx-off *::after {
-  animation-duration: 0.01ms !important;
-  animation-iteration-count: 1 !important;
-}
-/* 功能性"进行中"指示豁免：btn-cta 转圈 / Element loading 图标 / 同步进度转圈与阶段环 / 骨架屏 */
-html.fx-off .btn-cta.is-loading svg {
-  animation-duration: 1.2s !important;
-  animation-iteration-count: infinite !important;
-}
-html.fx-off .el-icon.is-loading {
-  animation-duration: 2s !important;
-  animation-iteration-count: infinite !important;
-}
-html.fx-off .sync-scope .syncbar .stitle svg {
-  animation-duration: 1.4s !important;
-  animation-iteration-count: infinite !important;
-}
-html.fx-off .sync-scope .stage.active .sdot {
-  animation-duration: 1.6s !important;
-  animation-iteration-count: infinite !important;
-}
-html.fx-off .sync-scope .skeleton::after {
-  animation-duration: 1.4s !important;
-  animation-iteration-count: infinite !important;
-}
-/* 粒子画布整层隐藏（同 reduced 下处理），否则最后一帧尘粒定格在屏上 */
-html.fx-off .particles {
-  display: none;
-}
-/* 玻璃壳反光由 JS 写 --sx/--sy 驱动、卡片聚光由 --mx/--my 驱动，JS 拆除后残位固定
-   失去意义：直接隐藏回到无光效的静态玻璃；卡片悬停位移一并压平 */
-html.fx-off .glass::before {
-  display: none;
-}
-html.fx-off .card::after,
-html.fx-off .card::before,
-html.fx-off .kpi::after,
-html.fx-off .kpi::before {
-  opacity: 0 !important;
-}
-html.fx-off .card,
-html.fx-off .kpi,
-html.fx-off .sk-skill-card {
-  transform: none !important;
-}
-/* 背景色块停在设计的静态帧（0% 位姿），避免动画移除后散落回未偏移的自然位置 */
-html.fx-off .ambient i {
-  transform: translate3d(var(--fx, -5%), var(--fy, -3%), 0) scale(var(--fs, 0.94));
-}
-
-/* --- 6.1) 「粒子尘场 / 光池追随」子开关（设置 · 通用，与界面动效互相独立，默认关闭）---
-   关闭时整层隐藏：粒子画布只拆绑定的活会留下最后一帧尘粒定格在屏上，
-   光池则停在半路还占着合成层；总开关关闭时由上面的 fx-off 规则各自收口 */
-html.fx-particles-off .particles {
-  display: none;
-}
-html.fx-pools-off .pool {
-  display: none;
-}
-/* 鼠标互动光影关掉后，卡片的聚光与边缘流光不再跟随光标（JS 已拆）：静态亮斑没有意义，整组隐藏
-   （.module-card 是侧栏模块卡的悬停聚光，样式在 Sidebar.vue 的 scoped 块里，命中同一批委托目标）；
-   玻璃壳反光保留在 CSS 默认位（静态受光，非鼠标效果），由 JS 复位 --sx/--sy 完成 */
-html.fx-pools-off .card::after,
-html.fx-pools-off .card::before,
-html.fx-pools-off .kpi::after,
-html.fx-pools-off .kpi::before,
-html.fx-pools-off .module-card::after {
-  opacity: 0 !important;
 }
 
 /* ===== 统一表单控件（原用量统计规范，全站共用；作用域副本已收编于此） ===== */

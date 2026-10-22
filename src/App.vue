@@ -13,12 +13,9 @@
 import zhCn from "element-plus/es/locale/lang/zh-cn";
 import { ElConfigProvider } from "element-plus";
 import { onMounted, onUnmounted, ref, watch } from "vue";
-import { animate, stagger } from "motion-v";
-import { usePreferredReducedMotion } from "@vueuse/core";
 import { useAppStore } from "./stores/app";
 import { useSyncStore } from "./stores/sync";
 import { useUsageStore } from "./stores/usage";
-import { setCursorFX } from "./motion/cursor";
 import Sidebar from "./components/Sidebar.vue";
 import PageTabs from "./components/PageTabs.vue";
 import SettingsDialog from "./components/config/SettingsDialog.vue";
@@ -77,472 +74,7 @@ const memory = useMemoryStore();
 let memoryDefaultApplied = false;
 const usageData = useUsageStore();
 
-/** 系统级减弱动效偏好（VueUse 托管媒体查询，动效层统一听它） */
-const reducedMotion = usePreferredReducedMotion();
-
-/** [a, b) 区间随机数 */
-const rand = (a: number, b: number) => a + Math.random() * (b - a);
-
-/** 背景液态色块的随机漂移参数：位置尺寸写死在 CSS 里，路径 / 周期 / 相位每次启动现摇一份
-    （绑在元素 style 上，首帧就是随机值，不会先按默认值动一下再跳） */
-const blobs = Array.from({ length: 5 }, () => {
-  const offset = () => `${rand(-13, 13).toFixed(2)}%`;
-  return {
-    "--dur": `${rand(52, 96).toFixed(1)}s`,
-    "--delay": `-${rand(0, 70).toFixed(1)}s`,
-    "--fx": offset(),
-    "--fy": offset(),
-    "--gx": offset(),
-    "--gy": offset(),
-    "--tx": offset(),
-    "--ty": offset(),
-    "--fs": rand(0.86, 1).toFixed(3),
-    "--gs": rand(1.02, 1.14).toFixed(3),
-    "--ts": rand(1.14, 1.3).toFixed(3),
-  };
-});
-
-/** 卡片聚光的委托目标（与各模块的 :hover 聚光 CSS 对应）：
-    bindPointer 按它写 --mx/--my；关闭鼠标光影时按同一份清单复位残位 */
-const SPOT_TARGETS = ".card, .kpi, .module-card, .mem-card, .mem-kpi, .mem-tile";
-
-/** 鼠标交互 · 其一：玻璃壳内的反光。光标在窗口里的相对位置 = 全窗口唯一光源的位置，
-   反光落在各壳的 ::before 上（z-index: -1，在壳面之内、内容之下），不会盖住任何东西
-   其二：卡片悬停时的卡内聚光（--mx/--my 写进卡片自己的坐标）
-   事件里只记坐标，DOM 写入合并到每帧一次：--sx/--sy 挂在 :root 上，一动就是全文档
-   样式重算，高报点率鼠标下会以百Hz频率全量失效；反光自带 0.6s 过渡，低频更新目标值
-   视觉无异（衔接交给过渡本身），阈值 0.35% ≈ 全程一百步。
-   整组归「光池追随」开关（默认关）：关闭时不装监听、鼠标移动零写入，避免全文档重算 */
-function bindPointer() {
-  let mx = -1;
-  let my = -1;
-  let pmx = -1;
-  let pmy = -1; // 上次写入卡片聚光的坐标：光标停住时不重复 gBCR / 写样式
-  let wSx = NaN;
-  let wSy = NaN; // 上次写入的反光位（NaN 比较恒 false，保证首帧必写）
-  let hotEl: HTMLElement | null = null;
-  let raf = 0;
-
-  const tick = () => {
-    raf = 0;
-    // 先读后写：gBCR 读干净布局，所有样式写入都放在读取之后
-    let wrote = false;
-    if (hotEl && (mx !== pmx || my !== pmy)) {
-      const r = hotEl.getBoundingClientRect();
-      hotEl.style.setProperty("--mx", `${(mx - r.left).toFixed(1)}px`);
-      hotEl.style.setProperty("--my", `${(my - r.top).toFixed(1)}px`);
-      pmx = mx;
-      pmy = my;
-      wrote = true;
-    }
-    const sx = ((mx / window.innerWidth) * 2 - 1) * 18;
-    const sy = ((my / window.innerHeight) * 2 - 1) * 18;
-    if (!(Math.abs(sx - wSx) < 0.35 && Math.abs(sy - wSy) < 0.35)) {
-      wSx = sx;
-      wSy = sy;
-      document.documentElement.style.setProperty("--sx", `${sx.toFixed(2)}%`);
-      document.documentElement.style.setProperty("--sy", `${sy.toFixed(2)}%`);
-      wrote = true;
-    }
-    // 光标停住且变化低于阈值：挂起，下一次 mousemove 再唤醒
-    if (wrote) raf = requestAnimationFrame(tick);
-  };
-
-  const onMove = (e: MouseEvent) => {
-    mx = e.clientX;
-    my = e.clientY;
-    // 记忆中枢的玻璃卡片（mem-card/mem-kpi/mem-tile）与用量统计卡片共用同一套聚光委托
-    hotEl = (e.target as HTMLElement)?.closest?.(SPOT_TARGETS) as HTMLElement | null;
-    if (!raf) raf = requestAnimationFrame(tick);
-  };
-
-  window.addEventListener("mousemove", onMove, { passive: true });
-  return () => {
-    window.removeEventListener("mousemove", onMove);
-    if (raf) cancelAnimationFrame(raf);
-  };
-}
-
-/** 鼠标交互 · 其三（底板主体）：整片液态背景随光标轻微偏移，两团光池在玻璃之下慢慢追过去。
-   两层速度不同，拉开纵深；滚动时背景再反向错一层（软钳制 ±38px），形成背景视差。
-   都在 z-index: -1 的底板里，隔着玻璃壳被折射出来。
-   「光池追随」开关覆盖全部"光标驱动"的部分（背景偏移 + 两团光斑）：
-   关闭时不装 mousemove 监听、也不接管光斑（留在初始屏外 + html.fx-pools-off 隐藏）；
-   滚动视差属背景层本身，仍随总开关走 */
-function bindBackdrop() {
-  const ambient = document.querySelector<HTMLElement>(".ambient");
-  const follow = app.config.fxPools; // 光标视差与光池都归「光池追随」
-  const pools = follow ? Array.from(document.querySelectorAll<HTMLElement>(".pool")) : [];
-  if (!ambient && !pools.length) return () => {};
-  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return () => {};
-
-  const speed = [0.05, 0.1]; // 一慢一快：慢的像底层液体，快的像浮在上面的一层
-  let tx = window.innerWidth / 2;
-  let ty = window.innerHeight / 2;
-  let ax = 0;
-  let ay = 0;
-  // 页面滚动驱动的背景视差：tanh 软钳制，滚得再深背景也只偏移一小段
-  let scrollRaw = 0;
-  let scrollSmooth = 0;
-  const pos = pools.map(() => ({ x: tx, y: ty }));
-
-  const onMove = (e: MouseEvent) => {
-    tx = e.clientX;
-    ty = e.clientY;
-    wake();
-  };
-  if (follow) window.addEventListener("mousemove", onMove, { passive: true });
-  // capture：.page / .sync-page 这些内部滚动容器的 scroll 不冒泡，必须在捕获阶段拿
-  const onScroll = (e: Event) => {
-    const scroller = e.target as HTMLElement;
-    if (scroller?.classList?.contains("page") || scroller?.classList?.contains("sync-page")) {
-      scrollRaw = scroller.scrollTop;
-      wake();
-    }
-  };
-  window.addEventListener("scroll", onScroll, { capture: true, passive: true });
-
-  let raf = 0;
-  const wake = () => {
-    if (!raf) raf = requestAnimationFrame(tick);
-  };
-  const tick = () => {
-    raf = requestAnimationFrame(tick);
-    // 整片背景朝光标侧偏移（上限 ±14px），像液面被轻轻推了一下（关闭光池跟随时恒为 0）
-    const axT = follow ? ((tx / window.innerWidth) * 2 - 1) * 14 : 0;
-    const ayT = follow ? ((ty / window.innerHeight) * 2 - 1) * 14 : 0;
-    ax += (axT - ax) * 0.05;
-    ay += (ayT - ay) * 0.05;
-    // 滚动视差：内容往上走，背景以约 6% 的速率反向错开，缓动追随不生硬
-    scrollSmooth += (scrollRaw - scrollSmooth) * 0.08;
-    const par = -38 * Math.tanh(scrollSmooth / 700);
-    if (ambient) ambient.style.transform = `translate3d(${ax.toFixed(2)}px, ${(ay + par).toFixed(2)}px, 0)`;
-    pools.forEach((el, i) => {
-      const p = pos[i];
-      const sp = speed[i] ?? 0.08;
-      p.x += (tx - p.x) * sp;
-      p.y += (ty - p.y) * sp;
-      el.style.transform = `translate3d(${p.x.toFixed(1)}px, ${(p.y + par * (i ? 0.5 : 0.8)).toFixed(1)}px, 0)`;
-    });
-    // 全部追随量收敛（光标停住、滚动停住、光池追上光标）后挂起：背景静止，
-    // 玻璃壳的 backdrop-filter 不再被逼着逐帧重采样；下次鼠标/滚动事件唤醒。
-    // 收敛耗时即"光池慢慢追过去"的设计时长，追完即停
-    const settled =
-      Math.abs(axT - ax) < 0.05 &&
-      Math.abs(ayT - ay) < 0.05 &&
-      Math.abs(scrollRaw - scrollSmooth) < 0.05 &&
-      pos.every((p) => Math.abs(tx - p.x) < 0.05 && Math.abs(ty - p.y) < 0.05);
-    if (settled) {
-      cancelAnimationFrame(raf);
-      raf = 0;
-    }
-  };
-  raf = requestAnimationFrame(tick);
-
-  return () => {
-    cancelAnimationFrame(raf);
-    window.removeEventListener("mousemove", onMove);
-    window.removeEventListener("scroll", onScroll, { capture: true });
-  };
-}
-
-/** 滚动渐入 + 卡片错落：页面内容块第一次进入视口时，由 motion-v 做一次
-   「上浮 + 淡入 + 轻微过冲回弹」，同批露出的兄弟按 55ms 错峰，层次就出来了。
-   全程只播一次（IO 触发即断开），之后悬停/布局动画完全不受影响。
-   目标选择器覆盖三套体系：框架 .page-body / skills .sk- / 用量同步 .sync-scope */
-function bindReveal() {
-  const io = new IntersectionObserver(
-    (entries) => {
-      // 同一帧露出的归为一组，组内错峰才有"错落"而不是"齐步走"
-      const batch = entries.filter((en) => en.isIntersecting).map((en) => en.target as HTMLElement);
-      if (!batch.length) return;
-      batch.forEach((el) => io.unobserve(el));
-      if (reducedMotion.value === "reduce") return; // 不播动画，元素保持默认可见
-      animate(
-        batch,
-        { opacity: [0, 1], transform: ["translateY(16px) scale(0.985)", "translateY(0px) scale(1)"] },
-        { duration: 0.55, delay: stagger(0.055), ease: [0.22, 1.2, 0.36, 1] as const }
-      );
-    },
-    { threshold: 0.06, rootMargin: "0px 0px -4% 0px" }
-  );
-
-  const SELECTOR = [
-    ".page-body > *",
-    ".kpis > *",
-    ".grid-2 > *",
-    ".sk-page section",
-    ".sk-grid > *",
-    ".top-kpis-grid > .kpi",
-    ".sync-scope .card",
-  ].join(", ");
-
-  const seen = new WeakSet<Element>();
-  function scan(root: ParentNode) {
-    root.querySelectorAll(SELECTOR).forEach((el) => {
-      if (seen.has(el)) return;
-      seen.add(el);
-      io.observe(el);
-    });
-  }
-
-  // 页面懒挂载 / 列表数据后渲染，新节点随时可能出现，子树变动时增量扫描
-  const mo = new MutationObserver((muts) => {
-    muts.forEach((m) => {
-      m.addedNodes.forEach((n) => {
-        if (n.nodeType === 1) scan(n as Element);
-      });
-    });
-  });
-  const pages = document.querySelector(".pages");
-  if (pages) {
-    scan(pages);
-    mo.observe(pages, { childList: true, subtree: true });
-  }
-
-  return () => {
-    io.disconnect();
-    mo.disconnect();
-  };
-}
-
-/** 数字变化平滑过渡：指标卡文本里的数值变化时，用 motion-v 的补间从旧值滚到新值，
-   前缀 / 后缀 / 千分位 / 小数位原样保留。
-   只挑纯文本节点：带子元素的指标卡会被 textContent 覆写掉子节点，故不在目标内；
-   用量同步总览的 .k-value 自带滚动动画，也刻意排除，避免双重补间 */
-function bindCountUp() {
-  const NUM = /(-?[\d,]+(?:\.\d+)?)/;
-  const TARGET = ".kpi b, .agg-item b, .big-num, .ov-num";
-  const last = new WeakMap<HTMLElement, string>();
-  // 自己写进去的中间值：补间每帧都在改 textContent，会反过来触发 MutationObserver；
-  // 不认领这些写入就会「自己触发自己」，在动画中途反向重开，读数是来回抖的
-  const selfWritten = new WeakMap<HTMLElement, string>();
-  const running = new WeakMap<HTMLElement, { stop: () => void }>();
-
-  function parse(text: string) {
-    const m = text.match(NUM);
-    if (!m || m.index === undefined) return null;
-    const value = parseFloat(m[1].replace(/,/g, ""));
-    if (!Number.isFinite(value)) return null;
-    return { prefix: text.slice(0, m.index), suffix: text.slice(m.index + m[1].length), value, raw: m[1] };
-  }
-
-  function onChange(el: HTMLElement) {
-    const text = el.textContent ?? "";
-    if (selfWritten.get(el) === text) return; // 自己刚写的中间帧，不是外部数据变化
-    if (last.get(el) === text) return;
-    const to = parse(text);
-    const from = parse(last.get(el) ?? "");
-    last.set(el, text);
-    // 锚定基线 / 非数值变化 / 减弱动效：直接过，不补间
-    if (!to || !from || to.value === from.value || reducedMotion.value === "reduce") return;
-    if (Math.abs(to.value) >= 1e15 || Math.abs(from.value) >= 1e15) return;
-    // 口径以新文本为准：千分位有没有、小数留几位，滚动过程不跳格式
-    const grouped = to.raw.includes(",");
-    const decimals = (to.raw.split(".")[1] ?? "").length;
-    const fmt = (v: number) =>
-      to.prefix + v.toLocaleString("en-US", { useGrouping: grouped, minimumFractionDigits: decimals, maximumFractionDigits: decimals }) + to.suffix;
-    running.get(el)?.stop();
-    running.set(
-      el,
-      animate(from.value, to.value, {
-        duration: 0.7,
-        easing: [0.16, 1, 0.3, 1],
-        onUpdate: (v: number) => {
-          const s = fmt(v);
-          selfWritten.set(el, s);
-          el.textContent = s;
-        },
-        onComplete: () => {
-          // 收尾对齐到目标文本：浮点补间的最后一帧可能差一位小数
-          selfWritten.set(el, text);
-          el.textContent = text;
-        },
-      } as never)
-    );
-  }
-
-  const mo = new MutationObserver((muts) => {
-    muts.forEach((m) => {
-      const el = (m.target as HTMLElement).closest?.(TARGET) as HTMLElement | null;
-      if (el) onChange(el);
-    });
-  });
-  // 观察根取整个应用：侧栏「渠道额度」的数字不在 .pages 里，只盯 .pages 会漏掉它
-  const root = document.querySelector(".app");
-  if (!root) return () => {};
-  // 基线：已存在的数字只记录不滚动，之后的真实变化才补间
-  root.querySelectorAll<HTMLElement>(TARGET).forEach((el) => last.set(el, el.textContent ?? ""));
-  mo.observe(root, { childList: true, subtree: true, characterData: true });
-
-  return () => mo.disconnect();
-}
-
-/** 粒子场：极淡的慢速尘粒铺在最底层（z-index: -2，在液态色块之下被玻璃一起折射），
-   随页面滚动有 2% 速率的视差，纯粹的氛围层，不抢任何主体信息。
-   受「粒子尘场」子开关控制（默认关）：开启会持续重绘并驱动毛玻璃重新采样 */
-function bindParticles() {
-  const canvas = document.querySelector<HTMLCanvasElement>(".particles");
-  if (!canvas) return () => {};
-  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return () => {};
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return () => {};
-
-  let w = 0;
-  let h = 0;
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  function resize() {
-    w = window.innerWidth;
-    h = window.innerHeight;
-    canvas!.width = w * dpr;
-    canvas!.height = h * dpr;
-    ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
-  }
-  resize();
-  window.addEventListener("resize", resize);
-
-  // 两种色相：主绿与信息蓝，与液态色块同一套色温。
-  // 细分两档：多数是背景浮尘，少数是更慢更淡的大颗粒，两层速度差拉出景深
-  const COLORS = ["68, 224, 127", "92, 157, 255"];
-  const dots = Array.from({ length: 58 }, (_, i) => {
-    const big = i % 9 === 0; // 约 6 颗大颗粒
-    return {
-      x: Math.random() * window.innerWidth,
-      y: Math.random() * window.innerHeight,
-      vx: rand(-4, 4) * (big ? 0.5 : 1), // px/s
-      vy: rand(-6, -1.5) * (big ? 0.45 : 1), // 整体缓慢上浮
-      r: big ? rand(2.2, 3.4) : rand(0.6, 1.5),
-      c: COLORS[Math.random() < 0.72 ? 0 : 1],
-      a: big ? rand(0.05, 0.13) : rand(0.1, 0.3),
-      ph: rand(0, Math.PI * 2), // 闪烁相位
-      ps: rand(0.4, 1.1), // 闪烁速率
-      par: big ? 0.045 : 0.02, // 各自的视差速率：大颗粒更近，滚得更多
-    };
-  });
-
-  let scrollRaw = 0;
-  let scrollSmooth = 0;
-  const onScroll = (e: Event) => {
-    const scroller = e.target as HTMLElement;
-    if (scroller?.classList?.contains("page") || scroller?.classList?.contains("sync-page")) {
-      scrollRaw = scroller.scrollTop;
-    }
-  };
-  window.addEventListener("scroll", onScroll, { capture: true, passive: true });
-
-  let raf = 0;
-  let prev = performance.now();
-  let lastDraw = 0;
-  const tick = (now: number) => {
-    raf = requestAnimationFrame(tick);
-    // 绘制限频 ~30fps：粒子是缓慢上浮的尘粒，绘制间隔拉倍肉眼无差，
-    // 背景层的变化频率却减半，玻璃 backdrop 采样随之减负
-    if (now - lastDraw < 30) return;
-    const dt = Math.min((now - prev) / 1000, 0.05);
-    prev = now;
-    lastDraw = now;
-    scrollSmooth += (scrollRaw - scrollSmooth) * 0.06;
-    ctx!.clearRect(0, 0, w, h);
-    for (const d of dots) {
-      d.x += d.vx * dt;
-      d.y += d.vy * dt;
-      // 出界回绕：上方飘出从底部回来，左右同理
-      if (d.y < -8) d.y = h + 8;
-      if (d.y > h + 8) d.y = -8;
-      if (d.x < -8) d.x = w + 8;
-      if (d.x > w + 8) d.x = -8;
-      const tw = 0.65 + 0.35 * Math.sin(now / 1000 * d.ps + d.ph);
-      let dy = (d.y + scrollSmooth * d.par) % (h + 16);
-      if (dy < -8) dy += h + 16;
-      ctx!.beginPath();
-      ctx!.arc(d.x, dy - 8, d.r, 0, Math.PI * 2);
-      ctx!.fillStyle = `rgba(${d.c}, ${(d.a * tw).toFixed(3)})`;
-      ctx!.fill();
-    }
-  };
-  // 最小化到托盘 / 遮挡时停绘，恢复时重置计时防 dt 巨跳
-  const onVisibility = () => {
-    if (document.hidden) {
-      cancelAnimationFrame(raf);
-      raf = 0;
-    } else {
-      prev = performance.now();
-      lastDraw = 0;
-      if (!raf) raf = requestAnimationFrame(tick);
-    }
-  };
-  document.addEventListener("visibilitychange", onVisibility);
-  raf = requestAnimationFrame(tick);
-
-  return () => {
-    cancelAnimationFrame(raf);
-    document.removeEventListener("visibilitychange", onVisibility);
-    window.removeEventListener("resize", resize);
-    window.removeEventListener("scroll", onScroll, { capture: true });
-  };
-}
-
-/** 按钮点击涟漪：一次向外扩散，动画跑完自清（原生 .btn 与 Element 的 .el-button 都吃） */
-function bindRipple() {
-  const onDown = (e: PointerEvent) => {
-    const btn = (e.target as HTMLElement)?.closest?.("button.btn, button.el-button") as HTMLButtonElement | null;
-    if (!btn || btn.disabled) return;
-    // 文字按钮不铺涟漪
-    if (btn.classList.contains("btn-link") || btn.classList.contains("is-link") || btn.classList.contains("is-text")) return;
-    const r = btn.getBoundingClientRect();
-    const d = Math.max(r.width, r.height) * 2.4;
-    const dot = document.createElement("span");
-    dot.className = "ripple";
-    dot.style.width = dot.style.height = `${d}px`;
-    dot.style.left = `${e.clientX - r.left - d / 2}px`;
-    dot.style.top = `${e.clientY - r.top - d / 2}px`;
-    dot.addEventListener("animationend", () => dot.remove());
-    btn.appendChild(dot);
-  };
-  document.addEventListener("pointerdown", onDown);
-  return () => document.removeEventListener("pointerdown", onDown);
-}
-
 let dispose: (() => void)[] = [];
-
-/** 装饰动效绑定集（仅展示层：涟漪/渐入/数字补间）。
-    「界面动效」总开关切换时整体拆装；数据加载、轮询、同步等业务逻辑不在此列，
-    不受开关影响 */
-let fxBinds: (() => void)[] = [];
-/** 光影层绑定（鼠标互动光影 + 液态背景 + 粒子尘场）：分别受「光池追随 / 粒子尘场」开关控制。
-    与 fxBinds 分开拆装：切换子开关不重装渐入等绑定，已播过动画的页面内容不会重播 */
-let fxLayerBinds: (() => void)[] = [];
-function mountFxLayers() {
-  fxLayerBinds = [bindBackdrop()];
-  if (app.config.fxPools) fxLayerBinds.push(bindPointer());
-  if (app.config.fxParticles) fxLayerBinds.push(bindParticles());
-}
-/** 只拆绑定、不动背景位姿：重装后从当前位置继续缓动，子开关来回切不会让背景跳回原点；
-    但鼠标写入的残位必须复位——反光回 CSS 默认位、聚光回卡心（否则悬停时亮斑停在上次位置） */
-function unmountFxLayers() {
-  fxLayerBinds.forEach((fn) => fn());
-  fxLayerBinds = [];
-  const rootStyle = document.documentElement.style;
-  rootStyle.removeProperty("--sx");
-  rootStyle.removeProperty("--sy");
-  document.querySelectorAll<HTMLElement>(SPOT_TARGETS).forEach((el) => {
-    el.style.removeProperty("--mx");
-    el.style.removeProperty("--my");
-  });
-}
-function mountFx() {
-  fxBinds = [bindRipple(), bindReveal(), bindCountUp()];
-  mountFxLayers();
-}
-/** 拆除动效绑定并复位 JS 写入的残留样式（背景偏移归零等），配合 html.fx-off 回到纯静态 */
-function unmountFx() {
-  fxBinds.forEach((fn) => fn());
-  fxBinds = [];
-  unmountFxLayers();
-  const ambient = document.querySelector<HTMLElement>(".ambient");
-  if (ambient) ambient.style.transform = "";
-  document.querySelectorAll<HTMLElement>(".pool").forEach((el) => (el.style.transform = ""));
-}
 
 onMounted(() => {
   app.load();
@@ -575,40 +107,12 @@ onMounted(() => {
     }
     app.updateAvailable = ev.status === "available" || ev.status === "downloaded";
   });
-  // 动效装配：此刻 config 仍是初始默认值（load 异步未回），先按 localStorage 镜像判定
-  //（与 main.ts 首帧同一口径，关闭动效的用户不会先闪一段 JS 渐入）；load() 完成后的 watch 再按配置纠偏
-  if (localStorage.getItem("agenthub.fx") !== "0") mountFx();
   if (offFocusUpdate) dispose.push(offFocusUpdate);
 });
 onUnmounted(() => {
-  unmountFx();
   dispose.forEach((fn) => fn());
+  dispose = [];
 });
-
-/** 「界面动效」总开关（设置 · 通用）：CSS 侧由 store.applyFx 切的 html.fx-off 即时压停，
-    JS 侧这里整体拆装装饰绑定与液滴光标 */
-watch(
-  () => app.config.fx,
-  (on) => {
-    unmountFx();
-    if (on) mountFx();
-    setCursorFX(on && app.config.fxCursor !== false);
-  }
-);
-
-/** 「粒子尘场 / 光池追随」两个子开关互相独立：只重装光影层绑定（页面内容不重播渐入）。
-    总开关关闭时这层本就没装，等总开关重新打开时再按各自的值装配 */
-watch([() => app.config.fxParticles, () => app.config.fxPools], () => {
-  if (!app.config.fx) return;
-  unmountFxLayers();
-  mountFxLayers();
-});
-
-/** 「个性化鼠标样式」子开关：液滴光标装卸（与总开关联动，任一关掉即恢复系统指针） */
-watch(
-  () => app.config.fxCursor,
-  () => setCursorFX(app.config.fx && app.config.fxCursor !== false)
-);
 
 /** 记忆中枢默认页签：ui.defaultTab（首次进入该模块时落到配置页签，之后记住用户点过的页） */
 watch(
@@ -623,7 +127,7 @@ watch(
   }
 );
 
-/** 当前是否停在某模块某页（v-show 与进场动画条件共用） */
+/** 当前是否停在某模块某页（v-show 条件） */
 const on = (mod: string, page: string) => app.activeModule === mod && app.activePage === page;
 
 /** 懒挂载：页面首次进入才挂载（数据加载走各自的 onMounted），之后 v-show 保活不切状态。
@@ -652,17 +156,6 @@ const seen = (mod: string, page: string) => !!visited.value[`${mod}/${page}`];
        el-date-picker 面板的月份/星期等内置文案全靠这里，删掉会静默回退英文。
        provider 自身不渲染 DOM 节点（config-provider 直接 renderSlot default），
        包一层不改变结构与 .app 的背景层叠。 -->
-  <!-- 最底层：粒子尘场（z-index: -2）→ 随机涌动的液态色块 + 两团跟着光标游走的光池（z-index: -1），
-       都在玻璃壳之下被折射出来；3D 球体作为氛围浮在主区右上的玻璃之下；
-       最上面一层是颗粒质感。都不吃鼠标事件 -->
-  <canvas class="particles" aria-hidden="true"></canvas>
-  <div class="ambient" aria-hidden="true">
-    <i v-for="(blob, i) in blobs" :key="i" :style="blob"></i>
-  </div>
-  <div class="pool" aria-hidden="true"></div>
-  <div class="pool" aria-hidden="true"></div>
-  <div class="orb" aria-hidden="true"><i></i></div>
-  <div class="grain" aria-hidden="true"></div>
   <div class="app">
     <Sidebar />
     <PageTabs />
@@ -670,52 +163,52 @@ const seen = (mod: string, page: string) => !!visited.value[`${mod}/${page}`];
       <!-- 用量统计模块的数据源顶栏（原应用 AppBar）：仅「用量统计 · 总览」页显示；样式作用域在组件根上 -->
       <SyncTopBar v-if="on('sync', 'overview')" />
       <div class="pages">
-        <SkillsDashboardView v-if="seen('skills', 'dashboard')" v-show="on('skills', 'dashboard')" :class="{ 'page-anim': on('skills', 'dashboard') }" />
-        <SkillsLibraryView v-if="seen('skills', 'library')" v-show="on('skills', 'library')" :class="{ 'page-anim': on('skills', 'library') }" />
-        <SkillsDedupView v-if="seen('skills', 'dedup')" v-show="on('skills', 'dedup')" :class="{ 'page-anim': on('skills', 'dedup') }" />
-        <SkillsSyncView v-if="seen('skills', 'sync')" v-show="on('skills', 'sync')" :class="{ 'page-anim': on('skills', 'sync') }" />
-        <SkillsWebdavView v-if="seen('skills', 'webdav')" v-show="on('skills', 'webdav')" :class="{ 'page-anim': on('skills', 'webdav') }" />
-        <SkillsSkillDetailView v-if="seen('skills', 'skill-detail')" v-show="on('skills', 'skill-detail')" :class="{ 'page-anim': on('skills', 'skill-detail') }" />
+        <SkillsDashboardView v-if="seen('skills', 'dashboard')" v-show="on('skills', 'dashboard')" />
+        <SkillsLibraryView v-if="seen('skills', 'library')" v-show="on('skills', 'library')" />
+        <SkillsDedupView v-if="seen('skills', 'dedup')" v-show="on('skills', 'dedup')" />
+        <SkillsSyncView v-if="seen('skills', 'sync')" v-show="on('skills', 'sync')" />
+        <SkillsWebdavView v-if="seen('skills', 'webdav')" v-show="on('skills', 'webdav')" />
+        <SkillsSkillDetailView v-if="seen('skills', 'skill-detail')" v-show="on('skills', 'skill-detail')" />
         <!-- 用量统计五页：.sync-page 的样式作用域要求自身同时带 .sync-scope（见 styles/sync.css） -->
-        <SyncOverviewView v-if="seen('sync', 'overview')" v-show="on('sync', 'overview')" class="sync-scope" :class="{ 'page-anim': on('sync', 'overview') }" />
-        <SyncDetailView v-if="seen('sync', 'detail')" v-show="on('sync', 'detail')" class="sync-scope" :class="{ 'page-anim': on('sync', 'detail') }" />
-        <SyncCostsView v-if="seen('sync', 'costs')" v-show="on('sync', 'costs')" class="sync-scope" :class="{ 'page-anim': on('sync', 'costs') }" />
-        <SyncBillingRulesView v-if="seen('sync', 'billing')" v-show="on('sync', 'billing')" class="sync-scope" :class="{ 'page-anim': on('sync', 'billing') }" />
-        <SyncLogView v-if="seen('sync', 'log')" v-show="on('sync', 'log')" class="sync-scope" :class="{ 'page-anim': on('sync', 'log') }" />
-        <ProxyHomeView v-if="seen('proxy', 'home')" v-show="on('proxy', 'home')" :class="{ 'page-anim': on('proxy', 'home') }" />
-        <ProxyKeysView v-if="seen('proxy', 'keys')" v-show="on('proxy', 'keys')" :class="{ 'page-anim': on('proxy', 'keys') }" />
-        <ProxyProvidersView v-if="seen('proxy', 'providers')" v-show="on('proxy', 'providers')" :class="{ 'page-anim': on('proxy', 'providers') }" />
-        <ProxyAgentsView v-if="seen('proxy', 'agents')" v-show="on('proxy', 'agents')" :class="{ 'page-anim': on('proxy', 'agents') }" />
-        <ProxyExpiryView v-if="seen('proxy', 'expiry')" v-show="on('proxy', 'expiry')" :class="{ 'page-anim': on('proxy', 'expiry') }" />
-        <ProxyModelsView v-if="seen('proxy', 'models')" v-show="on('proxy', 'models')" :class="{ 'page-anim': on('proxy', 'models') }" />
-        <ProxyStatsView v-if="seen('proxy', 'stats')" v-show="on('proxy', 'stats')" :class="{ 'page-anim': on('proxy', 'stats') }" />
-        <ProxyPoolSyncView v-if="seen('proxy', 'poolsync')" v-show="on('proxy', 'poolsync')" :class="{ 'page-anim': on('proxy', 'poolsync') }" />
-        <ProxyCcSwitchView v-if="seen('proxy', 'ccswitch')" v-show="on('proxy', 'ccswitch')" :class="{ 'page-anim': on('proxy', 'ccswitch') }" />
-        <ProxyLogView v-if="seen('proxy', 'proxylog')" v-show="on('proxy', 'proxylog')" :class="{ 'page-anim': on('proxy', 'proxylog') }" />
-        <ProxyNetworkView v-if="seen('proxy', 'netproxy')" v-show="on('proxy', 'netproxy')" :class="{ 'page-anim': on('proxy', 'netproxy') }" />
+        <SyncOverviewView v-if="seen('sync', 'overview')" v-show="on('sync', 'overview')" class="sync-scope" />
+        <SyncDetailView v-if="seen('sync', 'detail')" v-show="on('sync', 'detail')" class="sync-scope" />
+        <SyncCostsView v-if="seen('sync', 'costs')" v-show="on('sync', 'costs')" class="sync-scope" />
+        <SyncBillingRulesView v-if="seen('sync', 'billing')" v-show="on('sync', 'billing')" class="sync-scope" />
+        <SyncLogView v-if="seen('sync', 'log')" v-show="on('sync', 'log')" class="sync-scope" />
+        <ProxyHomeView v-if="seen('proxy', 'home')" v-show="on('proxy', 'home')" />
+        <ProxyKeysView v-if="seen('proxy', 'keys')" v-show="on('proxy', 'keys')" />
+        <ProxyProvidersView v-if="seen('proxy', 'providers')" v-show="on('proxy', 'providers')" />
+        <ProxyAgentsView v-if="seen('proxy', 'agents')" v-show="on('proxy', 'agents')" />
+        <ProxyExpiryView v-if="seen('proxy', 'expiry')" v-show="on('proxy', 'expiry')" />
+        <ProxyModelsView v-if="seen('proxy', 'models')" v-show="on('proxy', 'models')" />
+        <ProxyStatsView v-if="seen('proxy', 'stats')" v-show="on('proxy', 'stats')" />
+        <ProxyPoolSyncView v-if="seen('proxy', 'poolsync')" v-show="on('proxy', 'poolsync')" />
+        <ProxyCcSwitchView v-if="seen('proxy', 'ccswitch')" v-show="on('proxy', 'ccswitch')" />
+        <ProxyLogView v-if="seen('proxy', 'proxylog')" v-show="on('proxy', 'proxylog')" />
+        <ProxyNetworkView v-if="seen('proxy', 'netproxy')" v-show="on('proxy', 'netproxy')" />
         <!-- 记忆中枢九页：各页自带 .memory-scope 容器（样式作用域见 styles/memory.css）；
              模型与网关已并入配置页子板块，调用统计并入仪表盘；待确认并入记忆浏览 -->
-        <MemoryDashboardView v-if="seen('memory', 'dashboard')" v-show="on('memory', 'dashboard')" class="page" :class="{ 'page-anim': on('memory', 'dashboard') }" />
-        <MemoryBrowseView v-if="seen('memory', 'browse')" v-show="on('memory', 'browse')" class="page" :class="{ 'page-anim': on('memory', 'browse') }" />
-        <MemoryProjectsView v-if="seen('memory', 'projects')" v-show="on('memory', 'projects')" class="page" :class="{ 'page-anim': on('memory', 'projects') }" />
-        <MemoryProfileView v-if="seen('memory', 'profile')" v-show="on('memory', 'profile')" class="page" :class="{ 'page-anim': on('memory', 'profile') }" />
-        <MemoryAgentsView v-if="seen('memory', 'agents')" v-show="on('memory', 'agents')" class="page" :class="{ 'page-anim': on('memory', 'agents') }" />
-        <MemoryIndexView v-if="seen('memory', 'index')" v-show="on('memory', 'index')" class="page" :class="{ 'page-anim': on('memory', 'index') }" />
-        <MemoryAutoView v-if="seen('memory', 'auto')" v-show="on('memory', 'auto')" class="page" :class="{ 'page-anim': on('memory', 'auto') }" />
-        <MemoryImportView v-if="seen('memory', 'import')" v-show="on('memory', 'import')" class="page" :class="{ 'page-anim': on('memory', 'import') }" />
-        <MemorySyncView v-if="seen('memory', 'sync')" v-show="on('memory', 'sync')" class="page" :class="{ 'page-anim': on('memory', 'sync') }" />
+        <MemoryDashboardView v-if="seen('memory', 'dashboard')" v-show="on('memory', 'dashboard')" class="page" />
+        <MemoryBrowseView v-if="seen('memory', 'browse')" v-show="on('memory', 'browse')" class="page" />
+        <MemoryProjectsView v-if="seen('memory', 'projects')" v-show="on('memory', 'projects')" class="page" />
+        <MemoryProfileView v-if="seen('memory', 'profile')" v-show="on('memory', 'profile')" class="page" />
+        <MemoryAgentsView v-if="seen('memory', 'agents')" v-show="on('memory', 'agents')" class="page" />
+        <MemoryIndexView v-if="seen('memory', 'index')" v-show="on('memory', 'index')" class="page" />
+        <MemoryAutoView v-if="seen('memory', 'auto')" v-show="on('memory', 'auto')" class="page" />
+        <MemoryImportView v-if="seen('memory', 'import')" v-show="on('memory', 'import')" class="page" />
+        <MemorySyncView v-if="seen('memory', 'sync')" v-show="on('memory', 'sync')" class="page" />
         <!-- 各模块的配置页：右上「配置」按钮切换到这里的页面（page + cfg-body 组合出页壳与留白）；
              配置页内部的二级子板块 tab 由各 section 自己渲染 -->
-        <div v-if="seen('skills', 'config')" v-show="on('skills', 'config')" class="page cfg-body" :class="{ 'page-anim': on('skills', 'config') }">
+        <div v-if="seen('skills', 'config')" v-show="on('skills', 'config')" class="page cfg-body">
           <ConfigSkillsSection />
         </div>
-        <div v-if="seen('sync', 'config')" v-show="on('sync', 'config')" class="page cfg-body" :class="{ 'page-anim': on('sync', 'config') }">
+        <div v-if="seen('sync', 'config')" v-show="on('sync', 'config')" class="page cfg-body">
           <ConfigUsageSection />
         </div>
-        <div v-if="seen('proxy', 'config')" v-show="on('proxy', 'config')" class="page cfg-body" :class="{ 'page-anim': on('proxy', 'config') }">
+        <div v-if="seen('proxy', 'config')" v-show="on('proxy', 'config')" class="page cfg-body">
           <ConfigProxySection />
         </div>
-        <div v-if="seen('memory', 'config')" v-show="on('memory', 'config')" class="page cfg-body" :class="{ 'page-anim': on('memory', 'config') }">
+        <div v-if="seen('memory', 'config')" v-show="on('memory', 'config')" class="page cfg-body">
           <ConfigMemorySection />
         </div>
       </div>

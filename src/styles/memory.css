@@ -85,22 +85,6 @@
    卡片高度始终跟随网格行，不会反过来把页面顶出窗口 */
 .mem-card-fill { display: flex; flex-direction: column; }
 .mem-card-fill > .mem-scroll { flex: 1 1 auto; min-height: 0; }
-/* 卡内聚光：--mx/--my 由 App.vue 的指针委托写入（与用量卡片共用一套） */
-.mem-card::after,
-.mem-kpi::after,
-.mem-tile::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: radial-gradient(260px circle at var(--mx, 50%) var(--my, 50%), var(--accent-dim), transparent 65%);
-  opacity: 0;
-  transition: opacity 0.3s var(--ease);
-  pointer-events: none;
-}
-.mem-card:hover::after,
-.mem-kpi:hover::after,
-.mem-tile:hover::after { opacity: 0.55; }
 .mem-card:hover,
 .mem-tile:hover { border-color: var(--line-strong); }
 /* 嵌套卡片（卡片套卡片、任务卡里的次级卡）：压成半透明实底，避免多层 backdrop-filter */
@@ -112,21 +96,6 @@
   -webkit-backdrop-filter: none;
   box-shadow: none;
   border-color: var(--mem-line);
-}
-.mem-card .mem-card::after,
-.mem-card .mem-tile::after,
-.mem-tile .mem-card::after { display: none; }
-/* 界面动效关闭：聚光与位移退化为静态玻璃 */
-html.fx-off .memory-scope .mem-card::after,
-html.fx-off .memory-scope .mem-kpi::after,
-html.fx-off .memory-scope .mem-tile::after { display: none; }
-html.fx-off .memory-scope .mem-kpi:hover { transform: none; }
-/* 光池追随（鼠标互动光影）关闭：聚光不再跟随光标（JS 已拆），整组隐藏 */
-html.fx-pools-off .memory-scope .mem-card::after,
-html.fx-pools-off .memory-scope .mem-kpi::after,
-html.fx-pools-off .memory-scope .mem-tile::after { display: none; }
-@media (prefers-reduced-motion: reduce) {
-  .mem-card::after, .mem-kpi::after, .mem-tile::after { transition: none; }
 }
 
 .mem-card-title {
@@ -416,9 +385,6 @@ html.fx-pools-off .memory-scope .mem-tile::after { display: none; }
   opacity: 0.75;
   font-variant-numeric: tabular-nums;
 }
-/* 界面动效关闭：滑块直接落位，不滑 */
-html.fx-off .memory-scope .mem-switch .sw-thumb { transition: none; }
-
 /* ---- 区间分段筛选（趋势图用；与「用量统计」的 .tabs 同款观感，只是类名带 mem- 前缀）---- */
 .mem-tabs {
   display: flex;

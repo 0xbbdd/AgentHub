@@ -57,12 +57,7 @@ function render() {
 
   chart.clear();
   chart.setOption({
-    // 「界面动效」关闭（仅展示层）：不播入场/更新动画，数据照常渲染
-    animation: ui.config.fx,
-    animationDuration: 500,
-    animationDurationUpdate: 450,
-    animationEasing: "cubicOut",
-    animationEasingUpdate: "cubicInOut",
+    animation: false,
     grid: { left: 52, right: 18, top: 16, bottom: 28 },
     tooltip: {
       ...glassTooltip(),
@@ -157,7 +152,6 @@ onBeforeUnmount(() => {
 watch(() => props.data, () => nextTick(render), { deep: true });
 watch(() => props.range, () => nextTick(render));
 watch(() => ui.isDark, () => nextTick(render));
-watch(() => ui.config.fx, () => nextTick(render));
 </script>
 
 <template>

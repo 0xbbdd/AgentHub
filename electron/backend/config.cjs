@@ -123,12 +123,6 @@ function configPath() {
 function defaultConfig() {
   return {
     theme: "dark",
-    // 界面动效总开关（装饰层，默认开启）；粒子尘场 / 光池追随是它的两个独立子开关，默认关闭
-    // （两者是背景层最吃性能的两项，开启前设置页会给性能提示）；个性化鼠标样式默认开启
-    fx: true,
-    fxParticles: false,
-    fxPools: false,
-    fxCursor: true,
     // 左栏四大模块的显示顺序（用户在「设置 · 个性化」中调整）
     /** 远程网关实例（桌面连远程 Docker 版）：tokenEnc 以 enc:v1: 加密落盘，列表接口只回 hasToken */
     remoteTargets: [],
@@ -533,6 +527,9 @@ function loadConfig() {
   // 整个文件不是对象（null/数字/数组）也当没有，不然合并完必炸
   if (!disk || typeof disk !== "object" || Array.isArray(disk)) disk = {};
   const merged = mergeConfig(defaultConfig(), disk);
+  // 外观仅保留深/浅色主题。旧版本落盘的效果开关不再进入配置快照，
+  // 后续任意一次保存会自然清理掉这些遗留字段。
+  for (const key of ["fx", "fxParticles", "fxPools", "fxCursor"]) delete merged[key];
   // 迁移：旧版 proxy.autoStart 是「永远自启」的开关且默认 true，不是用户选择；
   // 新语义是 restoreOnLaunch「记住上次开关」，所以旧值一律丢弃，改完存盘即不再出现
   if (merged.proxy && "autoStart" in merged.proxy) delete merged.proxy.autoStart;

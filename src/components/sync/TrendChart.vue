@@ -12,7 +12,6 @@
 import { onMounted, onBeforeUnmount, ref, watch, nextTick, computed } from "vue";
 import { graphic, init, type ECharts } from "../../utils/echarts";
 import { useSyncStore } from "../../stores/sync";
-import { useAppStore } from "../../stores/app";
 import { formatToken } from "../../composables/useFormat";
 import { glassTooltip, tooltipCard, markerColor, type TooltipParam } from "../../utils/chart-tooltip";
 
@@ -20,7 +19,6 @@ const props = defineProps<{ data: { date: string; total: number; models?: Record
 const emit = defineEmits<{ (e: "change-range", days: number): void; (e: "change-day", date: string | null): void }>();
 
 const app = useSyncStore();
-const ui = useAppStore();
 const el = ref<HTMLDivElement | null>(null);
 let chart: ECharts | null = null;
 
@@ -124,12 +122,7 @@ function render() {
 
   chart.clear();
   chart.setOption({
-    // 「界面动效」关闭（仅展示层）：不播入场/更新动画，数据照常渲染
-    animation: ui.config.fx,
-    animationDuration: 500,
-    animationDurationUpdate: 450,
-    animationEasing: "cubicOut",
-    animationEasingUpdate: "cubicInOut",
+    animation: false,
     grid: { left: 60, right: 50, top: showLegend.value ? 58 : 26, bottom: 32 },
     tooltip: {
       ...glassTooltip(),
@@ -276,7 +269,6 @@ watch(() => props.range, () => nextTick(render));
 watch(() => props.day, () => nextTick(render));
 watch(() => app.isDark, () => nextTick(render));
 watch(view, () => nextTick(render));
-watch(() => ui.config.fx, () => nextTick(render));
 </script>
 
 <template>

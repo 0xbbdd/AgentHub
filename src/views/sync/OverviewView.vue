@@ -27,38 +27,19 @@ const usage = useUsageStore();
 const range = ref(7); // 默认「近七天」
 const pickedDay = ref<string | null>(null);
 
-// 数字滚动
+// 数值快照：数据变更后直接更新，不做补间
 const anim = ref<Record<string, number>>({});
-function animate(target: Record<string, number>) {
-  const keys = Object.keys(target);
-  // 「界面动效」关闭（仅展示层）：数值直接到位，不跑 rAF 补间
-  if (!framework.config.fx) {
-    keys.forEach((k) => (anim.value[k] = target[k]));
-    return;
-  }
-  const start: Record<string, number> = {};
-  keys.forEach((k) => (start[k] = anim.value[k] || 0));
-  const t0 = performance.now();
-  const dur = 900;
-  function step(now: number) {
-    const p = Math.min((now - t0) / dur, 1);
-    const e = 1 - Math.pow(1 - p, 3);
-    keys.forEach((k) => (anim.value[k] = start[k] + (target[k] - start[k]) * e));
-    if (p < 1) requestAnimationFrame(step);
-  }
-  requestAnimationFrame(step);
-}
 
 watch(
   () => usage.summary,
   (s) => {
     if (!s) return;
-    animate({
+    anim.value = {
       total: s.totalTokens,
       today: s.todayTokens,
       records: s.recordCount,
-    });
-    anim.value.hit = s.cacheHitRate * 100;
+      hit: s.cacheHitRate * 100,
+    };
   },
   { immediate: true }
 );
@@ -150,32 +131,32 @@ function showSettings() {
       <!-- 顶部左右栅格：左上方6个指标小卡片，右上方全年用量热力图 -->
       <div class="overview-top-section">
         <div class="top-kpis-grid">
-          <div class="kpi"><i class="k-line-glow"></i>
+          <div class="kpi">
             <div class="k-label"><span class="kdot"></span>总计消耗Token</div>
             <div class="k-value mono">{{ formatToken(anim.total || 0) }}</div>
             <div class="k-foot">{{ isFiltered ? ((selectedDev?.deviceName || '设备') + ' 累计消耗') : '全部设备累计' }}</div>
           </div>
-          <div class="kpi"><i class="k-line-glow"></i>
+          <div class="kpi">
             <div class="k-label"><span class="kdot"></span>今日消耗Token</div>
             <div class="k-value mono">{{ formatToken(anim.today || 0) }}</div>
             <div class="k-foot">{{ isFiltered ? '该设备今日消耗' : '今日 0 点起累计' }}</div>
           </div>
-          <div class="kpi"><i class="k-line-glow"></i>
+          <div class="kpi">
             <div class="k-label"><span class="kdot"></span>总计缓存命中率</div>
             <div class="k-value mono">{{ (anim.hit || 0).toFixed(1) }}<span class="unit">%</span></div>
             <div class="k-foot">命中 {{ formatToken(usage.summary?.cacheReadTokens || 0) }} / 输入 {{ formatToken(usage.summary?.inputTokens || 0) }}</div>
           </div>
-          <div class="kpi"><i class="k-line-glow"></i>
+          <div class="kpi">
             <div class="k-label"><span class="kdot"></span>今日缓存命中率</div>
             <div class="k-value mono">{{ todayHitPct.toFixed(1) }}<span class="unit">%</span></div>
             <div class="k-foot">今日命中 {{ formatToken(usage.summary?.todayCacheReadTokens || 0) }} / 输入 {{ formatToken(usage.summary?.todayInputTokens || 0) }}</div>
           </div>
-          <div class="kpi"><i class="k-line-glow"></i>
+          <div class="kpi">
             <div class="k-label"><span class="kdot"></span>总计调用次数</div>
             <div class="k-value mono">{{ (anim.records || 0).toLocaleString("en-US") }}</div>
             <div class="k-foot">{{ isFiltered ? '该机累计请求记录' : '全部设备累计请求记录' }}</div>
           </div>
-          <div class="kpi"><i class="k-line-glow"></i>
+          <div class="kpi">
             <div class="k-label"><span class="kdot"></span>今日调用次数</div>
             <div class="k-value mono">{{ (usage.summary?.todayRecordCount || 0).toLocaleString("en-US") }}</div>
             <div class="k-foot">今日 0 点起请求记录</div>

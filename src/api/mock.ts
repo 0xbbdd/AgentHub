@@ -28,10 +28,6 @@ function defaultConfig(): AppConfig {
   return {
     theme: "dark",
     modules: { skills: { enabled: true }, sync: { enabled: true }, proxy: { enabled: true }, memory: { enabled: true } },
-    fx: true,
-    fxParticles: false,
-    fxPools: false,
-    fxCursor: true,
     moduleOrder: MODULES.map((m) => m.key),
     tools: {
       zcode: { enabled: true, paths: [".zcode/skills"] },

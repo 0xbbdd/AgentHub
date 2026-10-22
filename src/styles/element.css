@@ -193,7 +193,7 @@ html[data-theme="light"] {
   --el-component-size-small: var(--ctl-h-sm); /* 24 */
 }
 
-/* ---------- 按钮：玻璃底 + 发丝边 + 悬停抬升 + 点击涟漪 ---------- */
+/* ---------- 按钮：静态底 + 发丝边 + 悬停反馈 ---------- */
 .el-button {
   height: var(--ctl-h);
   padding: 0 13px;
@@ -277,16 +277,6 @@ html[data-theme="light"] .el-button:focus {
   align-items: center;
   gap: 6px;
 }
-/* 点击涟漪：App.vue 的全局委托往按钮里塞一个 .ripple */
-.el-button .ripple {
-  position: absolute;
-  border-radius: var(--r-pill);
-  background: radial-gradient(closest-side, var(--ripple), transparent 72%);
-  pointer-events: none;
-  transform: scale(0);
-  animation: btnRipple 0.62s var(--ease) forwards;
-}
-
 /* ---------- 输入类：轻纱底 + 聚焦主题色光圈 ---------- */
 .el-input__wrapper,
 .el-textarea__inner,

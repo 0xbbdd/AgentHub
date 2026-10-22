@@ -955,23 +955,6 @@ html[data-theme="light"] .sync-scope .icon-btn:hover {
   border-color: var(--accent-soft-2);
 }
 
-/* KPI 顶部装饰线已移除，只保留动态流光线（.k-line-glow） */
-
-/* KPI 顶部装饰线流光：深色芯高光段周期性扫过，浅色调也清晰可见 */
-.sync-scope .kpi .k-line-glow {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 2px;
-  background: linear-gradient(90deg, transparent, var(--sheen-line), transparent);
-  background-size: 45% 100%;
-  background-repeat: no-repeat;
-  animation: line-scan 3.2s ease-in-out infinite;
-  opacity: 1;
-  pointer-events: none;
-}
-
 .sync-scope .kpi .k-label {
   font-size: 11.5px;
   color: var(--text-3);
@@ -1017,38 +1000,19 @@ html[data-theme="light"] .sync-scope .icon-btn:hover {
   color: var(--ok);
 }
 
-/* ===== 卡片（液态玻璃） ===== */
+/* ===== 卡片 ===== */
 .sync-scope .card {
-  background: var(--glass-bg);
-  backdrop-filter: blur(18px) saturate(160%);
-  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  background: var(--panel);
   border: 1px solid var(--glass-border);
   border-radius: 16px;
   padding: 18px 20px;
   margin-bottom: 18px;
-  box-shadow: var(--glass-glow), var(--glass-shadow);
-  transition: box-shadow .2s ease, border-color .2s ease, transform .2s ease, background-color .3s ease, color .3s ease;
+  box-shadow: none;
+  transition: border-color .2s ease, background-color .3s ease, color .3s ease;
   position: relative;
 }
 
-/* 卡片聚光：鼠标跟随的径向光斑（--mx/--my 由 App.vue 事件委托写入） */
-.sync-scope .card::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: radial-gradient(260px circle at var(--mx, 50%) var(--my, 50%), var(--accent-soft-2), transparent 65%);
-  opacity: 0;
-  transition: opacity .3s ease;
-  pointer-events: none;
-}
-
-.sync-scope .card:hover::after {
-  opacity: .55;
-}
-
 .sync-scope .card:hover {
-  box-shadow: var(--glass-glow-strong), var(--glass-shadow);
   border-color: var(--border-strong);
 }
 
@@ -2671,16 +2635,6 @@ html[data-theme="light"] .sync-scope .icon-btn:hover {
   }
 }
 
-/* 装饰线流光扫过 */
-@keyframes line-scan {
-  0% {
-    background-position: -60% 0;
-  }
-  100% {
-    background-position: 160% 0;
-  }
-}
-
 /* 徽章扫光 */
 @keyframes badge-sheen {
   0%, 60% {
@@ -2709,10 +2663,6 @@ html[data-theme="light"] .sync-scope .icon-btn:hover {
   100% {
     box-shadow: 0 0 5px var(--accent), 0 0 0 8px transparent;
   }
-}
-
-.sync-scope .page-anim {
-  animation: pageIn 0.32s var(--ease) both;
 }
 
 /* ===== 同步弹窗过渡（配合 <Transition name="sync-pop">） ===== */
@@ -2803,7 +2753,7 @@ html[data-theme="light"] .sync-scope .icon-btn:hover {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  /* 本模块 infinite 动画（pulse-glow / line-scan / shimmer / stage-ring 等）的关停：
+  /* 本模块 infinite 动画（pulse-glow / shimmer / stage-ring 等）的关停：
      global.css 末尾已有全站兜底（时长压近零 + 只播一次），这里补一份模块级声明，
      防止样式被单独抽离加载时丢失兜底；转圈等功能性动画由 global.css 显式豁免 */
   .sync-scope *,
@@ -2818,33 +2768,6 @@ html[data-theme="light"] .sync-scope .icon-btn:hover {
   .sync-scope .overlay {
     transition-duration: 0.01ms !important;
   }
-}
-
-/* 界面动效开关（html.fx-off，设置 · 通用）与本模块 reduced-motion 同一收口：
-   装饰动画压停 + 弹层过渡压零；转圈 / 阶段环 / 骨架屏是"进行中"的功能指示，
-   豁免保留（时长须与各处原始动画一致，改原始动画时同步这里） */
-html.fx-off .sync-scope *,
-html.fx-off .sync-scope *::before,
-html.fx-off .sync-scope *::after {
-  animation-duration: 0.01ms !important;
-  animation-iteration-count: 1 !important;
-}
-html.fx-off .sync-scope .syncbar .stitle svg {
-  animation-duration: 1.4s !important;
-  animation-iteration-count: infinite !important;
-}
-html.fx-off .sync-scope .stage.active .sdot {
-  animation-duration: 1.6s !important;
-  animation-iteration-count: infinite !important;
-}
-html.fx-off .sync-scope .skeleton::after {
-  animation-duration: 1.4s !important;
-  animation-iteration-count: infinite !important;
-}
-html.fx-off .sync-scope .drawer,
-html.fx-off .sync-scope .modal,
-html.fx-off .sync-scope .overlay {
-  transition-duration: 0.01ms !important;
 }
 
 /* ===== 手动补丁：同元素双类选择器补全 =====

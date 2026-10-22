@@ -392,9 +392,6 @@ const TOOLS = computed<{ name: string; meta: string; label: string; ok: boolean 
           @click="app.selectModule(mod.key)"
         >
           <span v-if="!mod.enabled" class="mc-off">已停用</span>
-          <span class="mc-state" :class="MODULE_META[mod.key].level === 'warn' ? 'st-warn' : 'st-ok'">
-            <i class="mc-dot"></i>{{ MODULE_META[mod.key].state }}
-          </span>
           <div class="mc-top">
             <div class="mc-icon">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" v-html="MODULE_ICONS[mod.key]"></svg>
@@ -411,6 +408,13 @@ const TOOLS = computed<{ name: string; meta: string; label: string; ok: boolean 
               </template>
               <i class="mc-qa ph ph-question" @click.stop></i>
             </el-tooltip>
+            <span
+              v-if="mod.enabled"
+              class="mc-state"
+              :class="MODULE_META[mod.key].level === 'warn' ? 'st-warn' : 'st-ok'"
+            >
+              <i class="mc-dot"></i>{{ MODULE_META[mod.key].state }}
+            </span>
           </div>
           <div class="mc-stats">
             <div v-for="s in MODULE_META[mod.key].stats" :key="s.label" class="mc-stat">
@@ -735,20 +739,6 @@ const TOOLS = computed<{ name: string; meta: string; label: string; ok: boolean 
 .module-card:active {
   transform: scale(0.985);
 }
-/* 悬停聚光（--mx/--my 由 App.vue 全局委托写入；::before 已被激活指示条占用） */
-.module-card::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: radial-gradient(180px circle at var(--mx, 50%) var(--my, 50%), var(--spot-wash), transparent 65%);
-  opacity: 0;
-  transition: opacity 0.3s ease;
-  pointer-events: none;
-}
-.module-card:hover::after {
-  opacity: 1;
-}
 .module-card.active {
   background: var(--accent-dim);
   border-color: var(--accent-line);
@@ -780,6 +770,7 @@ const TOOLS = computed<{ name: string; meta: string; label: string; ok: boolean 
 }
 .mc-top {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 9px;
 }
@@ -809,8 +800,13 @@ const TOOLS = computed<{ name: string; meta: string; label: string; ok: boolean 
   height: 13px;
 }
 .mc-name {
+  flex: 1 1 auto;
+  min-width: 0;
   font-weight: 600;
   font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* 反代网关免责问号：红色的问号小图标，缓慢呼吸式闪动提醒，悬停停住并高亮（弹层样式见 element.css 的 .qa-tip） */
 .mc-qa {
@@ -886,16 +882,17 @@ const TOOLS = computed<{ name: string; meta: string; label: string; ok: boolean 
   background: var(--accent-dim);
 }
 .mc-state {
-  position: absolute;
-  right: 10px;
-  top: 11px;
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  max-width: 100%;
+  margin-left: auto;
   font-size: 9px;
   font-family: var(--font-mono);
   padding: 2px 6px;
   border-radius: var(--r-pill);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 /* 状态圆点：带一圈持续荡开的涟漪（warn 时跟随警示色） */
 .mc-dot {

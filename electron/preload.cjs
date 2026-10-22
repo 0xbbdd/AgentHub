@@ -31,8 +31,6 @@ const ALLOWED_COMMANDS = new Set([
   "install_update",
   "open_release_page",
   "open_repo_page",
-  // 设置 · 反馈与需求：系统浏览器打开本仓库的 issue 表单
-  "open_external_url",
   // ===== 技能仓库：WebDAV =====
   "webdav_test",
   "webdav_sync",

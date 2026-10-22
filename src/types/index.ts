@@ -221,32 +221,19 @@ export type WebDavEvent = { event: "webdav"; stage: string; detail: string; pct?
 
 // ===== 全局设置弹窗：左下角设置按钮打开的三个模块（弹窗左列按钮切换） =====
 
-export type SettingsTab = "general" | "webdav" | "data" | "timing" | "feedback";
+export type SettingsTab = "general" | "webdav" | "data" | "timing";
 
 export const SETTINGS_TABS: { key: SettingsTab; name: string; icon: string; desc: string }[] = [
   { key: "general", name: "通用", icon: "ph-sliders-horizontal", desc: "外观 · 模块顺序 · 更新" },
   { key: "webdav", name: "WebDAV 同步", icon: "ph-cloud", desc: "统一服务器 · 号池同步" },
   { key: "timing", name: "同步时间", icon: "ph-clock-countdown", desc: "各板块自动同步 / 刷新周期" },
   { key: "data", name: "数据与备份", icon: "ph-database", desc: "备份压缩包 · 缓存目录" },
-  { key: "feedback", name: "反馈与需求", icon: "ph-chat-circle-dots", desc: "问题反馈 · 功能建议" },
 ];
 
 // ===== 应用配置：框架（主题 / 模块顺序）+ 技能仓库 + 更新 =====
 
 export interface AppConfig {
   theme: Theme;
-  /** 界面动效总开关（仅展示层）：默认开启，用户在设置里关闭后本机记住；
-      false 时恢复系统鼠标指针并停用装饰动画，业务逻辑不受影响 */
-  fx: boolean;
-  /** 粒子尘场（界面动效的子开关，默认关闭）：最底层 canvas 尘粒，
-      持续重绘并驱动毛玻璃重新采样，是背景层最吃性能的一项 */
-  fxParticles: boolean;
-  /** 光池追随（界面动效的子开关，默认关闭）：鼠标互动光影——
-      两团跟随光标游走的光斑、玻璃壳随光标的反光、卡片悬停聚光与液态背景的光标视差 */
-  fxPools: boolean;
-  /** 个性化鼠标样式（界面动效的子开关，默认开启）：液滴光标 + 点击涟漪；
-      关闭后恢复系统指针，业务逻辑不受影响 */
-  fxCursor: boolean;
   moduleOrder: ModuleKey[];
   /** 四大板块启用开关（issue #91）：关闭后左上角置灰不可点、后台完全不运行；
       唯一写入口是 module_toggle IPC，这里的值只作展示同步 */

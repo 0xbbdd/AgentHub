@@ -91,11 +91,7 @@ function render() {
 
   chart.clear();
   chart.setOption({
-    animation: ui.config.fx,
-    animationDuration: 500,
-    animationDurationUpdate: 450,
-    animationEasing: "cubicOut",
-    animationEasingUpdate: "cubicInOut",
+    animation: false,
     grid: { left: 58, right: 20, top: showLabel ? 26 : 14, bottom: 26 },
     tooltip: {
       ...glassTooltip(),
@@ -186,7 +182,6 @@ watch(() => props.points, () => nextTick(render), { deep: true });
 watch(() => props.metric, () => nextTick(render));
 watch(() => props.granularity, () => nextTick(render));
 watch(() => ui.isDark, () => nextTick(render));
-watch(() => ui.config.fx, () => nextTick(render));
 </script>
 
 <template>
