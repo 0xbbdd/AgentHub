@@ -36,6 +36,16 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
+    // tmp/ 下会保存 Electron/CDP 使用的临时 Chrome 配置，其中包含浏览器扩展。
+    // 这些文件不是应用源码，避免 watcher 扫描扩展产生无效重载。
+    watch: {
+      ignored: ["**/tmp/**"],
+    },
+  },
+  optimizeDeps: {
+    // Vite 4 默认递归扫描 root 下的全部 HTML；临时 Chrome 配置里的扩展脚本
+    // 会导入浏览器专有的 "chrome" 命名空间，被误判为缺失的 npm 依赖。
+    entries: ["index.html"],
   },
   build: {
     target: ["es2021", "chrome100"],
