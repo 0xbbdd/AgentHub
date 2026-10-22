@@ -29,6 +29,7 @@ import "./styles/skills.css";
 import "./styles/sync.css";
 import "./styles/memory.css";
 import "./styles/element.css";
+import "./styles/auditor-theme.css";
 // 液滴光标 + 点击涟漪（纯装饰动效层：触屏/减弱动效下自动不安装）
 // 首帧镜像（与 config 异步加载形成双轨）：界面动效默认开启，镜像为 "0" 才关（缺失跟随默认）；
 // 粒子尘场 / 光池追随默认关闭，镜像为 "1" 才开；个性化鼠标样式默认开启，镜像为 "0" 才关。
