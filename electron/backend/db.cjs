@@ -20,7 +20,7 @@ let _db = null;
 
 // 当前 schema 版本。旧库（user_version=0）首次打开时迁移到该版本；
 // 未来变更表结构时：SCHEMA_VERSION+1，并在 init() 的迁移块中追加对应 ALTER/重建步骤
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 
 /** 合法时间戳窗口下限（2020-01-01）：早于它的 startedAt 视为源端垃圾数据 */
 const MIN_VALID_TS = 1577836800000;
@@ -127,7 +127,10 @@ const RECORD_COST_VIEW_SQL = `
       -- 先在内层 SELECT 算成排序键（sr=来源、pm=供应商可匹配、ef=生效时间），外层只排派生列
       SELECT id FROM (
         SELECT p.id AS id,
-               CASE COALESCE(p.source, 'manual') WHEN 'manual' THEN 0 WHEN 'remote' THEN 1 ELSE 2 END AS sr,
+               -- 来源优先级：手动 > New API > 远程 > 内置（必须与 listCurrentPrices 的排序键一致，
+               -- 否则「价格表显示的那行」与「实际计费的那行」会分叉）
+               CASE COALESCE(p.source, 'manual')
+                 WHEN 'manual' THEN 0 WHEN 'newapi' THEN 1 WHEN 'remote' THEN 2 ELSE 3 END AS sr,
                CASE WHEN p.provider_id IS NOT NULL AND p.provider_id = r.provider_id THEN 2
                     WHEN p.provider_id IS NULL THEN 1 ELSE 0 END AS pm,
                p.effective_from AS ef
@@ -282,6 +285,12 @@ function init(db) {
     if (current < 8) {
       db.exec(`UPDATE usage_record SET input_tokens = input_tokens + cache_read_tokens
                 WHERE source = 'autoclaw' AND cache_read_tokens > input_tokens`);
+    }
+    // 8 → 9：价格来源四层化，新增 New API 站点价格（source='newapi'，优先级介于手动与远程之间）。
+    // 只改视图里的排序键（sr），表结构不变；视图定义变更必须 DROP 重建。
+    if (current < 9) {
+      db.exec("DROP VIEW IF EXISTS v_record_cost");
+      db.exec(RECORD_COST_VIEW_SQL);
     }
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
   }
@@ -693,9 +702,15 @@ function listCurrentPrices() {
        SELECT p.id, p.provider_id, p.model_id, p.input_per_m, p.output_per_m, p.cache_read_per_m, p.cache_write_per_m,
               p.currency, p.effective_from, p.effective_to, p.updated_at, p.updated_by, p.source,
               COUNT(*) OVER (PARTITION BY COALESCE(p.provider_id,''), p.model_id) AS versions,
+              -- 该模型有哪些来源的价格段（被高优先级来源盖住的来源在价格表里看不见，
+              -- 前端据此提示「另有远程版本」；价格表行数少，相关子查询代价可忽略）
+              (SELECT GROUP_CONCAT(DISTINCT COALESCE(p2.source,'manual'))
+                 FROM model_price p2
+                WHERE p2.model_id = p.model_id
+                  AND COALESCE(p2.provider_id,'') = COALESCE(p.provider_id,'')) AS srcs,
               ROW_NUMBER() OVER (
                 PARTITION BY COALESCE(p.provider_id,''), p.model_id
-                ORDER BY CASE COALESCE(p.source,'manual') WHEN 'manual' THEN 0 WHEN 'remote' THEN 1 ELSE 2 END,
+                ORDER BY CASE COALESCE(p.source,'manual') WHEN 'manual' THEN 0 WHEN 'newapi' THEN 1 WHEN 'remote' THEN 2 ELSE 3 END,
                          p.effective_from DESC
               ) AS rn
        FROM model_price p
@@ -704,6 +719,7 @@ function listCurrentPrices() {
   ).all().map((row) => ({
     ...priceRow(row),
     versions: row.versions,
+    sources: row.srcs ? String(row.srcs).split(",") : [],
     active: row.effective_from <= now && (row.effective_to == null || row.effective_to > now),
   }));
 }
@@ -733,6 +749,10 @@ function listUnpricedModels(source = null) {
  *  （undefined）→ 保留本机别名——旧客户端上传一次 prices.json 不至于把刚归并好的映射抹掉 */
 function replacePrices(prices, clockMs, aliases) {
   const db = get();
+  // 整表替换前先记下本地 New API 段数量：远端若来自不认识 newapi 来源的旧版客户端，
+  // 替换后这些段会凭空消失（见函数末尾的自愈处理）
+  const hadNewApi = countSourcePrices("newapi");
+  const remoteHasNewApi = (Array.isArray(prices) ? prices : []).some((p) => p && p.source === "newapi");
   db.exec("BEGIN");
   try {
     db.prepare("DELETE FROM model_price").run();
@@ -744,7 +764,7 @@ function replacePrices(prices, clockMs, aliases) {
       if (!p || typeof p.modelId !== "string" || !p.modelId) continue;
       const providerId = p.providerId ?? null;
       const from = Math.max(0, Math.floor(Number(p.effectiveFrom) || 0));
-      const source = ["manual", "remote", "builtin"].includes(p.source) ? p.source : "manual";
+      const source = ["manual", "newapi", "remote", "builtin"].includes(p.source) ? p.source : "manual";
       const dedupeKey = `${providerId ?? ""}|${p.modelId}|${source}|${from}`;
       if (seenKeys.has(dedupeKey)) continue;
       seenKeys.add(dedupeKey);
@@ -777,6 +797,14 @@ function replacePrices(prices, clockMs, aliases) {
     db.exec("COMMIT");
     // 价格与别名整表替换：v_record_cost 匹配结果全变，聚合缓存整体失效
     _invalidateAggCache();
+    // 托底：旧版客户端（不认识 newapi 来源）上传的价格表会整表覆盖掉本地 New API 价格段。
+    // 清掉拉取锚点，让下一轮同步立即重拉恢复——不清锚点的话哈希比对会认为「远端没变」而跳过，
+    // 价格段就永久消失、费用静默回落到远程/内置价。只在真的丢过段时触发，不会反复拉取。
+    if (hadNewApi > 0 && !remoteHasNewApi) {
+      setMeta("newapi_pricing_hash", "");
+      setMeta("newapi_pricing_at", "0");
+      addLog("merge", "warn", "价格表同步来自旧版本客户端，New API 价格段被整表覆盖，将在下轮同步自动重新拉取");
+    }
   } catch (e) {
     db.exec("ROLLBACK");
     throw e;
@@ -791,38 +819,43 @@ function remotePriceSame(row, e) {
     );
 }
 
+/** 自动拉取类价格来源的展示名（写进 updated_by，价格历史里可读） */
+const SOURCE_LABELS = { newapi: "New API", remote: "远程价格源" };
+
 /**
- * 应用远程价格源（自动拉取，来源 remote）：只对「本地出现过用量」的模型生效。
- * 逐模型：无 remote 段 → 插入首段（拉取时刻起生效，历史回落 builtin/既有段）；
- * 同价且现行 → 跳过；异价 → 关旧 remote 段 + 开新段。不触碰 manual/builtin 行。
+ * 应用自动拉取的价格来源（来源 newapi / remote）：只对「本地出现过用量」的模型生效。
+ * 逐模型：无该来源段 → 插入首段（拉取时刻起生效，历史回落其它来源的既有段）；
+ * 同价且现行 → 跳过；异价 → 关旧段 + 开新段。不触碰 manual / builtin 行。
+ * 两个来源各写各的段，互不覆盖——「以谁为主」由视图排序键决定，不靠删除对方实现。
  */
-function applyRemotePricing(entries) {
+function applySourcePricing(entries, source) {
+  const src = source === "newapi" ? "newapi" : "remote";
   const db = get();
   const now = Date.now();
   let added = 0, updated = 0, skipped = 0;
   db.exec("BEGIN");
   try {
     const latest = db.prepare(
-      "SELECT id, effective_from, input_per_m, output_per_m, cache_read_per_m, cache_write_per_m, currency, effective_to FROM model_price WHERE model_id = ? AND COALESCE(provider_id,'') = COALESCE(?,'') AND COALESCE(source,'manual') = 'remote' ORDER BY effective_from DESC LIMIT 1"
+      "SELECT id, effective_from, input_per_m, output_per_m, cache_read_per_m, cache_write_per_m, currency, effective_to FROM model_price WHERE model_id = ? AND COALESCE(provider_id,'') = COALESCE(?,'') AND COALESCE(source,'manual') = ? ORDER BY effective_from DESC LIMIT 1"
     );
     const closeOld = db.prepare("UPDATE model_price SET effective_to = ? WHERE id = ?");
     const ins = db.prepare(
-      "INSERT INTO model_price (provider_id, model_id, input_per_m, output_per_m, cache_read_per_m, cache_write_per_m, currency, effective_from, effective_to, updated_at, updated_by, source) VALUES (NULL,?,?,?,?,?,?,?,NULL,?,'远程价格源','remote')"
+      "INSERT INTO model_price (provider_id, model_id, input_per_m, output_per_m, cache_read_per_m, cache_write_per_m, currency, effective_from, effective_to, updated_at, updated_by, source) VALUES (NULL,?,?,?,?,?,?,?,NULL,?,?,?)"
     );
     for (const e of Array.isArray(entries) ? entries : []) {
       if (!e || !e.modelId) continue;
-      const cur = latest.get(e.modelId, e.providerId ?? null);
+      const cur = latest.get(e.modelId, e.providerId ?? null, src);
       if (cur && remotePriceSame(cur, e)) { skipped++; continue; }
       // 新段起点：与旧段同毫秒时 +1ms，避开 (provider,model,source,effective_from) 唯一索引
       const from = cur ? Math.max(now, cur.effective_from + 1) : now;
       if (cur) closeOld.run(from, cur.id);
       ins.run(e.modelId, num0(e.inputPerM), num0(e.outputPerM), num0(e.cacheReadPerM), num0(e.cacheWritePerM),
-        e.currency === "USD" ? "USD" : "CNY", from, from);
+        e.currency === "USD" ? "USD" : "CNY", from, from, SOURCE_LABELS[src], src);
       if (cur) updated++; else added++;
     }
     setMeta("prices_local_updated", String(now));
     db.exec("COMMIT");
-    // 远程价格段开/关影响 v_record_cost 匹配，聚合缓存整体失效
+    // 价格段开/关影响 v_record_cost 匹配，聚合缓存整体失效
     // （全部同价跳过时白清一次，代价只是下轮重算）
     _invalidateAggCache();
   } catch (e) {
@@ -830,6 +863,18 @@ function applyRemotePricing(entries) {
     throw e;
   }
   return { added, updated, skipped };
+}
+
+/** 兼容旧调用点：远程价格表（来源 remote） */
+function applyRemotePricing(entries) {
+  return applySourcePricing(entries, "remote");
+}
+
+/** 某来源的现行段数量（0 说明价格段被整表替换冲掉了，拉取方据此跳过哈希短路强制重拉） */
+function countSourcePrices(source) {
+  const src = String(source || "");
+  if (!src) return 0;
+  return get().prepare("SELECT COUNT(*) AS c FROM model_price WHERE COALESCE(source,'manual') = ?").get(src).c;
 }
 
 function recordScope(source = null, deviceId = null) {
@@ -1465,5 +1510,5 @@ module.exports = {
   savePrice, deleteModelPrices,
   listAllPrices, listCurrentPrices, listPriceVersions, listUnpricedModels,
   listAliases, addAlias, removeAlias,
-  replacePrices, applyRemotePricing,
+  replacePrices, applyRemotePricing, applySourcePricing, countSourcePrices,
 };

@@ -132,6 +132,9 @@ const mock = {
               totalMode: "full",
               billing: {
               enabled: true, displayCurrency: "CNY", usdToCny: 7.2, importProxy: "",
+              newApi: {
+                enabled: true, baseUrl: "https://api.example.com", token: "", group: "default", intervalHours: 24,
+              },
               remotePricing: {
                 enabled: true,
                 url: "https://raw.githubusercontent.com/Wei-Shaw/model-price-repo/main/model_prices_and_context_window.json",
@@ -390,14 +393,18 @@ const mock = {
           case "open_repo_page": resolve(null); break;
           // ===== 计费 =====
           case "get_prices":
-            resolve(Object.entries(mockPrices).map(([model, p], idx) => ({
-              id: idx + 1, providerId: null, modelId: model,
-              inputPerM: p.i, outputPerM: p.o, cacheReadPerM: p.cr, cacheWritePerM: 0,
-              currency: p.cur, effectiveFrom: 0, effectiveTo: null,
-              updatedAt: Date.now() - 86400000, updatedBy: "内置默认",
-              source: (idx % 3 === 0 ? "manual" : idx % 3 === 1 ? "remote" : "builtin") as "manual" | "remote" | "builtin",
-              versions: 1, active: true,
-            })));
+            resolve(Object.entries(mockPrices).map(([model, p], idx) => {
+              const src = (idx % 4 === 0 ? "manual" : idx % 4 === 1 ? "newapi" : idx % 4 === 2 ? "remote" : "builtin") as "manual" | "newapi" | "remote" | "builtin";
+              // New API 生效的行额外造一份远程段，用来验证价格表「另有远程价（优先级更低，未生效）」提示
+              const sources = src === "newapi" ? (["newapi", "remote"] as typeof src[]) : [src];
+              return {
+                id: idx + 1, providerId: null, modelId: model,
+                inputPerM: p.i, outputPerM: p.o, cacheReadPerM: p.cr, cacheWritePerM: 0,
+                currency: p.cur, effectiveFrom: 0, effectiveTo: null,
+                updatedAt: Date.now() - 86400000, updatedBy: "内置默认",
+                source: src, sources, versions: sources.length, active: true,
+              };
+            }));
             break;
           case "get_price_versions":
             resolve([{
@@ -433,6 +440,28 @@ const mock = {
               intervalHours: 24, lastAt: Date.now() - 3600000, lastHash: "a1b2c3d4", lastModels: 7,
             });
             break;
+          case "pull_newapi_pricing": resolve({ ok: true, message: "拉取完成：新增 3 · 调价 1 · 未变 4（命中 8/56 个模型，分组 default ×1）" }); break;
+          case "get_newapi_pricing_status":
+            resolve({
+              enabled: true, baseUrl: "https://api.example.com", token: "", group: "default", intervalHours: 24,
+              lastAt: Date.now() - 7200000, lastHash: "e5f6a7b8", lastModels: 8, lastTotal: 56,
+              lastGroup: "default", lastGroupRatio: "1", lastError: "", lastErrorAt: null,
+            });
+            break;
+          case "preview_newapi_pricing":
+            resolve({
+              ok: true, url: "https://api.example.com/api/pricing", group: "default", groupRatio: 1,
+              groups: ["default", "vip"], usableGroups: { default: "默认分组", vip: "VIP" },
+              total: 56, pricedCount: 48,
+              additions: [{ providerId: null, modelId: "glm-5.3", inputPerM: 2, outputPerM: 8, cacheReadPerM: 2, cacheWritePerM: 2.5, currency: "USD" }],
+              changes: [],
+              unchanged: [{ modelId: "deepseek-v4-flash" }],
+              unmatched: [{ modelId: "dots3-note-prev" }],
+              fuzzy: [{ modelId: "claude-3-5-sonnet-20241022", matchedFrom: "claude-3-5-sonnet" }],
+              skipped: { request: ["mj_imagine"], tiered: [], invalid: [], suspect: [{ modelId: "unknown-model", reason: "倍率未配置（站点兜底 37.5）", inputPerM: 75 }] },
+            });
+            break;
+          case "apply_newapi_pricing": resolve({ ok: true, message: `已应用 ${(args.items || []).length} 项，历史费用已重算` }); break;
           default: resolve(null);
         }
       }, 60);

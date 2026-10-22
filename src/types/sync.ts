@@ -222,7 +222,62 @@ export interface BillingConfig {
   displayCurrency: "CNY" | "USD"; // 显示币种
   usdToCny: number; // USD→CNY 汇率（手动，改后全部历史费用即时重算）
   importProxy: string; // 价格源导入代理（留空=系统代理/直连）
+  newApi: NewApiPricingConfig; // New API 站点价格源（来源 newapi，优先级仅次于手动）
   remotePricing: RemotePricingConfig; // 远程价格源自动拉取（来源 remote）
+}
+
+/**
+ * New API 站点价格源（来源 newapi；优先级 手动 > New API > 远程 > 内置）。
+ * 从站点 GET /api/pricing 拉倍率，按 new-api 口径换算成 USD/1M 后写入价格表。
+ */
+export interface NewApiPricingConfig {
+  enabled: boolean;
+  baseUrl: string; // 站点根地址（如 https://api.example.com，自动拼 /api/pricing）
+  token: string; // 系统访问令牌（可选，加密落盘；渲染层只拿到掩码）
+  group: string; // 分组倍率；留空取站点 default 组
+  intervalHours: number; // 检查间隔（小时，随数据同步顺带触发）
+}
+
+/** New API 拉取状态（上次结果 + 最近一次错误） */
+export interface NewApiPricingStatus extends NewApiPricingConfig {
+  lastAt: number | null;
+  lastHash: string | null;
+  lastModels: number | null;
+  lastTotal: number | null;
+  lastGroup: string | null;
+  lastGroupRatio: string | null;
+  lastError: string | null;
+  lastErrorAt: number | null;
+}
+
+/** New API 差异预览条目 */
+export interface NewApiPreviewItem extends ImportPreviewItem {
+  overriddenSource?: PriceEntry["source"]; // changes 项：当前生效行来自哪个来源
+  willApply?: boolean; // changes 项：写入后是否真会生效（false = 被手动价压制）
+}
+
+/** New API 差异预览（只读，不写库） */
+export interface NewApiPreview {
+  ok: boolean;
+  message?: string;
+  url?: string;
+  group?: string;
+  groupRatio?: number;
+  groups?: string[];
+  usableGroups?: Record<string, string>;
+  total?: number;
+  pricedCount?: number;
+  additions: NewApiPreviewItem[]; // 当前无价 → 新增
+  changes: NewApiPreviewItem[]; // 有价但不同 → 覆盖
+  unchanged: { modelId: string }[]; // 同价
+  unmatched: { modelId: string }[]; // 站点没有该模型
+  fuzzy: { modelId: string; matchedFrom: string }[]; // 靠归一化匹配上，建议核对
+  skipped: {
+    request: string[]; // 按次计费，已跳过
+    tiered: string[]; // 阶梯表达式计费，已跳过
+    invalid: string[]; // 倍率无效
+    suspect: { modelId: string; reason: string; inputPerM: number }[]; // 倍率异常
+  };
 }
 
 /** 远程价格源（pricing.remote_url/hash_url；三层来源中优先级居中：手动 > 远程 > 内置） */
@@ -310,12 +365,13 @@ export interface PriceEntry {
   effectiveTo: number | null; // epoch ms（不含）；null = 至今
   updatedAt: number;
   updatedBy: string;
-  source: "manual" | "remote" | "builtin"; // manual=手动 > remote=远程拉取 > builtin=内置种子
+  source: "manual" | "newapi" | "remote" | "builtin"; // 手动 > New API > 远程拉取 > 内置种子
 }
 
 /** 价格表行：每个模型（+供应商维度）的最新版本段 */
 export interface PriceRow extends PriceEntry {
   versions: number; // 该模型共有几个价格版本
+  sources: PriceEntry["source"][]; // 该模型存在哪些来源的价格段（被高优先级盖住的来源不单独出行）
   active: boolean; // 当前时刻是否生效中（false = 待生效）
 }
 

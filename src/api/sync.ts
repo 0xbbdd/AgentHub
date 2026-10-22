@@ -12,6 +12,7 @@
 import type {
   SyncConfig, Summary, DeviceMeta, DeviceBreakdown, SyncLog, SyncProgress, SourceHealth, SourceInfo, UsageRecord, TotalMode, AggregateRow,
   PriceEntry, PriceRow, UnpricedModel, ImportPreview, ImportPreviewItem, RemotePricingConfig, ModelAlias,
+  NewApiPricingStatus, NewApiPreview, NewApiPreviewItem,
   DataDirInfo, SetDataDirResult, BackupInfo,
 } from "../types/sync";
 import { mock } from "./sync-mock";
@@ -126,6 +127,14 @@ export const pullRemotePricing = (force = false) =>
   call<{ ok: boolean; message: string }>("pull_remote_pricing", { force });
 export const getRemotePricingStatus = () =>
   call<RemotePricingConfig & { lastAt: number | null; lastHash: string | null; lastModels: number | null }>("get_remote_pricing_status");
+
+// ===== New API 站点价格源（来源 newapi，优先级仅次于手动）=====
+export const pullNewApiPricing = (force = false) =>
+  call<{ ok: boolean; message: string }>("pull_newapi_pricing", { force });
+export const getNewApiPricingStatus = () => call<NewApiPricingStatus>("get_newapi_pricing_status");
+export const previewNewApiPricing = () => call<NewApiPreview>("preview_newapi_pricing");
+export const applyNewApiPricing = (items: NewApiPreviewItem[]) =>
+  call<{ ok: boolean; message: string }>("apply_newapi_pricing", { items });
 
 // ===== 其它 =====
 export const openDataDir = () => call<void>("sync_open_data_dir");

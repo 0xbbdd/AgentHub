@@ -300,6 +300,15 @@ function defaultConfig() {
       displayCurrency: "CNY",
       usdToCny: 7.2,
       importProxy: "", // 价格源导入代理（留空=系统代理/直连）
+      // New API 站点价格源（来源 newapi，优先级 手动 > New API > 远程 > 内置）。
+      // 站点地址填根地址即可（如 https://api.example.com），程序自动拼 /api/pricing
+      newApi: {
+        enabled: false,
+        baseUrl: "",
+        token: "", // 系统访问令牌（safeStorage 加密落盘）；留空=匿名访问（站点公开价格页时够用）
+        group: "", // 分组倍率；留空取站点 default 组
+        intervalHours: 24,
+      },
       // 远程价格源自动拉取（来源 remote，pricing.remote_url/hash_url）
       remotePricing: {
         enabled: false,
@@ -464,6 +473,19 @@ function loadConfig() {
       merged.billing.usdToCny = isFinite(rate) && rate > 0 ? rate : 7.2;
       if (typeof merged.billing.importProxy !== "string") merged.billing.importProxy = "";
       merged.billing.enabled = !!merged.billing.enabled;
+      // New API 站点价格源：地址为空即视为未启用（避免「开了开关但没填地址」反复报错）；
+      // 令牌密文在此解密为明文供上层使用，保存时自动重新加密
+      const na = merged.billing.newApi;
+      if (na && typeof na === "object") {
+        na.enabled = !!na.enabled;
+        na.baseUrl = typeof na.baseUrl === "string" ? na.baseUrl.trim() : "";
+        na.group = typeof na.group === "string" ? na.group.trim() : "";
+        const naHours = Number(na.intervalHours);
+        na.intervalHours = isFinite(naHours) && naHours >= 1 ? naHours : 24;
+        na.token = decryptPassword(typeof na.token === "string" ? na.token : "");
+      } else {
+        merged.billing.newApi = defaultConfig().billing.newApi;
+      }
       const rp = merged.billing.remotePricing;
       if (rp && typeof rp === "object") {
         rp.enabled = !!rp.enabled;
@@ -494,6 +516,10 @@ function saveConfig(cfg) {
   const p = configPath();
   const out = { ...cfg, webdav: { ...(cfg.webdav || {}) } };
   if (out.webdav) out.webdav.password = encryptPassword(out.webdav.password);
+  // New API 系统访问令牌与 WebDAV 密码同一套 safeStorage 机制加密落盘（渲染层只能拿到掩码）
+  if (out.billing && out.billing.newApi) {
+    out.billing = { ...out.billing, newApi: { ...out.billing.newApi, token: encryptPassword(out.billing.newApi.token) } };
+  }
   const tmp = `${p}.tmp.${process.pid}`;
   fs.writeFileSync(tmp, JSON.stringify(out, null, 2), "utf8");
   fs.renameSync(tmp, p);

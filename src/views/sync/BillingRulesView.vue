@@ -14,11 +14,123 @@ import { useSyncStore } from "../../stores/sync";
 import { formatToken, formatInteger, formatDateTime } from "../../composables/useFormat";
 import { toast as ElMessage } from "../../utils/toast";
 import * as api from "../../api/sync";
-import type { PriceRow, PriceEntry, UnpricedModel, ImportPreview, ImportPreviewItem, RemotePricingConfig, ModelAlias } from "../../types/sync";
+import type { PriceRow, PriceEntry, UnpricedModel, ImportPreview, ImportPreviewItem, RemotePricingConfig, ModelAlias, NewApiPricingStatus, NewApiPreview, NewApiPreviewItem } from "../../types/sync";
 
 const app = useSyncStore();
 
-// ===== 远程价格源（来源 remote：自动拉取，优先级 手动 > 远程 > 内置） =====
+// ===== New API 站点价格源（来源 newapi：手动 > New API > 远程 > 内置）=====
+const naPulling = ref(false);
+const naStatus = ref<NewApiPricingStatus | null>(null);
+const naMsg = ref<{ ok: boolean; text: string } | null>(null);
+
+async function loadNaStatus() {
+  try {
+    naStatus.value = await api.getNewApiPricingStatus();
+  } catch {
+    naStatus.value = null;
+  }
+}
+async function saveNaField() {
+  const r = await app.save();
+  if (!r.ok) flash(r);
+}
+function toggleNewApi() {
+  app.config.billing.newApi.enabled = !app.config.billing.newApi.enabled;
+  saveNaField();
+}
+async function pullNaNow() {
+  naPulling.value = true;
+  naMsg.value = null;
+  try {
+    // 立即拉取强制跳过哈希短路（确保拿到站点最新倍率）
+    const r = await api.pullNewApiPricing(true);
+    naMsg.value = { ok: !!r.ok, text: r.message };
+    if (r.ok) await Promise.all([loadPrices(), loadNaStatus(), loadUnpriced()]);
+  } catch (e) {
+    naMsg.value = { ok: false, text: e instanceof Error ? e.message : "拉取失败" };
+  } finally {
+    naPulling.value = false;
+  }
+}
+
+// 差异预览（只读）：勾选后按 New API 来源写入，没勾的保持原样
+const naPreview = reactive({
+  show: false,
+  loading: false,
+  error: "",
+  data: null as NewApiPreview | null,
+  checked: new Set<string>(),
+});
+const naCheckedItems = computed(() => {
+  const d = naPreview.data;
+  if (!d) return [] as NewApiPreviewItem[];
+  return [...(d.additions || []), ...(d.changes || [])].filter((it) => naPreview.checked.has(it.modelId));
+});
+/** 预览里被规则过滤掉的模型总数（按次/阶梯/倍率异常），面板上提示「已跳过 N 个」 */
+const naSkippedCount = computed(() => {
+  const s = naPreview.data?.skipped;
+  if (!s) return 0;
+  return (s.request?.length || 0) + (s.tiered?.length || 0) + (s.invalid?.length || 0) + (s.suspect?.length || 0);
+});
+function openNaPreview() {
+  naPreview.show = true;
+  naPreview.data = null;
+  naPreview.error = "";
+  naPreview.checked = new Set();
+  pullNaPreview();
+}
+async function pullNaPreview() {
+  naPreview.loading = true;
+  naPreview.error = "";
+  try {
+    const r = await api.previewNewApiPricing();
+    if (r.ok) {
+      naPreview.data = r;
+      // 默认只勾「会真正生效」的：被手动价压制的条目勾了也没用，容易让人以为功能失效
+      naPreview.checked = new Set(
+        [...(r.additions || []), ...(r.changes || [])].filter((it) => it.willApply !== false).map((it) => it.modelId)
+      );
+    } else {
+      naPreview.error = r.message || "拉取失败";
+    }
+  } catch (e) {
+    naPreview.error = e instanceof Error ? e.message : "拉取失败";
+  } finally {
+    naPreview.loading = false;
+  }
+}
+function toggleNaCheck(id: string) {
+  const next = new Set(naPreview.checked);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  naPreview.checked = next;
+}
+async function applyNaPreview() {
+  if (!naCheckedItems.value.length) return;
+  // checkedItems 来自 reactive 的 preview，元素是响应式 Proxy；Electron IPC 结构化克隆
+  // 不支持 Proxy（DataCloneError 且异常静默），必须映射为纯字段普通对象再传（同 applyImport 口径）
+  const items = naCheckedItems.value.map((it) => ({
+    providerId: null,
+    modelId: it.modelId,
+    inputPerM: it.inputPerM,
+    outputPerM: it.outputPerM,
+    cacheReadPerM: it.cacheReadPerM,
+    cacheWritePerM: it.cacheWritePerM,
+    currency: it.currency,
+  }));
+  try {
+    const r = await api.applyNewApiPricing(items);
+    flash(r);
+    if (r.ok) {
+      naPreview.show = false;
+      await Promise.all([loadPrices(), loadUnpriced(), loadNaStatus()]);
+    }
+  } catch (e) {
+    flash({ ok: false, message: e instanceof Error ? e.message : "应用失败，请重试" });
+  }
+}
+
+// ===== 远程价格源（来源 remote：手动 > New API > 远程 > 内置） =====
 const remotePulling = ref(false);
 const remoteStatus = ref<(RemotePricingConfig & { lastAt: number | null; lastHash: string | null; lastModels: number | null }) | null>(null);
 const remoteMsg = ref<{ ok: boolean; text: string } | null>(null);
@@ -52,7 +164,17 @@ async function pullRemoteNow() {
     remotePulling.value = false;
   }
 }
-const sourceLabel: Record<string, string> = { manual: "手动", remote: "远程", builtin: "内置" };
+const sourceLabel: Record<string, string> = { manual: "手动", newapi: "New API", remote: "远程", builtin: "内置" };
+
+/** 来源标签样式：手动=蓝、New API=强调、远程=绿、内置=灰 */
+function srcPillClass(s: string) {
+  return s === "manual" ? "blue" : s === "newapi" ? "src-newapi" : s === "remote" ? "ok" : "src-builtin";
+}
+
+/** 价格表里看不见的其它来源（被更高优先级盖住）：如 New API 生效时，远程价仍在表里但不单独出行 */
+function hiddenSources(p: PriceRow) {
+  return (p.sources || []).filter((s) => s !== p.source);
+}
 
 // ===== 价格表 =====
 const prices = ref<PriceRow[]>([]);
@@ -494,17 +616,17 @@ async function applyImport() {
 }
 
 onMounted(async () => {
-  await Promise.all([loadPrices(), loadUnpriced(), loadRemoteStatus(), loadAliases()]);
+  await Promise.all([loadPrices(), loadUnpriced(), loadRemoteStatus(), loadNaStatus(), loadAliases()]);
 });
 
-// 视图常驻：同步结束（他机价格表合并 / 远程价格源顺带拉取）或切回本页时刷新
+// 视图常驻：同步结束（他机价格表合并 / 价格源顺带拉取）或切回本页时刷新
 let wasRunning = app.sync.running;
 watch(() => app.sync.running, (now) => {
-  if (wasRunning && !now) { loadPrices(); loadUnpriced(); loadRemoteStatus(); loadAliases(); }
+  if (wasRunning && !now) { loadPrices(); loadUnpriced(); loadRemoteStatus(); loadNaStatus(); loadAliases(); }
   wasRunning = now;
 });
 watch(() => app.activePage, (p) => {
-  if (p === "billing") { loadPrices(); loadUnpriced(); loadRemoteStatus(); loadAliases(); }
+  if (p === "billing") { loadPrices(); loadUnpriced(); loadRemoteStatus(); loadNaStatus(); loadAliases(); }
 });
 </script>
 
@@ -512,80 +634,140 @@ watch(() => app.activePage, (p) => {
   <div class="sync-page">
     <div v-if="actionResult" class="save-line" :class="{ ok: actionResult.ok }">{{ actionResult.message }}</div>
 
-    <!-- 计费设置 + 远程价格源（左右分栏） -->
+    <!-- ① 计费设置：与价格源解耦，单独成卡（三个字段并排，不再挤在右栏） -->
     <div class="card">
-      <div class="billing-setup">
-        <!-- 左：计费开关与基础设置 -->
-        <div class="bs-col">
-          <div class="rule-group-title">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.6"/></svg>
-            计费设置
+      <div class="card-head">
+        <h2>计费设置</h2>
+        <span class="hint">汇率修改后，全部历史费用按新汇率即时重算</span>
+      </div>
+      <div class="switch-row">
+        <div class="s-left">
+          <div class="s-title">启用费用统计</div>
+          <div class="s-desc">关闭后隐藏「费用」页与所有费用元素，记录与同步不受影响</div>
+        </div>
+        <div class="switch" :class="{ on: app.config.billing?.enabled }" role="switch" :aria-checked="!!app.config.billing?.enabled" @click="toggleEnabled"></div>
+      </div>
+      <div class="form-grid billing-form billing-form-3">
+        <div class="form-field">
+          <label>显示币种</label>
+          <div class="tabs">
+            <button class="tab" :class="{ active: app.config.billing?.displayCurrency === 'CNY' }" @click="setCurrency('CNY')">CNY 人民币</button>
+            <button class="tab" :class="{ active: app.config.billing?.displayCurrency === 'USD' }" @click="setCurrency('USD')">USD 美元</button>
           </div>
-          <div class="switch-row">
-            <div class="s-left">
-              <div class="s-title">启用费用统计</div>
-              <div class="s-desc">关闭后隐藏「费用」页与所有费用元素，记录与同步不受影响</div>
+        </div>
+        <div class="form-field">
+          <label>USD → CNY 汇率</label>
+          <input class="f-input mono" type="number" step="0.01" min="0" v-model="app.config.billing.usdToCny" @blur="onRateBlur" />
+        </div>
+        <div class="form-field">
+          <label>导入代理（可选，留空直连）</label>
+          <input class="f-input mono" v-model="app.config.billing.importProxy" placeholder="http://127.0.0.1:7897" @blur="autoSave" />
+        </div>
+      </div>
+      <div class="bs-note">两个价格源共用这个代理（拉取走独立网络会话，不影响主窗口）</div>
+    </div>
+
+    <!-- ② 价格来源：主源（New API）与备源（远程价格表）并列，顶部是生效优先级链 -->
+    <div class="card">
+      <div class="card-head">
+        <h2>价格来源</h2>
+        <span class="hint">两源并存，同一模型按下方优先级取价</span>
+      </div>
+
+      <div class="src-chain">
+        <span class="chain-pill">手动价</span>
+        <span class="chain-arrow">›</span>
+        <span class="chain-pill accent">New API</span>
+        <span class="chain-arrow">›</span>
+        <span class="chain-pill">远程价格表</span>
+        <span class="chain-arrow">›</span>
+        <span class="chain-pill">内置</span>
+        <span class="chain-note">没填手动价的模型自动落到 New API；New API 未收录的模型由远程价兜底</span>
+      </div>
+
+      <div class="src-grid">
+        <!-- New API 站点（主）：按倍率换算成实际付费单价 -->
+        <section class="src-panel primary">
+          <div class="sp-head">
+            <div class="sp-title">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h16M4 17h10"/><circle cx="19" cy="17" r="2.4"/></svg>
+              New API 站点
+              <span class="sp-badge main">主</span>
             </div>
-            <div class="switch" :class="{ on: app.config.billing?.enabled }" role="switch" :aria-checked="!!app.config.billing?.enabled" @click="toggleEnabled"></div>
+            <div class="switch" :class="{ on: app.config.billing?.newApi?.enabled }" role="switch" :aria-checked="!!app.config.billing?.newApi?.enabled" @click="toggleNewApi"></div>
           </div>
+          <p class="sp-desc">
+            从站点 <code>/api/pricing</code> 拉倍率，按 <code>倍率 × 2 × 分组倍率</code> 换算成 USD / 百万 token——即你在这家中转站实际付的价
+          </p>
           <div class="form-grid billing-form">
-            <div class="form-field">
-              <label>显示币种</label>
-              <div class="tabs">
-                <button class="tab" :class="{ active: app.config.billing?.displayCurrency === 'CNY' }" @click="setCurrency('CNY')">CNY 人民币</button>
-                <button class="tab" :class="{ active: app.config.billing?.displayCurrency === 'USD' }" @click="setCurrency('USD')">USD 美元</button>
-              </div>
-            </div>
-            <div class="form-field">
-              <label>USD → CNY 汇率</label>
-              <input class="f-input mono" type="number" step="0.01" min="0" v-model="app.config.billing.usdToCny" @blur="onRateBlur" />
+            <div class="form-field full">
+              <label>站点地址</label>
+              <input class="f-input mono" v-model="app.config.billing.newApi.baseUrl" placeholder="https://api.example.com" @blur="saveNaField" />
             </div>
             <div class="form-field full">
-              <label>导入代理（可选，留空直连）</label>
-              <input class="f-input mono" v-model="app.config.billing.importProxy" placeholder="http://127.0.0.1:7897" @blur="autoSave" />
+              <label>访问令牌（可选，加密保存）</label>
+              <input class="f-input mono" type="password" v-model="app.config.billing.newApi.token" placeholder="留空=匿名访问（站点公开价格页时够用）" @blur="saveNaField" />
+            </div>
+            <div class="form-field">
+              <label>分组倍率</label>
+              <input class="f-input mono" v-model="app.config.billing.newApi.group" placeholder="default" @blur="saveNaField" />
+            </div>
+            <div class="form-field">
+              <label>检查间隔（小时）</label>
+              <input class="f-input mono" type="number" min="1" step="1" v-model.number="app.config.billing.newApi.intervalHours" @blur="saveNaField" />
             </div>
           </div>
-          <div class="bs-note">汇率修改后，全部历史费用按新汇率即时重算 · jsdelivr 镜像无代理时也可直连</div>
-        </div>
-
-        <!-- 右：远程价格源（来源 remote：手动 > 远程 > 内置） -->
-        <div class="bs-col">
-          <div class="rule-group-title">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3.6 9h16.8M3.6 15h16.8M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg>
-            远程价格源
+          <div class="sp-status" :class="{ err: !naMsg && naStatus?.lastError }">
+            <span v-if="naMsg" :style="{ color: naMsg.ok ? 'var(--ok)' : 'var(--err)' }">{{ naMsg.text }}</span>
+            <template v-else-if="naStatus?.lastError">最近失败：{{ naStatus.lastError }}</template>
+            <template v-else-if="naStatus?.lastAt">
+              上次拉取 {{ formatDateTime(naStatus.lastAt) }} · 命中 {{ naStatus.lastModels }}/{{ naStatus.lastTotal }} 个模型 · 分组 {{ naStatus.lastGroup }} ×{{ naStatus.lastGroupRatio }}
+            </template>
+            <template v-else-if="!app.config.billing.newApi.baseUrl">未配置站点地址：当前按「远程价格表 → 内置价」计费</template>
+            <template v-else>尚未拉取过</template>
           </div>
-          <div class="switch-row">
-            <div class="s-left">
-              <div class="s-title">自动拉取远程价格</div>
-              <div class="s-desc">按间隔随数据同步自动拉取，价格来源标记为「远程」；优先级：手动 &gt; 远程 &gt; 内置</div>
+          <div class="sp-actions">
+            <button class="btn-outline" :disabled="!app.config.billing.newApi.baseUrl" @click="openNaPreview">预览差异</button>
+            <button class="btn-outline" :disabled="naPulling || !app.config.billing.newApi.baseUrl" @click="pullNaNow">{{ naPulling ? "拉取中…" : "立即拉取" }}</button>
+          </div>
+        </section>
+
+        <!-- 远程价格表（备）：公共价格表，兜底 New API 没收录的模型 -->
+        <section class="src-panel">
+          <div class="sp-head">
+            <div class="sp-title">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3.6 9h16.8M3.6 15h16.8M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg>
+              远程价格表
+              <span class="sp-badge">备</span>
             </div>
             <div class="switch" :class="{ on: app.config.billing?.remotePricing?.enabled }" role="switch" :aria-checked="!!app.config.billing?.remotePricing?.enabled" @click="toggleRemotePricing"></div>
           </div>
+          <p class="sp-desc">
+            LiteLLM 兼容格式的公共价格表，覆盖主流模型；New API 没收录的模型由它兜底
+          </p>
           <div class="form-grid billing-form">
             <div class="form-field full">
-              <label>价格表网址（LiteLLM 兼容格式）</label>
+              <label>价格表网址</label>
               <input class="f-input mono" v-model="app.config.billing.remotePricing.url" placeholder="https://…/model_prices_and_context_window.json" @blur="saveRemoteField" />
             </div>
             <div class="form-field">
-              <label>哈希校验网址（可选，远程无变化时短路由）</label>
-              <input class="f-input mono" v-model="app.config.billing.remotePricing.hashUrl" placeholder="https://…/model_prices_and_context_window.sha256" @blur="saveRemoteField" />
+              <label>哈希校验（可选）</label>
+              <input class="f-input mono" v-model="app.config.billing.remotePricing.hashUrl" placeholder="https://…/…sha256" @blur="saveRemoteField" />
             </div>
             <div class="form-field">
               <label>检查间隔（小时）</label>
               <input class="f-input mono" type="number" min="1" step="1" v-model.number="app.config.billing.remotePricing.intervalHours" @blur="saveRemoteField" />
             </div>
           </div>
-          <div class="switch-row">
-            <div class="s-left">
-              <div class="s-desc">
-                <template v-if="remoteStatus?.lastAt">上次拉取 {{ formatDateTime(remoteStatus.lastAt) }} · 命中 {{ remoteStatus.lastModels }} 个本地模型<span v-if="remoteMsg"> · </span></template>
-                <template v-else>尚未拉取过<span v-if="remoteMsg"> · </span></template>
-                <span v-if="remoteMsg" :style="{ color: remoteMsg.ok ? 'var(--ok)' : 'var(--err)' }">{{ remoteMsg.text }}</span>
-              </div>
-            </div>
+          <div class="sp-status">
+            <span v-if="remoteMsg" :style="{ color: remoteMsg.ok ? 'var(--ok)' : 'var(--err)' }">{{ remoteMsg.text }}</span>
+            <template v-else-if="remoteStatus?.lastAt">上次拉取 {{ formatDateTime(remoteStatus.lastAt) }} · 命中 {{ remoteStatus.lastModels }} 个本地模型</template>
+            <template v-else>尚未拉取过</template>
+          </div>
+          <div class="sp-actions">
             <button class="btn-outline" :disabled="remotePulling" @click="pullRemoteNow">{{ remotePulling ? "拉取中…" : "立即拉取" }}</button>
           </div>
-        </div>
+        </section>
       </div>
     </div>
 
@@ -630,9 +812,14 @@ watch(() => app.activePage, (p) => {
               <td class="num mono">{{ p.cacheReadPerM.toFixed(2) }}</td>
               <td class="num mono">{{ p.cacheWritePerM.toFixed(2) }}</td>
               <td><span class="pill" :class="p.currency === 'USD' ? 'ok' : 'blue'">{{ p.currency }}</span></td>
-              <td><span class="pill" :class="p.source === 'manual' ? 'blue' : p.source === 'remote' ? 'ok' : 'src-builtin'">{{ sourceLabel[p.source] || p.source }}</span></td>
+              <td><span class="pill" :class="srcPillClass(p.source)">{{ sourceLabel[p.source] || p.source }}</span></td>
               <td class="ver">
-                <template v-if="p.active"><b>{{ effLabel(p.effectiveFrom) }}</b> · {{ p.versions > 1 ? `${p.versions} 个历史版本` : "无历史" }}</template>
+                <template v-if="p.active">
+                  <b>{{ effLabel(p.effectiveFrom) }}</b> · {{ p.versions > 1 ? `${p.versions} 个历史版本` : "无历史" }}
+                  <div v-if="hiddenSources(p).length" class="ver-sub">
+                    另有 {{ hiddenSources(p).map((s) => sourceLabel[s] || s).join(" / ") }} 价（优先级更低，未生效）
+                  </div>
+                </template>
                 <template v-else><span class="pill warn">待生效 · {{ effLabel(p.effectiveFrom) }}</span></template>
               </td>
               <td class="op-cell">
@@ -710,7 +897,11 @@ watch(() => app.activePage, (p) => {
       <div class="caliper-grid">
         <div class="cal-item">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
-          <div><b>价格匹配</b>：供应商精确匹配优先，其次仅按模型通配；同一模型跨软件源共用一份价格。</div>
+          <div><b>来源优先级</b>：手动 &gt; New API &gt; 远程价格表 &gt; 内置。同一模型多源并存时按此取价，低优先级来源的价格段保留但不生效（历史抽屉里能看到）。</div>
+        </div>
+        <div class="cal-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+          <div><b>供应商匹配</b>：同来源内供应商精确匹配优先，其次按模型通配；同一模型跨软件源共用一份价格。</div>
         </div>
         <div class="cal-item">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
@@ -796,7 +987,7 @@ watch(() => app.activePage, (p) => {
               <b>{{ effLabel(v.effectiveFrom) }}</b>
               {{ v.effectiveTo ? "至 " + formatDateTime(v.effectiveTo) : "· 至今" }}
               <span class="pill" :class="i === 0 ? 'blue' : ''" v-if="i === 0">现行</span>
-              <span class="pill" :class="v.source === 'manual' ? 'blue' : v.source === 'remote' ? 'ok' : 'src-builtin'" style="margin-left: 4px">{{ sourceLabel[v.source] || v.source }}</span>
+              <span class="pill" :class="srcPillClass(v.source)" style="margin-left: 4px">{{ sourceLabel[v.source] || v.source }}</span>
               <span v-if="v.currency === 'USD'" class="pill ok" style="margin-left: 4px">USD</span>
             </div>
             <div class="vt-price mono">输入 {{ v.inputPerM.toFixed(2) }} · 输出 {{ v.outputPerM.toFixed(2) }} · 缓存读 {{ v.cacheReadPerM.toFixed(2) }}</div>
@@ -806,6 +997,80 @@ watch(() => app.activePage, (p) => {
         </ul>
       </div>
     </Teleport>
+
+    <!-- New API 差异预览：只读拉取站点价，与本地现行价逐项比对，勾选后才写入 -->
+    <el-dialog v-model="naPreview.show" class="settings-dialog sync-scope" width="640px" align-center append-to-body>
+      <template #header>
+        <div>
+          <div class="sd-title">New API 价格差异</div>
+          <div class="sd-sub">
+            <template v-if="naPreview.data">
+              {{ naPreview.data.url }} · 分组 {{ naPreview.data.group }} ×{{ naPreview.data.groupRatio }}
+              · 站点 {{ naPreview.data.total }} 个模型，可换算 {{ naPreview.data.pricedCount }} 个
+            </template>
+            <template v-else>{{ naPreview.loading ? "正在拉取站点价格…" : "只读预览，确认后才写入" }}</template>
+          </div>
+        </div>
+      </template>
+      <div v-if="naPreview.loading" class="skeleton sk-chart" style="height: 140px; margin-bottom: 0"></div>
+      <template v-else-if="naPreview.error">
+        <p class="m-hint" style="color: var(--err)">{{ naPreview.error }}</p>
+      </template>
+      <template v-else-if="naPreview.data">
+        <div class="na-sum">
+          <span class="na-chip add">新增 {{ naPreview.data.additions.length }}</span>
+          <span class="na-chip chg">调价 {{ naPreview.data.changes.length }}</span>
+          <span class="na-chip same">同价 {{ naPreview.data.unchanged.length }}</span>
+          <span class="na-chip miss">未收录 {{ naPreview.data.unmatched.length }}</span>
+          <span v-if="naSkippedCount" class="na-chip skip">已跳过 {{ naSkippedCount }}</span>
+        </div>
+        <div class="imp-list">
+          <label v-for="it in naPreview.data.additions" :key="'a' + it.modelId" class="imp-row">
+            <input type="checkbox" :checked="naPreview.checked.has(it.modelId)" @change="toggleNaCheck(it.modelId)" />
+            <span class="ic add">+</span>
+            <span class="m mono">{{ it.modelId }}</span>
+            <span class="d">{{ it.currency }} {{ it.inputPerM.toFixed(2) }} / {{ it.outputPerM.toFixed(2) }} · 缓存读 {{ it.cacheReadPerM.toFixed(2) }}</span>
+          </label>
+          <label v-for="it in naPreview.data.changes" :key="'c' + it.modelId" class="imp-row">
+            <input type="checkbox" :checked="naPreview.checked.has(it.modelId)" @change="toggleNaCheck(it.modelId)" />
+            <span class="ic chg">↻</span>
+            <span class="m mono">{{ it.modelId }}</span>
+            <span class="d">
+              {{ it.prev!.currency }} {{ it.prev!.inputPerM.toFixed(2) }}/{{ it.prev!.outputPerM.toFixed(2) }}
+              → {{ it.currency }} {{ it.inputPerM.toFixed(2) }}/{{ it.outputPerM.toFixed(2) }}
+              <b v-if="it.overriddenSource === 'manual'" class="na-over">手动价优先，写入后不生效</b>
+              <b v-else-if="it.overriddenSource" class="na-over">覆盖{{ sourceLabel[it.overriddenSource] || it.overriddenSource }}价</b>
+            </span>
+          </label>
+          <div v-for="f in naPreview.data.fuzzy" :key="'f' + f.modelId" class="imp-row">
+            <span class="ic fuzz">≈</span>
+            <span class="m mono">{{ f.modelId }}</span>
+            <span class="d">按名称归一化匹配到 {{ f.matchedFrom }}，请核对是否为同一模型</span>
+          </div>
+          <div v-for="u in naPreview.data.unmatched" :key="'u' + u.modelId" class="imp-row">
+            <span class="ic miss">✕</span>
+            <span class="m mono">{{ u.modelId }}</span>
+            <span class="d">站点未收录，仍由远程价格表 / 内置价兜底</span>
+          </div>
+          <div v-for="s in naPreview.data.skipped.suspect" :key="'s' + s.modelId" class="imp-row">
+            <span class="ic miss">!</span>
+            <span class="m mono">{{ s.modelId }}</span>
+            <span class="d">{{ s.reason }}，已跳过</span>
+          </div>
+        </div>
+        <p v-if="!naPreview.data.additions.length && !naPreview.data.changes.length && !naPreview.data.unmatched.length" class="m-hint">
+          本地用量模型与站点价格已完全对齐，无需改动。
+        </p>
+        <p class="m-hint">
+          写入的价格来源标记为 <b>New API</b>：优先级高于远程价格表、低于手动价；新价格从此刻起生效，历史记录仍按原价格段计费。未勾选的条目不写入。
+        </p>
+      </template>
+      <div class="modal-actions">
+        <button class="btn-outline" @click="naPreview.show = false">关闭</button>
+        <button class="btn-outline" :disabled="naPreview.loading" @click="pullNaPreview">重新拉取</button>
+        <button class="btn btn-cta" :disabled="!naCheckedItems.length" @click="applyNaPreview">应用 {{ naCheckedItems.length }} 项</button>
+      </div>
+    </el-dialog>
 
     <!-- 导入面板：与全局设置弹窗同一套 el-dialog 玻璃样式（settings-dialog）。
          class 里的 sync-scope 必须保留：弹窗内容用的 .m-hint / .form-field / .f-input / .tabs / .btn-cta
@@ -916,19 +1181,55 @@ watch(() => app.activePage, (p) => {
 </template>
 
 <style scoped>
-.rule-group-title { display: flex; align-items: center; gap: 9px; font-size: 13.5px; font-weight: 700; margin-bottom: 12px; color: var(--text); }
-.rule-group-title svg { width: 16px; height: 16px; color: var(--accent); }
-
-/* 计费设置 + 远程价格源：左右分栏 */
-.billing-setup { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 0 32px; }
-.bs-col + .bs-col { border-left: 1px solid var(--border); padding-left: 32px; }
 .billing-form { padding: 4px 0 2px; }
-.bs-note { border-top: 1px solid var(--border); padding-top: 12px; font-size: 11.5px; color: var(--text-3); line-height: 1.6; }
-.bs-col .switch-row:last-child { padding-bottom: 0; }
+/* 计费设置：三字段并排（币种 / 汇率 / 代理）。
+   特异性要压过 sync.css 里的 .sync-scope .form-grid（0,2,0）与它的窄屏覆盖，否则三列不生效 */
+.sync-scope .form-grid.billing-form-3 { grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.8fr) minmax(0, 1.4fr); }
 @media (max-width: 1080px) {
-  .billing-setup { grid-template-columns: 1fr; gap: 20px 0; }
-  .bs-col + .bs-col { border-left: none; padding-left: 0; }
+  .sync-scope .form-grid.billing-form-3 { grid-template-columns: 1fr 1fr; }
+  .sync-scope .form-grid.billing-form-3 > .form-field:last-child { grid-column: 1 / -1; }
 }
+@media (max-width: 640px) {
+  .sync-scope .form-grid.billing-form-3 { grid-template-columns: 1fr; }
+}
+.bs-note { border-top: 1px solid var(--border); padding-top: 12px; font-size: 11.5px; color: var(--text-3); line-height: 1.6; }
+
+/* 价格来源：顶部优先级链 */
+.src-chain { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 10px 14px; margin-bottom: 14px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; }
+.chain-pill { font-size: 11.5px; padding: 2px 10px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
+.chain-pill.accent { background: var(--accent-soft); border-color: var(--accent-soft-2); color: var(--accent-strong); font-weight: 600; }
+.chain-arrow { color: var(--text-3); font-size: 12px; }
+.chain-note { font-size: 11.5px; color: var(--text-3); margin-left: auto; }
+
+/* 价格来源：主备两列（New API 主 / 远程价格表备） */
+.src-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+@media (max-width: 1080px) { .src-grid { grid-template-columns: 1fr; } }
+.src-panel { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; background: var(--surface); }
+.src-panel.primary { border-color: var(--accent-soft-2); background: var(--accent-soft); }
+.sp-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+.sp-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--text); }
+.sp-title svg { width: 15px; height: 15px; color: var(--accent); flex-shrink: 0; }
+.sp-badge { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; background: var(--surface-3); color: var(--text-3); font-weight: 500; }
+.sp-badge.main { background: var(--accent); color: #fff; }
+.sp-desc { font-size: 11.5px; color: var(--text-3); line-height: 1.65; margin-bottom: 10px; }
+.sp-desc code { font-family: "Cascadia Code", Consolas, monospace; font-size: 11px; color: var(--accent-strong); background: var(--surface); padding: 1px 5px; border-radius: 4px; }
+.sp-status { font-size: 11.5px; color: var(--text-3); line-height: 1.6; padding: 8px 0 0; margin-top: auto; border-top: 1px dashed var(--border); }
+.sp-status.err { color: var(--err); }
+.sp-actions { display: flex; gap: 8px; margin-top: 10px; }
+
+/* 价格表：被更高优先级盖住的来源提示 */
+.ver-sub { font-size: 11px; color: var(--text-3); margin-top: 2px; }
+.pill.src-newapi { color: var(--accent-strong); background: var(--accent-soft); border: 1px solid var(--accent-soft-2); }
+
+/* New API 差异预览 */
+.na-sum { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.na-chip { font-size: 11.5px; padding: 2px 10px; border-radius: 999px; background: var(--surface-2); color: var(--text-2); }
+.na-chip.add { color: var(--ok); background: rgba(5, 150, 105, 0.1); }
+.na-chip.chg { color: var(--accent-strong); background: var(--accent-soft); }
+.na-chip.miss { color: var(--text-3); }
+.na-chip.skip { color: var(--warn); background: rgba(217, 119, 6, 0.1); }
+.na-over { color: var(--warn); font-weight: 500; margin-left: 4px; }
+.imp-row .ic.fuzz { color: var(--accent-strong); background: var(--accent-soft); }
 
 th.op-cell { text-align: center; white-space: nowrap; }
 td.op-cell { text-align: right; white-space: nowrap; }
