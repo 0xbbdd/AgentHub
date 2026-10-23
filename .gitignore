@@ -28,6 +28,9 @@ npm-debug.log*
 *.db-shm
 *.db-wal
 
+# 记忆中枢运行时数据（个人记忆，不入库）
+/memory/
+
 # 助手工作区（本地记忆/缓存，不入库）
 .workbuddy/
 .workbuddy-ai/

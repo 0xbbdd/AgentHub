@@ -275,6 +275,16 @@ class LlmClient {
         : cand.provider.apiKey || "";
       const base = addPathHint(cand.provider.baseUrl || (cand.source === "gateway" ? GATEWAY_DEFAULT : ""), apiFormat);
 
+      // 本机网关同样要鉴权。没有可用 Key 时直接给出可操作错误，避免每个任务都拿一个裸 401：
+      // 用户看到的不再是「鉴权失败（401）」，而是明确知道要去哪里生成/启用 Key。
+      if (cand.source === "gateway" && !apiKey) {
+        lastError = new Error("本机网关缺少可用 API Key：请到「反代网关 → API Keys」生成并启用一把 Key");
+        this.emit({ type: "provider-status", providerId: cand.provider.id, status: "offline", detail: lastError.message });
+        tried.push(`${cand.provider.name || cand.provider.id}/${cand.model.modelId}`);
+        this._log({ provider: cand.provider.id, model: cand.model.modelId, task, ok: false, detail: lastError.message });
+        continue;
+      }
+
       /* 把「上次被上游拒绝过」的参数翻译成能力位，让 encoder 这次就不发它（否则第二次调用必然再失败）。
          每次尝试都按最新怪癖记忆重建供应商视图：命中怪癖后重试必须真的换一种编码方式发出去。
          此前只在候选循环开头构建一次，剥离 system/reasoning 这类需要改走编码分支的怪癖时，
@@ -525,6 +535,8 @@ function gwProvider(cfg, gw) {
     baseUrl: cfg["models.gatewayUrl"] || gw.baseUrl || GATEWAY_DEFAULT,
     apiFormat: "chat_completions",
     apiKeyRef: "",
+    // 主进程从反代模块的已启用 Key 中解析而来；只在进程内传给请求头，不落记忆配置、不进渲染层。
+    apiKey: gw.apiKey || "",
     quirks: {},
     enabled: true,
   };

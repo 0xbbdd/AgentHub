@@ -53,7 +53,7 @@ async function main() {
     memCfg: cfg,
     service: svc,
     emit: () => {},
-    gatewayResolver: () => ({ available: true, baseUrl: "http://127.0.0.1:9527/v1", fallbackModel: "gpt-4o-mini" }),
+    gatewayResolver: () => ({ available: true, baseUrl: "http://127.0.0.1:9527/v1", fallbackModel: "gpt-4o-mini", apiKey: "sk-gw-smoke" }),
   });
 
   console.log("[1] Base URL 校验（不再强制 https）");
@@ -129,6 +129,22 @@ async function main() {
   const gws2 = store.gateways();
   check("网关模型计数正确", gws2[0].modelCount === 1 && gws2[0].enabledModelCount === 1, JSON.stringify({ c: gws2[0].modelCount, e: gws2[0].enabledModelCount }));
   check("gw-local 可合成供应商用于测试/拉取", !!store._providerWithKey("gw-local"), "");
+  const gwCandidate = store.client.resolveCandidates("profile", {}).find((c) => c.source === "gateway");
+  check("gw-local 候选携带反代模块的 API Key", !!gwCandidate && gwCandidate.provider.apiKey === "sk-gw-smoke", JSON.stringify(gwCandidate && { id: gwCandidate.provider.id, hasKey: !!gwCandidate.provider.apiKey }));
+  store.memCfg.set({ "models.routing": [{ task: "profile", providerId: "gw-local" }] }, { local: true });
+  const noKeyStore = new ProviderStore({
+    memCfg: cfg,
+    service: svc,
+    emit: () => {},
+    gatewayResolver: () => ({ available: true, baseUrl: "http://127.0.0.1:9527/v1", fallbackModel: "gpt-4o-mini", apiKey: "" }),
+  });
+  let noKeyErr = null;
+  try {
+    await noKeyStore.client.call({ task: "profile", messages: [{ role: "user", content: "ping" }], maxTokens: 8 });
+  } catch (e) {
+    noKeyErr = e;
+  }
+  check("网关缺 Key 时给出可操作错误而非裸 401", !!noKeyErr && /反代网关.*API Keys/.test(noKeyErr.message), noKeyErr && noKeyErr.message);
   const down = new ProviderStore({ memCfg: cfg, service: svc, emit: () => {}, gatewayResolver: () => ({ available: false, baseUrl: "" }) });
   check("网关未运行时合成返回 null", down._providerWithKey("gw-local") === null, "");
 

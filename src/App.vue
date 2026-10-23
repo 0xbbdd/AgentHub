@@ -58,6 +58,7 @@ const MemoryIndexView = asyncView(() => import("./views/memory/IndexView.vue"));
 const MemoryAutoView = asyncView(() => import("./views/memory/AutoView.vue"));
 const MemoryImportView = asyncView(() => import("./views/memory/ImportView.vue"));
 const MemorySyncView = asyncView(() => import("./views/memory/SyncView.vue"));
+const ConfigMemorySection = asyncView(() => import("./components/config/ConfigMemorySection.vue"));
 
 import { useMemoryStore } from "./stores/memory";
 import * as api from "./api/ipc";

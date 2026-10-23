@@ -87,8 +87,34 @@ function emit(payload) {
   } catch { /* 无窗口时静默 */ }
 }
 
-// 跨模块探测（不改 proxy 逻辑）：直接打本机网关的 /healthz，结果缓存 30 秒
-let gatewayCache = { at: 0, value: { available: false, baseUrl: "", port: 0, fallbackModel: "" } };
+// 跨模块探测（不改 proxy 逻辑）：直接打本机网关的 /healthz，结果缓存 30 秒。
+// 网关的推理端点强制鉴权（401 invalid_api_key），所以探测结果必须一并带上主进程内可用的 Key；
+// 只探 /healthz 会让记忆任务误以为「网关在线即可调用」，最终在发请求时被 401 打回。
+let gatewayCache = { at: 0, value: { available: false, baseUrl: "", port: 0, fallbackModel: "", apiKey: "" } };
+
+/** 从反代模块已启用的 Key 中选一把供记忆任务内部调用。
+ * 只在主进程解析，Key 不进入渲染层；优先无模型/渠道白名单、无配额限速的 Key，减少内部任务被限制的概率。
+ * 没有可用 Key 时返回空串，由 LlmClient 给出可操作提示，而不是等网关返回裸 401。 */
+function resolveGatewayApiKey() {
+  try {
+    const keys = require("../proxy/store.cjs").listKeys();
+    const usable = (Array.isArray(keys) ? keys : []).filter((k) => k && k.enabled && k.secret);
+    if (!usable.length) return "";
+    const score = (k) =>
+      (k.name === "AgentHub 记忆中枢（内部）" ? 100 : 0) +
+      (!(k.allowedModels || []).length ? 20 : 0) +
+      (!(k.allowedChannels || []).length ? 10 : 0) +
+      (k.route === "auto" ? 5 : 0) +
+      (!(Number(k.dailyQuota) > 0) ? 3 : 0) +
+      (!(Number(k.rateLimit) > 0) ? 2 : 0);
+    usable.sort((a, b) => score(b) - score(a) || Number(a.createdAt || 0) - Number(b.createdAt || 0));
+    return String(usable[0].secret || "");
+  } catch {
+    // 反代模块未加载 / 数据库暂不可读时不阻塞其它来源，调用侧会提示缺少网关 Key
+    return "";
+  }
+}
+
 async function probeGateway() {
   const now = Date.now();
   if (now - gatewayCache.at < 30000) return gatewayCache.value;
@@ -97,13 +123,14 @@ async function probeGateway() {
   const baseUrl = `http://127.0.0.1:${port}/v1`;
   // fallbackModel（反代网关设置里的全局统一回退模型）必须带出去：模型池没配时 LlmClient 靠它
   // 回退到网关号池当前模型——此前探测结果漏了这个字段，「什么都不配回退号池」实际永不生效
-  const value = { available: false, baseUrl, port, fallbackModel: String((framework.proxy && framework.proxy.fallbackModel) || "") };
+  const value = { available: false, baseUrl, port, fallbackModel: String((framework.proxy && framework.proxy.fallbackModel) || ""), apiKey: "" };
   let timer = null;
   try {
     const controller = new AbortController();
     timer = setTimeout(() => controller.abort(), 1200);
     const res = await fetch(`http://127.0.0.1:${port}/healthz`, { signal: controller.signal });
     value.available = res.ok;
+    if (value.available) value.apiKey = resolveGatewayApiKey();
   } catch {
     value.available = false;
   } finally {
@@ -1132,6 +1159,8 @@ function copyTree(from, to, skipDirs) {
 module.exports = {
   init, boot, shutdown, register, status, settings, flatSettings, emit,
   tools, agents, runtimeFile,
+  // 自测钩子：主进程内解析反代 Key（不得经 IPC 暴露给渲染层）
+  resolveGatewayApiKey,
   // 自测钩子：待确认裁决入口（覆盖"引用已消失 → 自动作废"分支），svc 由调用方提供
   resolveReview,
   get service() { return service; },
