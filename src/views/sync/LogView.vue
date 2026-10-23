@@ -9,13 +9,16 @@
   ============================================================
 -->
 <script setup lang="ts">
-import { onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
+import { useAppStore } from "../../stores/app";
 import * as api from "../../api/sync";
 import { useSyncStore } from "../../stores/sync";
 import { formatDateTime } from "../../composables/useFormat";
 import type { SyncLog } from "../../types/sync";
 
 const app = useSyncStore();
+const framework = useAppStore();
+const active = computed(() => framework.activeModule === "sync" && framework.activePage === "log");
 const logs = ref<SyncLog[]>([]);
 const total = ref(0);
 const page = ref(0);
@@ -46,17 +49,19 @@ async function load() {
     await load();
   }
 }
-onMounted(load);
+onMounted(() => { if (active.value) load(); });
 
 // 类型/状态筛选已下推后端，筛选变化回到第一页重新查询
 watch([kindFilter, levelFilter], () => {
   page.value = 0;
-  load();
+  if (active.value) load();
 });
+
+watch(active, (on) => { if (on) load(); });
 
 // 同步结束后自动刷新（页面用 v-show 常驻，需手动触发）
 watch(() => app.sync.running, (now, prev) => {
-  if (prev && !now) load();
+  if (prev && !now && active.value) load();
 });
 
 async function clear() {

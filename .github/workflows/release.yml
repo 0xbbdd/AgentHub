@@ -18,10 +18,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
-    runs-on: windows-latest
+  validate:
+    runs-on: ubuntu-latest
     permissions:
-      contents: write # 创建 Release/tag 必需，否则 electron-builder 发布 403
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -58,17 +58,53 @@ jobs:
           " "$PKG_VERSION" "$INPUT_VERSION" "$LATEST_TAG"
 
       - name: 安装依赖
-        # .npmrc 的 npmmirror 镜像会在 CI 生效；若 Electron 二进制下载失败（镜像未同步），临时移除 .npmrc 重试
         run: npm ci
 
       - name: 类型检查与前端构建（vue-tsc 门禁）
         run: npm run build
 
-      - name: 打包并发布 Release
-        run: npx electron-builder --publish always
+  package:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            command: npx electron-builder --win nsis --x64 --publish always
+          - os: macos-latest
+            command: npx electron-builder --mac dmg zip --universal --publish always
+          - os: ubuntu-latest
+            command: npx electron-builder --linux AppImage deb --x64 --publish always
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: 安装依赖
+        run: npm ci
+      - name: 构建前端
+        run: npm run build
+      - name: 准备当前平台原生资源
+        run: npm run native:prepare
+      - name: 打包并发布当前平台资产
+        run: ${{ matrix.command }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  finalize:
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - name: 补 Release 更新说明（build/release-notes.md → Release body）
         # electron-builder 创建 Release 不传 body；body 为空则 Release 页无说明、
         # atom feed 兜底路径也拿不到更新说明。校验 latest.yml 之前先补好

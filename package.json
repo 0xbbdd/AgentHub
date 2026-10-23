@@ -11,10 +11,15 @@
     "web": "vite --open",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
-    "electron:build": "npm run build && electron-builder",
-    "electron:pack": "npm run build && electron-builder --dir",
+    "electron:build": "npm run build && npm run native:prepare && electron-builder",
+    "electron:pack": "npm run build && npm run native:prepare && electron-builder --dir",
     "gen:icon": "node tools/gen-icon.cjs",
-    "verify:memory": "node tools/verify/m-run-all.cjs"
+    "verify:memory": "node tools/verify/m-run-all.cjs",
+    "electron:build:win": "npm run build && npm run native:prepare && electron-builder --win nsis --x64",
+    "electron:build:mac": "npm run build && npm run native:prepare && electron-builder --mac dmg zip --universal",
+    "electron:build:linux": "npm run build && npm run native:prepare && electron-builder --linux AppImage deb --x64",
+    "electron:pack:current": "npm run build && npm run native:prepare && electron-builder --dir",
+    "native:prepare": "node tools/prepare-native-resources.cjs"
   },
   "dependencies": {
     "@vueuse/core": "^11.3.0",
@@ -81,7 +86,7 @@
         "to": "build/tray.png"
       },
       {
-        "from": "resources/sqlcipher",
+        "from": "build/native-resources/sqlcipher",
         "to": "sqlcipher"
       },
       {
@@ -107,6 +112,58 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "AgentHub"
+    },
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "category": "public.app-category.developer-tools",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    },
+    "dmg": {
+      "sign": false
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "category": "Development",
+      "maintainer": "沐晖",
+      "synopsis": "AgentHub Agent control center"
+    },
+    "appImage": {
+      "artifactName": "${productName}-${version}-linux-${arch}.${ext}"
+    },
+    "deb": {
+      "artifactName": "${productName}-${version}-linux-${arch}.${ext}"
     }
   }
 }

@@ -30,6 +30,7 @@
 "use strict";
 const fs = require("node:fs");
 const path = require("node:path");
+const { roamingAppData } = require("./platform-paths.cjs");
 const { DatabaseSync } = require("node:sqlite");
 const { normalizeModel } = require("./adapter-zcode.cjs");
 
@@ -41,7 +42,7 @@ function homeDir() {
 }
 
 function appDataDir() {
-  return process.env.APPDATA || path.join(homeDir(), "AppData", "Roaming");
+  return roamingAppData();
 }
 
 /** 应用数据 home（settings committed.json 的 home 字段指向这里） */

@@ -12,7 +12,7 @@
 <script setup lang="ts">
 import zhCn from "element-plus/es/locale/lang/zh-cn";
 import { ElConfigProvider } from "element-plus";
-import { onMounted, onUnmounted, ref, watch } from "vue";
+import { defineAsyncComponent, onMounted, onUnmounted, ref, watch } from "vue";
 import { useAppStore } from "./stores/app";
 import { useSyncStore } from "./stores/sync";
 import { useUsageStore } from "./stores/usage";
@@ -23,45 +23,42 @@ import ConfigSkillsSection from "./components/config/ConfigSkillsSection.vue";
 import ConfigUsageSection from "./components/config/ConfigUsageSection.vue";
 import ConfigProxySection from "./components/config/ConfigProxySection.vue";
 import SkillsHelpDialog from "./components/SkillsHelpDialog.vue";
-// 各模块的页面视图：各自独立目录，分别开发互不干扰
-import SkillsDashboardView from "./views/skills/SkillsDashboardView.vue";
-import SkillsLibraryView from "./views/skills/SkillsLibraryView.vue";
-import SkillsDedupView from "./views/skills/SkillsDedupView.vue";
-import SkillsSyncView from "./views/skills/SkillsSyncView.vue";
-import SkillsWebdavView from "./views/skills/SkillsWebdavView.vue";
-import SkillsSkillDetailView from "./views/skills/SkillsSkillDetailView.vue";
-// 用量统计模块（原「用量记录同步」）：数据源顶栏 + 五个页面 + 同步进度弹窗
-import SyncTopBar from "./components/sync/SyncTopBar.vue";
-import SyncDialog from "./components/sync/SyncDialog.vue";
-import SyncOverviewView from "./views/sync/OverviewView.vue";
-import SyncDetailView from "./views/sync/DetailView.vue";
-import SyncCostsView from "./views/sync/CostsView.vue";
-import SyncBillingRulesView from "./views/sync/BillingRulesView.vue";
-import SyncLogView from "./views/sync/LogView.vue";
-import ProxyHomeView from "./views/proxy/ProxyHomeView.vue";
-import ProxyKeysView from "./views/proxy/ProxyKeysView.vue";
-import ProxyProvidersView from "./views/proxy/ProxyProvidersView.vue";
-import ProxyAgentsView from "./views/proxy/ProxyAgentsView.vue";
-import ProxyExpiryView from "./views/proxy/ProxyExpiryView.vue";
-import ProxyModelsView from "./views/proxy/ProxyModelsView.vue";
-import ProxyStatsView from "./views/proxy/ProxyStatsView.vue";
-import ProxyPoolSyncView from "./views/proxy/ProxyPoolSyncView.vue";
-import ProxyCcSwitchView from "./views/proxy/ProxyCcSwitchView.vue";
-import ProxyLogView from "./views/proxy/ProxyLogView.vue";
-import ProxyNetworkView from "./views/proxy/ProxyNetworkView.vue";
-// 记忆中枢模块：9 个页面 + 隐藏配置页（模块级 .memory-scope 样式作用域，可整体剥离）
-// 「待确认」收件箱不再是独立页签，已并入记忆浏览的第三个视图（components/memory/MemReviewPanel）
-import MemoryDashboardView from "./views/memory/DashboardView.vue";
-import MemoryBrowseView from "./views/memory/BrowseView.vue";
-import MemoryProjectsView from "./views/memory/ProjectsView.vue";
-import MemoryProfileView from "./views/memory/ProfileView.vue";
-import MemoryAgentsView from "./views/memory/AgentsView.vue";
-import MemoryIndexView from "./views/memory/IndexView.vue";
-import MemoryAutoView from "./views/memory/AutoView.vue";
-import MemoryImportView from "./views/memory/ImportView.vue";
-import MemorySyncView from "./views/memory/SyncView.vue";
-import MemoryDetailDrawer from "./components/memory/MemoryDetailDrawer.vue";
-import ConfigMemorySection from "./components/config/ConfigMemorySection.vue";
+// 页面视图按需拆包：v-if 负责首次访问才挂载，异步组件进一步避免启动时解析全部页面代码。
+// Vite 会为每个 import() 生成独立 chunk；浏览器缓存保证再次挂载无需重复下载。
+const asyncView = (loader: () => Promise<unknown>) => defineAsyncComponent(loader as () => Promise<{ default: object }>);
+
+const SkillsDashboardView = asyncView(() => import("./views/skills/SkillsDashboardView.vue"));
+const SkillsLibraryView = asyncView(() => import("./views/skills/SkillsLibraryView.vue"));
+const SkillsDedupView = asyncView(() => import("./views/skills/SkillsDedupView.vue"));
+const SkillsSyncView = asyncView(() => import("./views/skills/SkillsSyncView.vue"));
+const SkillsWebdavView = asyncView(() => import("./views/skills/SkillsWebdavView.vue"));
+const SkillsSkillDetailView = asyncView(() => import("./views/skills/SkillsSkillDetailView.vue"));
+const SyncOverviewView = asyncView(() => import("./views/sync/OverviewView.vue"));
+const SyncDetailView = asyncView(() => import("./views/sync/DetailView.vue"));
+const SyncCostsView = asyncView(() => import("./views/sync/CostsView.vue"));
+const SyncBillingRulesView = asyncView(() => import("./views/sync/BillingRulesView.vue"));
+const SyncLogView = asyncView(() => import("./views/sync/LogView.vue"));
+const ProxyHomeView = asyncView(() => import("./views/proxy/ProxyHomeView.vue"));
+const ProxyKeysView = asyncView(() => import("./views/proxy/ProxyKeysView.vue"));
+const ProxyProvidersView = asyncView(() => import("./views/proxy/ProxyProvidersView.vue"));
+const ProxyAgentsView = asyncView(() => import("./views/proxy/ProxyAgentsView.vue"));
+const ProxyExpiryView = asyncView(() => import("./views/proxy/ProxyExpiryView.vue"));
+const ProxyModelsView = asyncView(() => import("./views/proxy/ProxyModelsView.vue"));
+const ProxyStatsView = asyncView(() => import("./views/proxy/ProxyStatsView.vue"));
+const ProxyPoolSyncView = asyncView(() => import("./views/proxy/ProxyPoolSyncView.vue"));
+const ProxyCcSwitchView = asyncView(() => import("./views/proxy/ProxyCcSwitchView.vue"));
+const ProxyLogView = asyncView(() => import("./views/proxy/ProxyLogView.vue"));
+const ProxyNetworkView = asyncView(() => import("./views/proxy/ProxyNetworkView.vue"));
+const MemoryDashboardView = asyncView(() => import("./views/memory/DashboardView.vue"));
+const MemoryBrowseView = asyncView(() => import("./views/memory/BrowseView.vue"));
+const MemoryProjectsView = asyncView(() => import("./views/memory/ProjectsView.vue"));
+const MemoryProfileView = asyncView(() => import("./views/memory/ProfileView.vue"));
+const MemoryAgentsView = asyncView(() => import("./views/memory/AgentsView.vue"));
+const MemoryIndexView = asyncView(() => import("./views/memory/IndexView.vue"));
+const MemoryAutoView = asyncView(() => import("./views/memory/AutoView.vue"));
+const MemoryImportView = asyncView(() => import("./views/memory/ImportView.vue"));
+const MemorySyncView = asyncView(() => import("./views/memory/SyncView.vue"));
+
 import { useMemoryStore } from "./stores/memory";
 import * as api from "./api/ipc";
 import type { UpdateEvent } from "./types";
@@ -78,7 +75,7 @@ let dispose: (() => void)[] = [];
 
 onMounted(() => {
   app.load();
-  usage.load(); // 用量同步：配置/数据源清单/同步进度轮询（与原应用一致）
+  usage.load(); // 用量同步：加载配置/数据源/进度快照；仅任务运行期间轮询
   usageData.startDayWatcher(); // 跨天换日守护：过 0 点自动把「今日/本月」口径的数据换到新一天
   app.refreshUpdateStatus(); // 启动拉一次更新状态，维护设置齿轮红点
   // 更新事件全局唯一监听：focus-update 打开设置弹窗 · 通用并自增信号（滚动高亮由
@@ -93,6 +90,11 @@ onMounted(() => {
     if (ev.event === "usage-local-synced") {
       // 后台半小时本地统计完成：静默重拉总览数据（在途请求/失败都已在 store 内兜底）
       usageData.refreshQuietly();
+      return;
+    }
+    if (ev.event === "usage-sync-finished") {
+      // 空闲状态不再永久轮询；主进程完成事件拉取最终进度，并触发各用量页既有的 running true→false 刷新。
+      void usage.refreshProgress();
       return;
     }
     // 记忆中枢事件分流：store.onEvent 维护新记忆高亮/索引进度/统计重拉

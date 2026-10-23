@@ -51,24 +51,25 @@ const activeSourceEnabled = computed(() => app.activeSourceEnabled);
 const selectedDev = computed(() => usage.selectedDevice);
 const isFiltered = computed(() => usage.isFiltered);
 const todayHitPct = computed(() => (usage.summary?.todayCacheHitRate || 0) * 100);
+const active = computed(() => framework.activeModule === "sync" && framework.activePage === "overview");
 
 onMounted(() => {
-  if (activeSourceEnabled.value) usage.loadOverview();
+  if (active.value && activeSourceEnabled.value) usage.loadOverview();
   app.refreshProgress();
 });
 
 watch(() => app.totalMode, () => {
-  if (activeSourceEnabled.value) usage.loadOverview();
+  if (active.value && activeSourceEnabled.value) usage.loadOverview();
 });
 watch([() => app.activeSource, activeSourceEnabled], ([source, enabled], [previousSource]) => {
   if (source !== previousSource || !enabled) usage.resetOverview();
-  if (enabled) usage.loadOverview();
+  if (active.value && enabled) usage.loadOverview();
 });
 
 // 同步结束（running 由 true 变 false）后自动刷新总览数据
 let wasRunning = app.sync.running;
 watch(() => app.sync.running, (now) => {
-  if (wasRunning && !now && activeSourceEnabled.value) usage.loadOverview();
+  if (wasRunning && !now && active.value && activeSourceEnabled.value) usage.loadOverview();
   wasRunning = now;
 });
 

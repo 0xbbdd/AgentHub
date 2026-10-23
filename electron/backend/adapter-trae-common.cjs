@@ -30,6 +30,7 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { roamingAppData } = require("./platform-paths.cjs");
 const sqlcipher = require("./sqlcipher.cjs");
 const { normalizeModel, providerName } = require("./adapter-zcode.cjs");
 const { rmTempDir, sweepStale } = require("./temp-util.cjs");
@@ -39,7 +40,7 @@ function homeDir() {
 }
 
 function appDataDir() {
-  return process.env.APPDATA || path.join(homeDir(), "AppData", "Roaming");
+  return roamingAppData();
 }
 
 /** 非负有限数字，非法返回 0（db 层 safeToken 之外的适配器侧兜底） */

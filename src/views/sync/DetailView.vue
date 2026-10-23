@@ -10,6 +10,7 @@
 -->
 <script setup lang="ts">
 import { onMounted, ref, reactive, watch, computed } from "vue";
+import { useAppStore } from "../../stores/app";
 import { useUsageStore } from "../../stores/usage";
 import { useSyncStore } from "../../stores/sync";
 import { formatToken, formatDateTime, formatCost } from "../../composables/useFormat";
@@ -18,6 +19,8 @@ import type { UsageRecord } from "../../types/sync";
 
 const usage = useUsageStore();
 const app = useSyncStore();
+const framework = useAppStore();
+const active = computed(() => framework.activeModule === "sync" && framework.activePage === "detail");
 
 // 费用列/抽屉的货币符号跟随计费显示币种
 const currency = computed(() => app.config.billing?.displayCurrency || "CNY");
@@ -89,6 +92,7 @@ async function loadOptions() {
 }
 
 onMounted(() => {
+  if (!active.value) return;
   load();
   loadOptions();
   // 设备下拉不依赖总览页是否加载过（源未启用/总览失败时也能筛选设备）
@@ -103,19 +107,21 @@ watch(() => app.activeSource, () => {
   filter.device = null;
   filter.status = null;
   page.value = 0;
+  if (!active.value) return;
   load();
   loadOptions();
   usage.refreshDevices();
 });
 
 watch(() => app.totalMode, () => {
+  if (!active.value) return;
   load();
   loadOptions();
 });
 
 // 同步结束后自动刷新列表与下拉选项（页面用 v-show 常驻，需手动触发）
 watch(() => app.sync.running, (now, prev) => {
-  if (prev && !now) {
+  if (prev && !now && active.value) {
     load();
     loadOptions();
     usage.refreshDevices();

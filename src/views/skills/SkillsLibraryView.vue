@@ -10,7 +10,7 @@
 -->
 <script setup lang="ts">
 // 技能仓库 · 中央技能库
-import { ref, computed, onMounted, onUnmounted } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { listSkills, repairMounts, removeSkill, adoptHubSkill, watchStatus, type SkillRow, type WatchStatus } from "../../api/ipc";
 import { useAppStore } from "../../stores/app";
 import { fmtTime } from "../../utils/format";
@@ -143,13 +143,31 @@ function openCard(s: SkillRow) {
   app.openSkillDetail(s.name);
 }
 
+const active = computed(() => app.activeModule === "skills" && app.activePage === "library");
+function stopCountdown() {
+  if (countdownTimer) clearInterval(countdownTimer);
+  countdownTimer = undefined;
+}
+function startCountdown() {
+  stopCountdown();
+  tickCountdown();
+  countdownTimer = setInterval(tickCountdown, 1000);
+}
+
 onMounted(() => {
   load();
-  countdownTimer = setInterval(tickCountdown, 1000);
+  if (active.value) startCountdown();
 });
-onUnmounted(() => {
-  if (countdownTimer) clearInterval(countdownTimer);
+watch(active, (on) => {
+  if (on) {
+    tickCountdown();
+    load(true);
+    startCountdown();
+  } else {
+    stopCountdown();
+  }
 });
+onUnmounted(stopCountdown);
 </script>
 
 <template>

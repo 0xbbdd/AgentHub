@@ -19,6 +19,7 @@
 "use strict";
 const fs = require("node:fs");
 const path = require("node:path");
+const { roamingAppData } = require("./platform-paths.cjs");
 const { normalizeModel } = require("./adapter-zcode.cjs");
 
 const ID = "raccoon";
@@ -40,8 +41,7 @@ function sessionsDir(dir) {
 
 /** 设备标识文件（office-raccoon 桌面客户端目录） */
 function deviceIdentityFile() {
-  const appData = process.env.APPDATA || path.join(homeDir(), "AppData", "Roaming");
-  return path.join(appData, "office-raccoon", "desktop-device-identity.json");
+  return path.join(roamingAppData(), "office-raccoon", "desktop-device-identity.json");
 }
 
 function detect() {

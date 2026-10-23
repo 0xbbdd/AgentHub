@@ -33,6 +33,7 @@
 "use strict";
 const fs = require("node:fs");
 const path = require("node:path");
+const { roamingAppData } = require("./platform-paths.cjs");
 const { DatabaseSync } = require("node:sqlite");
 const { normalizeModel, providerByModel } = require("./adapter-zcode.cjs");
 
@@ -44,7 +45,7 @@ function homeDir() {
 }
 
 function appDataDir() {
-  return process.env.APPDATA || path.join(homeDir(), "AppData", "Roaming");
+  return roamingAppData();
 }
 
 /** 数据根候选：AutoClaw 自测环境变量 > 国内 official > 国际 oversea > 旧版目录 */

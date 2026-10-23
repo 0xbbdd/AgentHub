@@ -685,6 +685,10 @@ let lastUsageNotifiedOk = null;
 function notifyUsageSync(okFlag, message) {
   try {
     refreshTrayMenu(); // 同步结束后刷新托盘「今日用量」
+    // renderer 空闲时不再轮询；完成/失败事件负责唤醒一次最终状态刷新。
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) w.webContents.send("app:event", { event: "usage-sync-finished", ok: !!okFlag });
+    }
     if (!Notification.isSupported()) return;
     const cfg = usageConfig.loadConfig();
     if (okFlag) {

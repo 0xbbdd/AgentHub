@@ -28,6 +28,9 @@ function childOrderOfList(vis: SourceVisibility, groupKey: string): string[] {
   for (const id of def.items) if (!list.includes(id)) list.push(id);
   return list;
 }
+let progressTimer = 0;
+let progressPolling = false;
+
 const defaultConfig: SyncConfig = {
   deviceName: "这台电脑",
   webdav: { endpoint: "", username: "", password: "", root: "/dosage-sync", preset: "feiniu" },
@@ -215,7 +218,9 @@ export const useSyncStore = defineStore("sync", {
       await this.reloadConfig();
       this.loaded = true;
       this.loadSources();
-      this.startProgressPolling();
+      await this.refreshProgress().catch(() => {});
+      // 应用重启时后端任务可能仍在运行；快照发现忙态后恢复进度轮询。
+      if (this.sync.running || this.syncing) this.startProgressPolling();
     },
     /** 来源清单：name 唯一事实源在后端适配器，前端不再硬编码；失败时退回本地配置（仅 id） */
     async loadSources() {
@@ -381,7 +386,8 @@ export const useSyncStore = defineStore("sync", {
           this.sync = { ...this.sync, running: false, stage: "error", stageLabel: "失败", message: r.message };
           return;
         }
-        this.refreshProgress();
+        await this.refreshProgress();
+        this.startProgressPolling();
       } catch (e) {
         const message = e instanceof Error ? e.message : "同步启动失败";
         this.syncing = false;
@@ -397,6 +403,7 @@ export const useSyncStore = defineStore("sync", {
     },
     async cancelSync() {
       await api.cancelSync();
+      this.startProgressPolling();
     },
     async refreshProgress() {
       const progress = await api.getSyncProgress();
@@ -404,18 +411,26 @@ export const useSyncStore = defineStore("sync", {
       // 同步结束（含失败/取消）后关闭「同步中」态
       if (!this.sync.running) this.syncing = false;
     },
-    // 进度轮询：每 600ms 拉取一次；空闲且非同步中时降频为 1500ms，有同步任务时自动恢复
+    // 只在同步运行期间轮询进度；空闲状态由启动快照、完成事件与窗口聚焦校验刷新，
+    // 避免常驻 renderer 每 1.5 秒跨 IPC 唤醒主进程并替换整份响应式状态。
     startProgressPolling() {
+      if (progressPolling) return;
+      progressPolling = true;
       const tick = async () => {
         try {
           await this.refreshProgress();
         } catch {
-          /* 忽略单次轮询错误 */
+          /* 忽略单次轮询错误；运行态继续兜底，下一轮重试 */
         }
-        const busy = this.sync.running || this.syncing;
-        setTimeout(tick, busy ? 600 : 1500);
+        if (!this.sync.running && !this.syncing) {
+          progressPolling = false;
+          progressTimer = 0;
+          return;
+        }
+        progressTimer = window.setTimeout(tick, 600);
       };
-      tick();
+      window.clearTimeout(progressTimer);
+      progressTimer = window.setTimeout(tick, 600);
     },
   },
 });

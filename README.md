@@ -420,8 +420,12 @@ npm install
 npm run dev          # 桌面端开发（Electron + Vite HMR）
 npm run dev:web      # 纯浏览器预览 UI（mock 数据，不启动 Electron）
 npm run build        # 类型检查 + 前端构建
-npm run electron:build   # 打包安装版到 release/
+npm run electron:build:win    # Windows x64 NSIS（在 Windows 构建）
+npm run electron:build:mac    # macOS Universal DMG + ZIP（在 macOS 构建）
+npm run electron:build:linux  # Linux x64 AppImage + DEB（在 Linux 构建）
 ```
+
+> macOS/Linux 安装包可运行完整桌面框架；依赖 Windows 客户端文件、DPAPI、PowerShell 或 `.exe` 的导入/切换功能会在这些平台降级。Trae 系用量读取还需要将对应平台的 SQLCipher 原生库放入 `resources/sqlcipher/<platform>-<arch>/`；缺少时只禁用该数据源。macOS 正式分发前还需配置 Apple Developer 签名与公证。
 
 反代网关后端全链路自测（含假上游端到端：换号 / 自动切换 / 流式双态 / 指纹头）：
 

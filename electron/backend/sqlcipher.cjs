@@ -28,28 +28,48 @@ const TRAE_DB_KEY = "3605f6691095a993f03d5009c918352ef5be31ae31e8f000212b81ff058
 let lib = null;
 let loadError = null;
 
-/** 定位 sqlcipher.dll：打包后 resourcesPath，开发环境项目根 resources/ */
-function dllDir() {
-  const candidates = [];
-  if (process.resourcesPath) candidates.push(path.join(process.resourcesPath, "sqlcipher"));
-  candidates.push(path.join(__dirname, "..", "..", "resources", "sqlcipher"));
-  for (const dir of candidates) {
-    if (fs.existsSync(path.join(dir, "sqlcipher.dll"))) return dir;
+/** 当前平台 SQLCipher 动态库名。原生库按 resources/sqlcipher/<platform>-<arch>/ 存放；
+ *  Windows x64 兼容旧版平铺目录，已有发布资源无需迁移即可继续工作。 */
+function nativeNames() {
+  if (process.platform === "win32") {
+    return { main: "sqlcipher.dll", deps: ["libcrypto-1_1-x64.dll", "libssl-1_1-x64.dll"] };
+  }
+  if (process.platform === "darwin") return { main: "libsqlcipher.dylib", deps: [] };
+  if (process.platform === "linux") return { main: "libsqlcipher.so", deps: [] };
+  return null;
+}
+
+function nativeDir() {
+  const names = nativeNames();
+  if (!names) return null;
+  const roots = [];
+  if (process.resourcesPath) roots.push(path.join(process.resourcesPath, "sqlcipher"));
+  roots.push(path.join(__dirname, "..", "..", "resources", "sqlcipher"));
+  for (const root of roots) {
+    const dirs = [path.join(root, `${process.platform}-${process.arch}`)];
+    // 旧版平铺资源仅是 Windows x64 DLL；其他平台不能误把该目录当成本机原生库。
+    if (process.platform === "win32" && process.arch === "x64") dirs.push(root);
+    for (const dir of dirs) {
+      if (fs.existsSync(path.join(dir, names.main))) return dir;
+    }
   }
   return null;
 }
 
-/** 懒加载 DLL（含 libcrypto/libssl 依赖预载，Windows 加载顺序敏感） */
+/** 懒加载平台原生库。依赖库只在确实随包提供时预载；macOS/Linux 可依赖系统 rpath。 */
 function ensureLib() {
   if (lib) return lib;
   if (loadError) throw loadError;
   try {
-    const dir = dllDir();
-    if (!dir) throw new Error("未找到 sqlcipher.dll（resources/sqlcipher 缺失）");
-    // 先加载 OpenSSL 依赖，再加载 sqlcipher 本体
-    koffi.load(path.join(dir, "libcrypto-1_1-x64.dll"));
-    koffi.load(path.join(dir, "libssl-1_1-x64.dll"));
-    const dll = koffi.load(path.join(dir, "sqlcipher.dll"));
+    const names = nativeNames();
+    if (!names) throw new Error(`当前平台不支持 SQLCipher：${process.platform}-${process.arch}`);
+    const dir = nativeDir();
+    if (!dir) throw new Error(`缺少 SQLCipher 原生库：resources/sqlcipher/${process.platform}-${process.arch}/${names.main}`);
+    for (const dep of names.deps) {
+      const file = path.join(dir, dep);
+      if (fs.existsSync(file)) koffi.load(file);
+    }
+    const dll = koffi.load(path.join(dir, names.main));
 
     // 一次性声明全部需要的 C 函数（koffi.func(lib, name, retType, [argTypes])）
     lib = {

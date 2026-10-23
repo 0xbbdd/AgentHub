@@ -107,13 +107,13 @@ console.log("\n④ 页面可达（页签注册 + 挂载，缺一处就是进不�
   ok(pm[1].includes('id: "providers", name: "自定义提供商"'), "页签有中文名（没 name 会渲染成空按钮）", pm && pm[1]);
 
   const app = read("src/App.vue");
-  ok(/import\s+ProxyProvidersView\s+from\s+"\.\/views\/proxy\/ProxyProvidersView\.vue"/.test(app), "App.vue 引了该视图");
+  ok(/(?:import\s+ProxyProvidersView\s+from\s+|const\s+ProxyProvidersView\s*=\s*asyncView\(\(\)\s*=>\s*import\()["']\.\/views\/proxy\/ProxyProvidersView\.vue["']/.test(app), "App.vue 同步或异步引了该视图");
   const block = app.match(/<ProxyProvidersView[^>]*\/>/);
   ok(!!block, "App.vue 里有该视图的挂载块", block && block[0]);
   const b = block ? block[0] : "";
   ok(
-    /v-if="seen\('proxy', 'providers'\)"/.test(b) && /v-show="on\('proxy', 'providers'\)"/.test(b) && /'page-anim': on\('proxy', 'providers'\)/.test(b),
-    "挂载块三处页签名一致（v-if 拼错＝永不挂载，v-show 拼错＝永远不显示）",
+    /v-if="seen\('proxy', 'providers'\)"/.test(b) && /v-show="on\('proxy', 'providers'\)"/.test(b),
+    "挂载块两处页签名一致（v-if 拼错＝永不挂载，v-show 拼错＝永远不显示）",
     b,
   );
 }

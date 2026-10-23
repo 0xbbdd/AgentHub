@@ -22,6 +22,7 @@ import type { AggregateRow } from "../../types/sync";
 const app = useSyncStore();
 const framework = useAppStore();
 const usage = useUsageStore();
+const active = computed(() => framework.activeModule === "sync" && framework.activePage === "costs");
 
 // ===== 汇总（summary 已含费用字段） =====
 const summary = computed(() => usage.summary);
@@ -105,12 +106,12 @@ function loadAll() {
   }
 }
 
-onMounted(loadAll);
-watch(() => app.activeSource, loadAll);
-watch(sourceEnabled, loadAll);
+onMounted(() => { if (active.value) loadAll(); });
+watch(() => app.activeSource, () => { if (active.value) loadAll(); });
+watch(sourceEnabled, () => { if (active.value) loadAll(); });
 let wasRunning = app.sync.running;
 watch(() => app.sync.running, (now) => {
-  if (wasRunning && !now) loadAll();
+  if (wasRunning && !now && active.value) loadAll();
   wasRunning = now;
 });
 // 在计费规则页改价/导入后切回本页时刷新（视图 v-show 常驻，切页不触发 onMounted）

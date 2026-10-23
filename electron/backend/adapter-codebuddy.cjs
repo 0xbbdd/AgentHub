@@ -21,6 +21,7 @@
 "use strict";
 const fs = require("node:fs");
 const path = require("node:path");
+const { localAppData } = require("./platform-paths.cjs");
 const { normalizeModel, providerName } = require("./adapter-zcode.cjs");
 
 const ID = "codebuddy";
@@ -38,9 +39,9 @@ function candidateRoots() {
   const out = [];
   const env = String(process.env.CODEBUDDY_DATA_HOME || "").trim();
   if (env) out.push(path.resolve(env));
-  const localAppData = process.env.LOCALAPPDATA || path.join(homeDir(), "AppData", "Local");
-  out.push(path.join(localAppData, "CodeBuddyExtension"));
-  out.push(path.join(localAppData, "CodeBuddyExtension CN"));
+  const root = localAppData();
+  out.push(path.join(root, "CodeBuddyExtension"));
+  out.push(path.join(root, "CodeBuddyExtension CN"));
   // 去重保序
   return [...new Set(out)];
 }

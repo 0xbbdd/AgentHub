@@ -15,6 +15,7 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { roamingAppData } = require("../../platform-paths.cjs");
 const qoderAuth = require("../qoderAuth.cjs");
 const { jwtDecode } = require("../util.cjs");
 
@@ -26,7 +27,7 @@ const PRODUCTS = {
 };
 
 function roamingDir() {
-  return process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
+  return roamingAppData();
 }
 
 function desktopPaths(product) {
