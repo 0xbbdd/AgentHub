@@ -138,7 +138,7 @@ const windowState = require("./backend/window-state.cjs");
 // 顶层 require 链完成：此后的未捕获异常可以降级记录，不再按「启动失败」弹窗退出
 bootPhase = "ready";
 
-const DEV_URL = process.env.VITE_DEV_SERVER_URL || "http://localhost:1420";
+const DEV_URL = process.env.VITE_DEV_SERVER_URL || "http://localhost:5173";
 
 // 目录名用 productName 大小写（userData = %APPDATA%\AgentHub），与安装名/任务栏一致
 app.setName("AgentHub");
@@ -725,7 +725,7 @@ watch.setOnEvent(({ kind, summary, count }) => {
 // ===== 单实例锁 =====
 // 开发旁路：AGENTHUB_ALLOW_MULTI=1 时跳过单实例锁，并隔离 userData，
 // 使 `npm run dev` 能在安装版 AgentHub 仍在运行时并存（否则新实例拿不到锁会干净退出，
-// concurrently -k 随即把 vite 一起关掉——表现为"npm run dev 一闪而过"）。
+// 开发启动器随即把 Vite 一起关掉——表现为"npm run dev 一闪而过"）。
 // 仅用于本地开发调试，生产不设该变量，行为与原来完全一致。
 const ALLOW_MULTI = process.env.AGENTHUB_ALLOW_MULTI === "1";
 if (ALLOW_MULTI) {

@@ -13,7 +13,8 @@ import vue from "@vitejs/plugin-vue";
 import Components from "unplugin-vue-components/vite";
 import { ElementPlusResolver } from "unplugin-vue-components/resolvers";
 
-// Electron 前端配置：dev 端口 1420（与 electron/main.cjs 的加载地址一致）
+// Electron 开发由 tools/dev.cjs 自动分配空闲端口，并通过 VITE_DEV_SERVER_URL 传给主进程。
+// 浏览器预览使用 Vite 默认端口 5173，端口被占用时自动顺延。
 // base 用相对路径，便于 Electron 通过 file:// 加载打包后的 index.html
 export default defineConfig({
   plugins: [
@@ -34,8 +35,8 @@ export default defineConfig({
   base: "./",
   clearScreen: false,
   server: {
-    port: 1420,
-    strictPort: true,
+    port: 5173,
+    strictPort: false,
     // tmp/ 下会保存 Electron/CDP 使用的临时 Chrome 配置，其中包含浏览器扩展。
     // 这些文件不是应用源码，避免 watcher 扫描扩展产生无效重载。
     watch: {

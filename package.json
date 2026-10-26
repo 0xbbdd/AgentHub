@@ -6,7 +6,7 @@
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
-    "dev": "concurrently -k \"vite\" \"wait-on tcp:1420 && electron .\"",
+    "dev": "node tools/dev.cjs",
     "dev:web": "vite",
     "web": "vite --open",
     "build": "npm run check:sfc && npm run check:ipc && vue-tsc --noEmit && vite build",
