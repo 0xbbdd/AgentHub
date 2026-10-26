@@ -11,7 +11,7 @@
 /**
  * AgentHub · 记忆中枢（Memory Hub）
  * Copyright (c) 2026 沐晖 (HUIdada1)
- * https://github.com/HUIdada1/AgentHub
+ * https://github.com/0xbbdd/AgentHub
  * 本文件为开源项目 AgentHub 的组成部分，作者保留署名权；依据开源协议使用时禁止删除本声明。
  */
 
@@ -22,6 +22,7 @@
 const path = require("path");
 const os = require("os");
 const { existsSync } = require("fs");
+const { roamingAppData } = require("../platform-paths.cjs");
 
 const HOME = os.homedir();
 const SERVER_KEY = "agenthub-memory";
@@ -89,8 +90,8 @@ const ADAPTERS = [
     id: "trae-solo",
     name: "Trae Solo",
     configCandidates: [
-      path.join(process.env.APPDATA || path.join(HOME, "AppData", "Roaming"), "TRAE SOLO", "User", "globalStorage", "saoudrizwan.claude-dev", "settings", "cline_mcp_settings.json"),
-      path.join(process.env.APPDATA || path.join(HOME, "AppData", "Roaming"), "TRAE SOLO CN", "User", "globalStorage", "saoudrizwan.claude-dev", "settings", "cline_mcp_settings.json"),
+      path.join(roamingAppData(), "TRAE SOLO", "User", "globalStorage", "saoudrizwan.claude-dev", "settings", "cline_mcp_settings.json"),
+      path.join(roamingAppData(), "TRAE SOLO CN", "User", "globalStorage", "saoudrizwan.claude-dev", "settings", "cline_mcp_settings.json"),
       path.join(HOME, "Library", "Application Support", "TRAE SOLO", "User", "globalStorage", "saoudrizwan.claude-dev", "settings", "cline_mcp_settings.json"),
       path.join(HOME, ".config", "TRAE SOLO", "User", "globalStorage", "saoudrizwan.claude-dev", "settings", "cline_mcp_settings.json"),
       path.join(HOME, ".trae-solo", "mcp.json"),

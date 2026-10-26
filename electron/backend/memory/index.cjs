@@ -11,7 +11,7 @@
 /**
  * AgentHub · 记忆中枢（Memory Hub）
  * Copyright (c) 2026 沐晖 (HUIdada1)
- * https://github.com/HUIdada1/AgentHub
+ * https://github.com/0xbbdd/AgentHub
  * 本文件为开源项目 AgentHub 的组成部分，作者保留署名权；依据开源协议使用时禁止删除本声明。
  */
 
@@ -26,6 +26,7 @@ let electron = null;
 try { electron = require("electron"); } catch { /* 纯 Node 自测环境 */ }
 
 const configMod = require("../config.cjs");
+const { roamingAppData, localAppData } = require("../platform-paths.cjs");
 const { MemoryConfig, defaultRoot, expandHome } = require("./config.cjs");
 const { MemoryService } = require("./service.cjs");
 const { isIndexWatchTarget } = require("./store.cjs");
@@ -151,7 +152,12 @@ function gatewaySnapshot() {
 function expandPath(p) {
   let out = String(p || "");
   if (!out) return out;
-  out = out.replace(/%([^%]+)%/g, (_m, name) => process.env[name] || _m);
+  out = out.replace(/%([^%]+)%/g, (_m, name) => {
+    const upper = name.toUpperCase();
+    if (upper === "APPDATA") return roamingAppData();
+    if (upper === "LOCALAPPDATA") return localAppData();
+    return process.env[name] || _m;
+  });
   return expandHome(out);
 }
 

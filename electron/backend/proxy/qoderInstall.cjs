@@ -28,6 +28,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
+const { localAppData: defaultLocalAppData } = require("../platform-paths.cjs");
 
 /** 产品 → exeLabel（安装目录名，与 qoderAuth.PRODUCTS 共用同一份事实源） */
 const EXE_LABELS = { qoder: "Qoder CN", qoder_intl: "Qoder" };
@@ -37,7 +38,7 @@ const ENV_KEYS = { qoder: "AGENTHUB_QODER_RESOURCES", qoder_intl: "AGENTHUB_QODE
 const cache = new Map(); // product -> resources 绝对路径
 
 function localAppData() {
-  return process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
+  return defaultLocalAppData();
 }
 
 /** 解析启动器 ini（UTF-16LE（带 BOM）或 UTF-8 均可读）→ { installDir, appExecutable } */

@@ -44,6 +44,7 @@ const raccoonClient = require("./raccoonClient.cjs");
 const zcodeSwitch = require("./zcodeSwitch.cjs");
 const zcodeLocal = require("./zcodeLocal.cjs");
 const wbClient = require("./wbClient.cjs");
+const { roamingAppData } = require("../platform-paths.cjs");
 const wbCrypto = require("./wbCrypto.cjs");
 
 /** 渠道 → 本机登录文件名（两区共用一个 auth 目录，只能靠文件名区分） */
@@ -85,9 +86,8 @@ function getRaccoonDeviceIdentity(acc) {
  *  为每个账号注入其专属的独立设备 ID，使服务端将不同账号识别为不同 PC 客户端，彻底杜绝冲突吊销。
  */
 function writeRaccoonDeviceIdentity(deviceId) {
-  const appData = process.env.APPDATA;
-  if (!appData || !deviceId) return false;
-  const userDataDir = path.join(appData, "office-raccoon");
+  if (!deviceId) return false;
+  const userDataDir = path.join(roamingAppData(), "office-raccoon");
   try { fs.mkdirSync(userDataDir, { recursive: true }); } catch {}
   const targetFile = path.join(userDataDir, "desktop-device-identity.json");
   const payload = {
@@ -113,9 +113,7 @@ function writeRaccoonDeviceIdentity(deviceId) {
  * 若不清除，客户端重启后网络请求会混杂新 Token 与旧账号 Cookie / 连接会话，触发服务端防串号拦截。
  */
 function cleanRaccoonRendererState() {
-  const appData = process.env.APPDATA;
-  if (!appData) return;
-  const userDataDir = path.join(appData, "office-raccoon");
+  const userDataDir = path.join(roamingAppData(), "office-raccoon");
   if (!fs.existsSync(userDataDir)) return;
 
   // 1. 清理 Cookies

@@ -15,7 +15,7 @@ import type {
   ReportRow, ToolRow, TrashRow, UpdateStatus, ProbeRow, RemoveToolPlan,
   WebDavStatus, RemoteDevice, WebDavLog, HubExtraRow, WatchStatus,
   ProxyGatewayStatus, ProxyKeyRow, ProxyChannelView, ProxyAccount, ProxyStatsOverview, ProxyStatsDetail,
-  ProxyStatsDim, ProxyStatsAggRow, ProxyStatsKeyRow,
+  ProxyStatsAggRow, ProxyStatsKeyRow,
   ProxyUsageRow, ProxyModel, ProxyScanCandidate, ProxyRuleFile, ProxyRoute, ProxyChannelId, ProxyPoolStrategy, ProxyCostTier,
   ProxyCheckinRow, CcSwitchStatus, CcSwitchRegisterResult, CcSwitchAppType, ZcodeDeviceStatusResult, ZcodeClaimModeResult,
   ProxyProvider, ProxyProviderKind, ProxyProviderModel, ProxyProviderTestResult,
@@ -41,7 +41,6 @@ export type {
   MemoryToolRow, MemoryEvent,
 } from "../types";
 
-import { mock } from "./mock";
 import { denyReason, isWebTransport } from "./caps";
 import { subscribeWebEvents } from "./events";
 import { remoteActive } from "./remote";
@@ -133,6 +132,7 @@ async function call<T>(cmd: string, args?: Record<string, unknown>, timeoutMs: n
     return unwrapResult<T>(cmd, res);
   }
   // 浏览器回退：直接走 mock
+  const { mock } = await import("./mock");
   return (await mock.invoke(cmd, args)) as T;
 }
 
@@ -145,8 +145,6 @@ export const saveConfig = (cfg: AppConfig) =>
 export const getAppVersion = () => call<string>("get_app_version");
 export const getDataDir = () => call<string>("get_data_dir");
 export const openDataDir = () => call<void>("open_data_dir");
-export const getHubDir = () => call<string>("get_hub_dir");
-export const openHubDir = () => call<void>("open_hub_dir");
 // 等用户操作原生目录选择框，时长不可控，关掉看门狗
 export const browseDir = () => call<{ ok: boolean; canceled?: boolean; path: string | null }>("browse_dir", {}, 0);
 
@@ -168,10 +166,6 @@ export function onUpdateEvent(cb: (payload: unknown) => void): (() => void) | un
 }
 
 // ===== 技能仓库：WebDAV 跨设备同步 =====
-// webdavTest 表单直传 {endpoint, username, password, root}（统一服务器 + 根目录，密码可为掩码）；
-// 兼容旧调用：传完整 AppConfig 时取 webdav 段
-export const webdavTest = (config?: AppConfig | { endpoint: string; username: string; password: string; root: string }) =>
-  call<{ ok: boolean; message: string; latencyMs?: number }>("webdav_test", config ? { config: JSON.parse(JSON.stringify(config)) } : {});
 // 整目录 WebDAV 传输：长任务，主进程有进度事件 + webdavCancel 托底
 export const webdavSync = () => call<{ ok: boolean; message?: string }>("webdav_sync", {}, 0);
 export const webdavCancel = () => call<{ ok: boolean }>("webdav_cancel");
@@ -334,9 +328,6 @@ export const proxyAccountCoolOff = (id: string) =>
 // 单账号上游刷新：主进程 httpJson 60s 硬上限，超过 45s 默认看门狗，豁免
 export const proxyAccountRefresh = (id: string) =>
   call<{ ok?: boolean; id?: string; credits?: number; expiresAt?: number; message?: string }>("proxy_account_refresh", { id }, 0);
-export const proxyCreditsRefresh = () =>
-  // 逐账号串行刷新，账号多必然超 45s
-  call<{ ok: boolean; total?: number; failed?: number; message?: string }>("proxy_credits_refresh", {}, 0);
 /** 只刷新指定渠道的号池额度（号池页右上角「刷新当前渠道」） */
 export const proxyCreditsRefreshChannel = (channel: ProxyChannelId) =>
   call<{ ok: boolean; total?: number; failed?: number; results?: { ok: boolean; message?: string; unavailable?: boolean; credits?: number }[] }>(
@@ -481,8 +472,6 @@ export const proxyZcodeSolveCaptcha = (accountId: string) =>
 /** 区间化统计总览：from/to 为毫秒闭区间，granularity 缺省按跨度自动决策（≤2天→小时） */
 export const proxyStatsOverview = (opts?: { from?: number; to?: number; granularity?: "auto" | "hour" | "day" }) =>
   call<ProxyStatsOverview>("proxy_stats_overview", opts as Record<string, unknown>);
-export const proxyStatsTop = (dim: ProxyStatsDim, days?: number) =>
-  call<{ name: string; req: number; tokens: number }[]>("proxy_stats_top", { dim, days });
 /** 请求明细：key/model 为模糊搜索，status 走分桶（ok/4xx/5xx/other） */
 export const proxyStatsDetail = (opts: {
   from?: number;

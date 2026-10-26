@@ -11,7 +11,7 @@
 /**
  * AgentHub · 记忆中枢（Memory Hub）
  * Copyright (c) 2026 沐晖 (HUIdada1)
- * https://github.com/HUIdada1/AgentHub
+ * https://github.com/0xbbdd/AgentHub
  * 本文件为开源项目 AgentHub 的组成部分，作者保留署名权；依据开源协议使用时禁止删除本声明。
  */
 
@@ -25,6 +25,7 @@ const { spawn } = require("child_process");
 
 const agents = require("./agents.cjs");
 const inject = require("./inject.cjs");
+const { localAppData } = require("../platform-paths.cjs");
 
 // MCP 桥物理路径候选（修正清单 B1：args 指向物理 JS，走 ELECTRON_RUN_AS_NODE）
 function bridgeCandidates(appPath, resourcesPath) {
@@ -44,15 +45,16 @@ function resolveBridge(appPath, resourcesPath) {
 }
 
 function resolveHostExe(appPath) {
-  if (appPath && fs.existsSync(appPath) && /\.exe$/i.test(appPath)) return appPath;
-  // 开发环境（electron.exe 起 dev）：退回主程序 exe 的常见安装位置探测
-  const candidates = [
-    appPath,
-    path.join(process.env.LOCALAPPDATA || "", "Programs", "AgentHub", "AgentHub.exe"),
-    path.join(process.env.ProgramFiles || "C:\\Program Files", "AgentHub", "AgentHub.exe"),
-  ].filter(Boolean);
+  // process.execPath 在开发态是 electron，在打包态是 AgentHub 自身；macOS/Linux 没有 .exe 后缀。
+  const candidates = [appPath, process.execPath].filter(Boolean);
+  if (process.platform === "win32") {
+    candidates.push(
+      path.join(localAppData(), "Programs", "AgentHub", "AgentHub.exe"),
+      path.join(process.env.ProgramFiles || "C:\\Program Files", "AgentHub", "AgentHub.exe"),
+    );
+  }
   for (const c of candidates) if (fs.existsSync(c)) return c;
-  return appPath || null;
+  return appPath || process.execPath || null;
 }
 
 // 注入预览/实际写入用的命令行（含路径可达性预检结果）。

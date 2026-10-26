@@ -18,18 +18,18 @@ function homeDir() {
   return os.homedir();
 }
 
-function roamingAppData() {
+function roamingAppData(home = homeDir()) {
   if (process.env.APPDATA) return process.env.APPDATA;
-  if (process.platform === "darwin") return path.join(homeDir(), "Library", "Application Support");
-  if (process.platform === "linux") return process.env.XDG_CONFIG_HOME || path.join(homeDir(), ".config");
-  return path.join(homeDir(), "AppData", "Roaming");
+  if (process.platform === "darwin") return path.join(home, "Library", "Application Support");
+  if (process.platform === "linux") return process.env.XDG_CONFIG_HOME || path.join(home, ".config");
+  return path.join(home, "AppData", "Roaming");
 }
 
-function localAppData() {
+function localAppData(home = homeDir()) {
   if (process.env.LOCALAPPDATA) return process.env.LOCALAPPDATA;
-  if (process.platform === "darwin") return path.join(homeDir(), "Library", "Application Support");
-  if (process.platform === "linux") return process.env.XDG_DATA_HOME || path.join(homeDir(), ".local", "share");
-  return path.join(homeDir(), "AppData", "Local");
+  if (process.platform === "darwin") return path.join(home, "Library", "Application Support");
+  if (process.platform === "linux") return process.env.XDG_DATA_HOME || path.join(home, ".local", "share");
+  return path.join(home, "AppData", "Local");
 }
 
 module.exports = { homeDir, roamingAppData, localAppData };

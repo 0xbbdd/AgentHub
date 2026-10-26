@@ -999,7 +999,6 @@ function register(ipcMain) {
     return r.ok ? ok({ releasedModels: r.releasedModels }) : fail(r.message);
   }));
   ipcMain.handle("proxy_account_refresh", handle(({ id }) => credits.refreshAccount(id)));
-  ipcMain.handle("proxy_credits_refresh", handle(() => credits.refreshAll()));
   // 号池页右上角「刷新当前渠道」：只刷一个编译器的号池额度
   ipcMain.handle("proxy_credits_refresh_channel", handle(({ channel }) => {
     if (!channel) return fail("缺少渠道参数");
@@ -1396,7 +1395,6 @@ function register(ipcMain) {
   // 区间化总览：一次回 KPI / 序列 / 四维排行 / 各 Key / 状态分布 / Token 构成
   ipcMain.handle("proxy_stats_overview", handle(({ from, to, granularity }) =>
     store.statsOverview({ from, to, granularity })));
-  ipcMain.handle("proxy_stats_top", handle(({ dim, days }) => store.statsTop(dim, days)));
   ipcMain.handle("proxy_stats_detail", handle(({ from, to, page, pageSize, channel, keyId, key, model, status }) =>
     store.statsDetail({ from, to, page, pageSize, channel, keyId, key, model, status })));
   // 手动清理流水：days 缺省取设置里的保留期（实时读，改完设置不必重启），all=true 清空整表。

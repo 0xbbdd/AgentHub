@@ -414,14 +414,14 @@ Trae 的本地登录态是 ByteCrypto 加密信封，绑定了设备密钥，无
 ## 开发与自测
 
 ```bash
-# 环境：Node >= 18
+# 环境：Node >= 22.5（记忆中枢使用 node:sqlite）
 npm install
 
 npm run dev          # 桌面端开发（Electron + Vite HMR）
 npm run dev:web      # 纯浏览器预览 UI（mock 数据，不启动 Electron）
 npm run build        # 类型检查 + 前端构建
 npm run electron:build:win    # Windows x64 NSIS（在 Windows 构建）
-npm run electron:build:mac    # macOS Universal DMG + ZIP（在 macOS 构建）
+npm run electron:build:mac    # macOS 宿主架构 DMG + ZIP（在 macOS 构建；Intel/Apple Silicon 分别构建）
 npm run electron:build:linux  # Linux x64 AppImage + DEB（在 Linux 构建）
 ```
 

@@ -495,8 +495,8 @@ async function T(name, fn) {
 
   // ===== T27 LIVE Cookie 已随 OAuth 入池（存在性；不依赖 DPAPI） =====
   // ⚠ RUN_AS_NODE 下 safeStorage(DPAPI) 不可用 → decryptSecret 对 enc:v1: 返回 ""，
-  //   故这里只断言「meta.msCookie 已写入且非空」（密文也算），解密后的可用性验证
-  //   放在 full-Electron 探针（tools/probe-modelscope-cookie.cjs）里做。
+  //   故这里只断言「meta.msCookie 已写入且非空」（密文也算），解密后的可用性需在
+  //   真实 Electron 会话中验证。
   await T("T27 LIVE OAuth 账号已落 Cookie（meta.msCookie 非空）", async () => {
     if (!LIVE) { console.log("      (跳过：需 LIVE)"); return; }
     const store = require(path.join(__dirname, "..", "electron", "backend", "proxy", "store.cjs"));

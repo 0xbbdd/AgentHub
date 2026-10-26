@@ -18,7 +18,7 @@
 // 防止长期累积（文本日志最坏 ~KB/天，上限仅兜底）。
 const fs = require("node:fs");
 const path = require("node:path");
-const os = require("node:os");
+const { roamingAppData } = require("./platform-paths.cjs");
 const MAX_BYTES = 1024 * 1024;
 
 function logDir() {
@@ -30,7 +30,7 @@ function logDir() {
     const app = electron && (electron.app || (electron.default && electron.default.app));
     if (app && typeof app.getPath === "function") dir = app.getPath("userData");
   } catch { /* ELECTRON_RUN_AS_NODE / 纯 Node 下无 electron 模块 */ }
-  if (!dir) dir = path.join(process.env.APPDATA || os.homedir(), "AgentHub");
+  if (!dir) dir = path.join(roamingAppData(), "AgentHub");
   return path.join(dir, "logs");
 }
 

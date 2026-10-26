@@ -32,6 +32,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { execFileSync } = require("node:child_process");
 const qoderInstall = require("./qoderInstall.cjs");
+const { roamingAppData } = require("../platform-paths.cjs");
 
 /** 双渠道目录定义：appId 目录名 + 用户主目录 + 产品 id */
 const PRODUCTS = {
@@ -50,7 +51,7 @@ const PRODUCTS = {
 };
 
 function roamingDir() {
-  return process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
+  return roamingAppData();
 }
 function homeDir() {
   return process.env.USERPROFILE || os.homedir();

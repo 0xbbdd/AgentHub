@@ -403,14 +403,14 @@ Off by default. Once enabled it runs every channel at the configured time (09:00
 ## Development & self-test
 
 ```bash
-# Requires Node >= 18
+# Requires Node >= 22.5 (Memory Hub uses node:sqlite)
 npm install
 
 npm run dev          # desktop development (Electron + Vite HMR)
 npm run dev:web      # browser-only UI preview (mock data, no Electron)
 npm run build        # type check + frontend build
 npm run electron:build:win    # Windows x64 NSIS (build on Windows)
-npm run electron:build:mac    # macOS Universal DMG + ZIP (build on macOS)
+npm run electron:build:mac    # macOS host-architecture DMG + ZIP (build on macOS; build Intel and Apple Silicon separately)
 npm run electron:build:linux  # Linux x64 AppImage + DEB (build on Linux)
 ```
 

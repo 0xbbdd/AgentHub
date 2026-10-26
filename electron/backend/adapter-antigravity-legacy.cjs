@@ -63,6 +63,7 @@ const net = require("node:net");
 const { spawn } = require("node:child_process");
 const crypto = require("node:crypto");
 const { rmTempDir, sweepStale } = require("./temp-util.cjs");
+const { roamingAppData, localAppData } = require("./platform-paths.cjs");
 
 const CONV_DIR_NAME = "conversations";
 const LEGACY_SOURCE_ID = "antigravity-legacy";
@@ -104,8 +105,8 @@ function expandExternal(p) {
   const s = String(p || "").trim();
   if (!s) return "";
   const home = homeDir();
-  const appdata = process.env.APPDATA || path.join(home, "AppData", "Roaming");
-  const localAppdata = process.env.LOCALAPPDATA || path.join(home, "AppData", "Local");
+  const appdata = roamingAppData(home);
+  const localAppdata = localAppData(home);
   const upper = s.toUpperCase();
   if (upper.startsWith("%APPDATA%")) return path.join(appdata, s.slice(9));
   if (upper.startsWith("%LOCALAPPDATA%")) return path.join(localAppdata, s.slice(14));

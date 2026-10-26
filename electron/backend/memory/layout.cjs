@@ -11,7 +11,7 @@
 /**
  * AgentHub · 记忆中枢（Memory Hub）
  * Copyright (c) 2026 沐晖 (HUIdada1)
- * https://github.com/HUIdada1/AgentHub
+ * https://github.com/0xbbdd/AgentHub
  * 本文件为开源项目 AgentHub 的组成部分，作者保留署名权；依据开源协议使用时禁止删除本声明。
  */
 
@@ -271,7 +271,7 @@ function repoNameFromSlug(slug) {
 
 /**
  * 显示名质量分：越高越像「人看的名字」。
- * 0 空 / 1 与 slug 相同（机器串）/ 2 含 "/"（URL 形态，如 HUIdada1/AgentDrove）/ 3 真名。
+ * 0 空 / 1 与 slug 相同（机器串）/ 2 含 "/"（URL 形态，如 0xbbdd/AgentDrove）/ 3 真名。
  */
 function scoreDisplayName(name, slug) {
   const n = String(name || "").trim();
@@ -286,7 +286,7 @@ function scoreDisplayName(name, slug) {
  *
  * 为什么不能直接用调用方传入的串：同一个项目的写入方五花八门——MCP 传 slug、
  * 导入传目录名、老版本传项目名，无条件覆盖会让卡片名在「真名 ↔ 机器串」之间来回抖动
- * （实测 AgentHub 项目的名字被写成 huidada1--agenthub）。用户手动改的名（nameManual）永远优先。
+ * （实测 AgentHub 项目的名字被写成 0xbbdd--agenthub）。用户手动改的名（nameManual）永远优先。
  */
 function resolveWriteName(entry, candidate) {
   const cur = entry ? String(entry.name || "").trim() : "";
@@ -312,7 +312,7 @@ function pickBestName(candidates, slug) {
  * 强证据：两张卡持有同一个远程（归一化后相等）⇒ 同一仓库。
  * 弱证据（仅对**没有远程**的条目启用）：候选名（name / slug 反解 repo / 本地路径目录名）
  * 与某个「有远程条目」的仓库名精确相等 ⇒ 归入该组。用于救「早期显式项目名写入不探测 Git」
- * 的卡片（实测 AgentHub 项目就因此裂成 `huidada1--agenthub` 与无远程的 `agenthub` 两张卡）。
+ * 的卡片（实测 AgentHub 项目就因此裂成 `0xbbdd--agenthub` 与无远程的 `agenthub` 两张卡）。
  * 刻意不做模糊相似度：模糊匹配是 classify 建议队列的活（只给人看、不落台账），
  * 自动改名必须可预测、可复核。
  * @returns {Array<Array<object>>} 每个元素是一组台账条目（单条自成一组的也返回）
@@ -660,7 +660,7 @@ class ProjectRegistry {
    *
    * 为什么需要：同一仓库会因不同写入路径裂成多张卡——显式项目名写入（slug=项目名）与
    * Git 归类（slug=owner--repo）各建一张；早期显式写入不探测 Git，于是卡片既没远程、
-   * 名字又是 slug 机器串（界面上的「huidada1--agenthub」就是这么来的）。
+   * 名字又是 slug 机器串（界面上的「0xbbdd--agenthub」就是这么来的）。
    * 归组证据与命名规则见 groupEntries / pickGroupName；**只统一显示名与元数据，
    * 不合并卡片、不搬动任何记忆文件**：slug 是记忆归属的稳定键，物理合并（projectMerge）
    * 会搬文件、改索引，风险远大于收益。幂等：无实际变化不落盘。

@@ -15,8 +15,6 @@ import type {
   NewApiPricingStatus, NewApiPreview, NewApiPreviewItem,
   DataDirInfo, SetDataDirResult, BackupInfo,
 } from "../types/sync";
-import { mock } from "./sync-mock";
-
 type InvokeFn = (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
 
 /** Electron preload 桥接（window.agenthub.invoke / onUpdateEvent） */
@@ -38,14 +36,13 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
     return (await window.agenthub!.invoke(cmd, args)) as T;
   }
   // 浏览器回退：直接走 mock
+  const { mock } = await import("./sync-mock");
   return (await mock.invoke(cmd, args)) as T;
 }
 
 // ===== 配置 =====
 export const loadConfig = () => call<SyncConfig>("sync_load_config");
 export const saveConfig = (cfg: SyncConfig) => call<{ ok: boolean; message: string }>("sync_save_config", { config: JSON.parse(JSON.stringify(cfg)) });
-export const testWebdav = (cfg: SyncConfig["webdav"]) => call<{ ok: boolean; message: string; latencyMs?: number }>("test_webdav", { config: { ...cfg } });
-
 // ===== 数据源 =====
 export const listSources = () => call<SourceInfo[]>("list_sources");
 export const detectSource = (source: string) => call<{ ok: boolean; path: string | null; deviceId: string | null }>("detect_source", { source });
@@ -143,37 +140,4 @@ export const getDataDirInfo = () => call<DataDirInfo>("get_data_dir_info");
 export const browseDataDir = () => call<{ ok: boolean; canceled?: boolean; path: string | null }>("browse_data_dir");
 export const setDataDir = (path: string, migrate: boolean) => call<SetDataDirResult>("set_data_dir", { path, migrate });
 export const resetDataDir = () => call<SetDataDirResult>("reset_data_dir");
-export const getAppVersion = () => call<string>("get_app_version");
-export const getIsPortable = () => call<boolean>("get_is_portable");
 export const resetLocalCache = () => call<{ ok: boolean; message: string }>("reset_local_cache");
-export const setAutostart = (enabled: boolean) => call<void>("set_autostart", { enabled });
-
-// ===== 软件更新（安装版应用内更新；便携版仅提示手动更新） =====
-
-/** 更新状态快照（主进程 updater.cjs 维护，经 invoke 拉取 + update:event 事件推送） */
-export interface UpdateStatus {
-  status: "idle" | "checking" | "up-to-date" | "available" | "downloading" | "downloaded" | "error";
-  isPortable: boolean;
-  currentVersion: string;
-  latestVersion: string;
-  percent: number; // 下载进度 0~100
-  notes: string; // 更新日志（GitHub Release 说明）
-  message: string; // 附加说明（便携版提示 / 错误信息）
-}
-
-/** 主进程推送的更新事件：event="state" 时其余字段为完整状态；event="focus-update" 为通知点击跳转信号 */
-export interface UpdateEvent extends UpdateStatus {
-  event: "state" | "focus-update";
-}
-
-export const getUpdateStatus = () => call<UpdateStatus>("get_update_status");
-export const checkUpdate = () => call<UpdateStatus>("check_update");
-export const downloadUpdate = () => call<UpdateStatus>("download_update");
-export const installUpdate = () => call<UpdateStatus>("install_update");
-/** GitHub Releases 页（便携版手动下载 / 更新失败兜底） */
-export const openReleasePage = () => call<void>("open_release_page");
-/** GitHub 仓库主页（设置页常驻地址按钮） */
-export const openRepoPage = () => call<void>("open_repo_page");
-/** 订阅主进程更新事件，返回取消订阅函数；浏览器环境无订阅源时返回 undefined */
-export const onUpdateEvent = (cb: (e: UpdateEvent) => void): (() => void) | undefined =>
-  window.agenthub?.onUpdateEvent?.((payload) => cb(payload as UpdateEvent));

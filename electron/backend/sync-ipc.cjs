@@ -92,21 +92,6 @@ function registerSync(ctx) {
     }
   });
 
-  ipcMain.handle("test_webdav", async (_e, args) => {
-    try {
-      // 掩码密码回填真实值再测试（用户未改密码时界面传回的是掩码）。
-      // 独立配置快照：不走同步的取消信号，避免测试连接被「取消同步」误伤
-      const testCfg = { ...(args.config || {}) };
-      if (testCfg.password === config.PASSWORD_MASK) {
-        // useShared 后用量模块不再自存密码：真值在框架 webdavShared
-        testCfg.password = require("./config.cjs").loadSharedWebdav().password;
-      }
-      return await webdav.test(testCfg);
-    } catch (e) {
-      return { ok: false, message: e.message };
-    }
-  });
-
   // ===== 数据源 =====
   // 来源清单（唯一事实源是各适配器的 name 字段；前端顶栏/空状态/设置页均由此渲染）
   // 返回顺序遵循 config.sourceVisibility.order，并带 visible 字段供顶栏显隐
@@ -579,12 +564,6 @@ function registerSync(ctx) {
     }
   });
 
-  ipcMain.handle("set_autostart", (_e, args) => {
-    // 便携版兜底拒绝（设置页已禁用开关）：注册的会是临时解压副本路径，退出即失效
-    if (config.isPortable()) return null;
-    app.setLoginItemSettings({ openAtLogin: !!args.enabled });
-    return null;
-  });
   // 软件更新 / 版本号：走框架 ipc.cjs（updater.cjs），本模块不重复注册
 }
 

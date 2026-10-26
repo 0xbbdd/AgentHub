@@ -16,7 +16,9 @@
     "gen:icon": "node tools/gen-icon.cjs",
     "verify:memory": "node tools/verify/m-run-all.cjs",
     "electron:build:win": "npm run build && npm run native:prepare && electron-builder --win nsis --x64",
-    "electron:build:mac": "npm run build && npm run native:prepare && electron-builder --mac dmg zip --universal",
+    "electron:build:mac": "npm run build && npm run native:prepare && electron-builder --mac dmg zip",
+    "electron:build:mac:x64": "npm run build && npm run native:prepare && electron-builder --mac dmg zip --x64",
+    "electron:build:mac:arm64": "npm run build && npm run native:prepare && electron-builder --mac dmg zip --arm64",
     "electron:build:linux": "npm run build && npm run native:prepare && electron-builder --linux AppImage deb --x64",
     "electron:pack:current": "npm run build && npm run native:prepare && electron-builder --dir",
     "native:prepare": "node tools/prepare-native-resources.cjs"
@@ -45,7 +47,7 @@
     "wait-on": "^7.2.0"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22.5.0"
   },
   "build": {
     "appId": "com.huidada1.agenthub",
@@ -117,16 +119,10 @@
     "mac": {
       "target": [
         {
-          "target": "dmg",
-          "arch": [
-            "universal"
-          ]
+          "target": "dmg"
         },
         {
-          "target": "zip",
-          "arch": [
-            "universal"
-          ]
+          "target": "zip"
         }
       ],
       "icon": "build/icon.png",
@@ -135,9 +131,6 @@
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist"
-    },
-    "dmg": {
-      "sign": false
     },
     "linux": {
       "target": [

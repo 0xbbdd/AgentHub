@@ -145,7 +145,6 @@ const mock = {
             });
             break;
           case "sync_save_config": resolve({ ok: true, message: "设置保存成功" }); break;
-          case "test_webdav": resolve({ ok: true, message: "连接正常" }); break;
           case "list_sources": resolve([
             { id: "zcode", name: "ZCode", enabled: true, visible: true },
             { id: "codex", name: "Codex", enabled: false, visible: true },

@@ -17,6 +17,8 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { roamingAppData } = require("./platform-paths.cjs");
+const autostart = require("./autostart.cjs");
 
 // Electron app（主进程）；纯 Node 脚本直跑（tools 自测等）时为 null
 let electronApp = null;
@@ -93,7 +95,7 @@ function decryptSecret(stored) {
  *  纯 Node 环境退回 %APPDATA%\AgentHub（无则用户主目录），保证脚本直跑与主进程读同一份配置。
  *  AGENTHUB_DATA_DIR 显式指定时始终优先：自测脚本的沙箱钩子（不设即无感，生产零影响） */
 function dataDir() {
-  const dir = process.env.AGENTHUB_DATA_DIR || (electronApp ? electronApp.getPath("userData") : path.join(process.env.APPDATA || os.homedir(), "AgentHub"));
+  const dir = process.env.AGENTHUB_DATA_DIR || (electronApp ? electronApp.getPath("userData") : path.join(roamingAppData(), "AgentHub"));
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -713,7 +715,7 @@ function applyAutoStart(cfg) {
   if (isPortable() || !electronApp || process.env.VITE_DEV_SERVER_URL) return;
   try {
     if (!electronApp.isPackaged) return;
-    electronApp.setLoginItemSettings({ openAtLogin: !!(cfg.schedule && cfg.schedule.autoStart) });
+    autostart.applyLoginItem(electronApp, !!(cfg.schedule && cfg.schedule.autoStart));
   } catch { /* 注册失败不拦保存 */ }
 }
 

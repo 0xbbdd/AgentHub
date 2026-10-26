@@ -645,6 +645,7 @@ function createTray() {
   tray.setToolTip("AgentHub · Agent中控台");
   refreshTrayMenu();
   tray.on("double-click", showWindow);
+  if (process.platform === "linux") tray.on("click", showWindow);
 }
 
 // ===== 桌面通知：默认仅同步失败提醒，设置里可开启「成功也通知」；失败持续期间不重复弹 =====

@@ -20,8 +20,6 @@ const ALLOWED_COMMANDS = new Set([
   "get_app_version",
   "get_data_dir",
   "open_data_dir",
-  "get_hub_dir",
-  "open_hub_dir",
   "browse_dir",
   // ===== 软件更新 =====
   "get_is_portable",
@@ -32,7 +30,6 @@ const ALLOWED_COMMANDS = new Set([
   "open_release_page",
   "open_repo_page",
   // ===== 技能仓库：WebDAV =====
-  "webdav_test",
   "webdav_sync",
   "webdav_cancel",
   "webdav_status",
@@ -69,7 +66,6 @@ const ALLOWED_COMMANDS = new Set([
   // ===== 用量同步（原「用量记录同步」；与框架冲突的 4 个命令加 sync_ 前缀） =====
   "sync_load_config",
   "sync_save_config",
-  "test_webdav",
   // 数据源
   "list_sources",
   "detect_source",
@@ -122,7 +118,6 @@ const ALLOWED_COMMANDS = new Set([
   "set_data_dir",
   "reset_data_dir",
   "reset_local_cache",
-  "set_autostart",
   // ===== 反代网关 =====
   "proxy_status",
   "proxy_start",
@@ -147,7 +142,6 @@ const ALLOWED_COMMANDS = new Set([
   "proxy_account_note",
   "proxy_account_cool_off",
   "proxy_account_refresh",
-  "proxy_credits_refresh",
   "proxy_credits_refresh_channel",
   "proxy_checkin_status",
   "proxy_checkin_run",
@@ -186,7 +180,6 @@ const ALLOWED_COMMANDS = new Set([
   "proxy_zcode_claim_mode",
   "proxy_zcode_restore_mid",
   "proxy_stats_overview",
-  "proxy_stats_top",
   "proxy_stats_detail",
   "proxy_stats_cleanup",
   "proxy_recent",

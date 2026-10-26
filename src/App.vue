@@ -23,6 +23,9 @@ import ConfigSkillsSection from "./components/config/ConfigSkillsSection.vue";
 import ConfigUsageSection from "./components/config/ConfigUsageSection.vue";
 import ConfigProxySection from "./components/config/ConfigProxySection.vue";
 import SkillsHelpDialog from "./components/SkillsHelpDialog.vue";
+import SyncTopBar from "./components/sync/SyncTopBar.vue";
+import SyncDialog from "./components/sync/SyncDialog.vue";
+import MemoryDetailDrawer from "./components/memory/MemoryDetailDrawer.vue";
 // 页面视图按需拆包：v-if 负责首次访问才挂载，异步组件进一步避免启动时解析全部页面代码。
 // Vite 会为每个 import() 生成独立 chunk；浏览器缓存保证再次挂载无需重复下载。
 const asyncView = (loader: () => Promise<unknown>) => defineAsyncComponent(loader as () => Promise<{ default: object }>);

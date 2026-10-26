@@ -35,7 +35,6 @@ const READ = new Set([
   "proxy_recent",
   "proxy_stats_overview",
   "proxy_stats_detail",
-  "proxy_stats_top",
   "proxy_vault_status",
   "proxy_provider_list",
   "proxy_poolsync_status",

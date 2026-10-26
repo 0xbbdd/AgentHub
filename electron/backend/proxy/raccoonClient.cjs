@@ -27,6 +27,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { execSync, spawn } = require("node:child_process");
+const { roamingAppData, localAppData } = require("../platform-paths.cjs");
 
 /** 客户端进程：主进程 + 内嵌 ACP 运行时，两者运行期间都会回写 auth.json */
 const PROC_MAIN = "商汤小浣熊.exe";
@@ -57,7 +58,7 @@ function procRunning(name) {
 function lockfileAlive() {
   if (process.platform !== "win32") return false;
   try {
-    const lf = path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "office-raccoon", "lockfile");
+    const lf = path.join(roamingAppData(), "office-raccoon", "lockfile");
     const m = String(fs.readFileSync(lf, "utf8")).match(/\d{2,}/);
     if (!m) return false;
     const out = execSync(`tasklist /FI "PID eq ${m[0]}" /NH`, { encoding: "utf8", windowsHide: true, timeout: 8000 });
@@ -94,14 +95,13 @@ function killRaccoon(timeoutMs = 8000) {
 /** 安装路径候选表 + 运行中进程反查（找不到返回空串，由调用方降级为"手动打开"提示） */
 function findRaccoonExe() {
   if (process.platform !== "win32") return "";
-  const home = os.homedir();
-  const localAppData = process.env.LOCALAPPDATA || path.join(home, "AppData", "Local");
+  const localData = localAppData();
   const pf = process.env.ProgramFiles || "C:\\Program Files";
   const pf86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
   const dirs = [
-    path.join(localAppData, "Programs", "raccoon-ai"),
-    path.join(localAppData, "Programs", "商汤小浣熊"),
-    path.join(localAppData, "raccoon-ai"),
+    path.join(localData, "Programs", "raccoon-ai"),
+    path.join(localData, "Programs", "商汤小浣熊"),
+    path.join(localData, "raccoon-ai"),
     path.join(pf, "raccoon-ai"),
     path.join(pf86, "raccoon-ai"),
     "C:\\raccoon-ai",

@@ -42,6 +42,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { execSync, spawn } = require("node:child_process");
 const config = require("../config.cjs");
+const { localAppData: defaultLocalAppData } = require("../platform-paths.cjs");
 
 const ENC_PREFIX = "enc:v1:";
 const NONCE_SIZE = 12;
@@ -885,12 +886,12 @@ function killZcode(timeoutMs = 8000) {
 /** 安装路径候选表 + 运行中进程反查 */
 function findZcodeExe() {
   const home = os.homedir();
-  const localAppData = process.env.LOCALAPPDATA || path.join(home, "AppData", "Local");
+  const localData = defaultLocalAppData();
   const candidates = [
     // Windows 候选
     path.join(process.env.ProgramFiles || "C:\\Program Files", "ZCode", "ZCode.exe"),
     path.join(process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)", "ZCode", "ZCode.exe"),
-    path.join(localAppData, "Programs", "ZCode", "ZCode.exe"),
+    path.join(localData, "Programs", "ZCode", "ZCode.exe"),
     "E:\\ZCode\\ZCode.exe",
     "D:\\Program Files\\ZCode\\ZCode.exe",
     // macOS 候选

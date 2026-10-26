@@ -30,6 +30,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { execSync, spawn } = require("node:child_process");
+const { localAppData } = require("../platform-paths.cjs");
 
 /** 渠道 → 客户端显示名 + 进程/可执行文件名（双区共用一个 auth 目录，只能靠这两样区分） */
 const WB_CLIENTS = {
@@ -121,13 +122,12 @@ function registryDisplayIcons() {
 /** 安装路径候选表（注册表与进程反查都落空时的兜底；覆盖少数装在非标准位置的场景） */
 function exeCandidates(channel) {
   const exe = clientOf(channel).exe;
-  const home = os.homedir();
-  const localAppData = process.env.LOCALAPPDATA || path.join(home, "AppData", "Local");
+  const localData = localAppData();
   const pf = process.env.ProgramFiles || "C:\\Program Files";
   const pf86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
   const dirs = [
-    path.join(localAppData, "Programs", "WorkBuddy"),
-    path.join(localAppData, "WorkBuddy"),
+    path.join(localData, "Programs", "WorkBuddy"),
+    path.join(localData, "WorkBuddy"),
     path.join(pf, "WorkBuddy"),
     path.join(pf86, "WorkBuddy"),
     "C:\\WorkBuddy",

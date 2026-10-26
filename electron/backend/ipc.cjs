@@ -133,12 +133,6 @@ function register(ctx) {
   ipcMain.handle("open_data_dir", async () => {
     await shell.openPath(config.dataDir());
   });
-  // 中央技能仓库目录（真身 / 报告 / 回收站）
-  ipcMain.handle("get_hub_dir", handle(() => config.hubDir()));
-  ipcMain.handle("open_hub_dir", handle(async () => {
-    await shell.openPath(config.hubDir());
-    return ok({});
-  }));
   ipcMain.handle("browse_dir", handle(async () => {
     const r = await dialog.showOpenDialog(BrowserWindow.getAllWindows()[0], { properties: ["openDirectory"] });
     return { ok: true, canceled: r.canceled, path: r.canceled ? null : r.filePaths[0] };
@@ -153,22 +147,6 @@ function register(ctx) {
   ipcMain.handle("open_release_page", () => updater.openReleases());
   ipcMain.handle("open_repo_page", () => updater.openRepo());
 
-  // ===== 技能仓库：WebDAV 跨设备同步（服务器凭据走统一 webdavShared，根目录取 roots.skills） =====
-  ipcMain.handle("webdav_test", handle(({ config: form }) => {
-    // 表单直达：{endpoint, username, password, root}（掩码密码回填真值）；
-    // 无表单：共享服务器 + 技能仓库根目录
-    if (form && typeof form === "object" && (form.endpoint !== undefined || form.webdav === undefined)) {
-      const cur = config.loadSharedWebdav();
-      const testCfg = {
-        endpoint: String(form.endpoint || ""),
-        username: String(form.username || ""),
-        password: form.password === config.PASSWORD_MASK ? cur.password : String(form.password || ""),
-        root: String(form.root || cur.roots.skills),
-      };
-      return webdav.test(testCfg);
-    }
-    return webdav.test(config.moduleWebdav("skills"));
-  }));
   ipcMain.handle("webdav_sync", handle(() => {
     const c = C();
     // 同步引擎读 cfg.webdav：用统一共享配置组装（凭据 + skills 根目录 + 设备档案）

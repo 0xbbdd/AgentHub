@@ -15,6 +15,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { roamingAppData, localAppData } = require("./platform-paths.cjs");
 
 // 内置工具：id/图标/默认候选路径定在这，config.json 只覆盖用户可改的部分（name/paths/enabled）
 const TOOL_REGISTRY = [
@@ -51,8 +52,8 @@ function expandPath(p) {
   const s = String(p || "").trim();
   if (!s) return "";
   const home = fakeHome();
-  const appdata = process.env.APPDATA || path.join(home, "AppData", "Roaming");
-  const localAppdata = process.env.LOCALAPPDATA || path.join(home, "AppData", "Local");
+  const appdata = roamingAppData(home);
+  const localAppdata = localAppData(home);
   if (s.slice(0, 9).toUpperCase() === "%APPDATA%") return path.join(appdata, s.slice(9));
   if (s.slice(0, 15).toUpperCase() === "%LOCALAPPDATA%") return path.join(localAppdata, s.slice(15));
   if (s.startsWith("~")) return path.join(home, s.slice(1));
