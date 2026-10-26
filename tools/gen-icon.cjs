@@ -165,15 +165,17 @@ const src = decodePNG(fs.readFileSync(SRC));
 const pngOf = (n) => ({ size: n, png: encodePNG(resize(src, n, n)) });
 
 const icon256 = pngOf(256);
+const icon1024 = pngOf(1024);
 const tray32 = pngOf(32);
 
 const root = path.join(__dirname, "..");
 fs.mkdirSync(path.join(root, "build"), { recursive: true });
 fs.mkdirSync(path.join(root, "src", "assets"), { recursive: true });
-fs.writeFileSync(path.join(root, "build", "icon.png"), icon256.png);
+// macOS 打包要求应用图标至少 512×512；ICO 仍沿用 16/32/48/256。
+fs.writeFileSync(path.join(root, "build", "icon.png"), icon1024.png);
 fs.writeFileSync(path.join(root, "build", "icon.ico"), wrapICO([pngOf(16), pngOf(32), pngOf(48), icon256]));
 fs.writeFileSync(path.join(root, "build", "tray.png"), tray32.png);
 fs.writeFileSync(path.join(root, "src", "assets", "logo.png"), icon256.png);
 console.log(
-  `图标已生成（源 ${src.w}×${src.h}）：build/icon.png + icon.ico（16/32/48/256）+ tray.png + src/assets/logo.png`
+  `图标已生成（源 ${src.w}×${src.h}）：build/icon.png（1024×1024）+ icon.ico（16/32/48/256）+ tray.png + src/assets/logo.png`
 );
