@@ -425,7 +425,7 @@ npm run electron:build:mac    # macOS 宿主架构 DMG + ZIP（在 macOS 构建�
 npm run electron:build:linux  # Linux x64 AppImage + DEB（在 Linux 构建）
 ```
 
-> macOS/Linux 安装包可运行完整桌面框架；依赖 Windows 客户端文件、DPAPI、PowerShell 或 `.exe` 的导入/切换功能会在这些平台降级。Trae 系用量读取还需要将对应平台的 SQLCipher 原生库放入 `resources/sqlcipher/<platform>-<arch>/`；缺少时只禁用该数据源。macOS 正式分发前还需配置 Apple Developer 签名与公证。
+> macOS/Linux 安装包可运行完整桌面框架；依赖 Windows 客户端文件、DPAPI、PowerShell 或 `.exe` 的导入/切换功能会在这些平台降级。Trae 系用量读取已随包附带 macOS x64 / arm64 与 Linux x64 的 SQLCipher 原生库（来源与校验见 `resources/sqlcipher/NOTICE.md`）；可用 `npm run native:verify` 检查。若资源被裁剪，缺少时只禁用该数据源。macOS 正式分发前还需配置 Apple Developer 签名与公证。
 
 反代网关后端全链路自测（含假上游端到端：换号 / 自动切换 / 流式双态 / 指纹头）：
 

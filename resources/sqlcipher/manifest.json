@@ -1,0 +1,71 @@
+{
+  "schema": 1,
+  "sqlcipher": "4.6.1",
+  "sqlite": "3.46.1",
+  "openssl": {
+    "darwin": "3.3.1",
+    "linux": "3.3.1",
+    "win32": "1.1.1 x64 DLLs (legacy)"
+  },
+  "platforms": {
+    "win32-x64": {
+      "source": "legacy bundled Windows build; PRAGMA cipher_version = 4.6.1 community",
+      "files": {
+        "sqlcipher.dll": {
+          "sha256": "1dae2d754e919acfff8e26c40694e4ef42b1b34805b25a607186efaf88879eb7"
+        },
+        "libcrypto-1_1-x64.dll": {
+          "sha256": "13071dc72a97cf3c84fa754714c99f3b91f3aa784393994401bec0a7869cdb51"
+        },
+        "libssl-1_1-x64.dll": {
+          "sha256": "6ba837ce8bafe2bad595164f14bc3e85905e5c7fe88a0a0efb99a2ba9f025f72"
+        }
+      }
+    },
+    "darwin-x64": {
+      "source": "homebrew/core/sqlcipher 4.6.1.monterey",
+      "bottles": {
+        "sqlcipher": "sha256:69a4c545f99bdd3dee89090c3a264f33d333d4b41be5a368c6a078ea1234fe1f",
+        "openssl": "sha256:06e6ff16eb23a8fd4dc9222e6cf5bcf2b680d250ba0233e6e0c0dc6e9616cb34"
+      },
+      "files": {
+        "libsqlcipher.dylib": {
+          "sha256": "4591b0654d3eb0ab9e10e2c032c9baab788913719714de7a537363df96024e06"
+        },
+        "libcrypto.3.dylib": {
+          "sha256": "6e5b389b6239f724b715905978c7d1562e6ea7080ce545b7b3343492eb80f2e9"
+        }
+      }
+    },
+    "darwin-arm64": {
+      "source": "homebrew/core/sqlcipher 4.6.1.arm64_monterey",
+      "bottles": {
+        "sqlcipher": "sha256:99ceb412afb90b295aa64a1d9ba6bf25bbfb7887b50825154fc8baba3e879874",
+        "openssl": "sha256:0d88c67b408ad9520a28d195418d14875f2237fbd808114763f980a7a9190831"
+      },
+      "files": {
+        "libsqlcipher.dylib": {
+          "sha256": "8bbcdfd6dce9309ba8e33f3af62596ff934912858622624e7074cc6668f03755"
+        },
+        "libcrypto.3.dylib": {
+          "sha256": "22ef37f674a4c1adf767c76b23453ee0b3b4f8a7ba9b5ab5f90299f290e6de6f"
+        }
+      }
+    },
+    "linux-x64": {
+      "source": "homebrew/core/sqlcipher 4.6.1.x86_64_linux",
+      "bottles": {
+        "sqlcipher": "sha256:1b698c95084d0ec890fc103429bb615a8c13c87bd13b6a29b246579feb5a0763",
+        "openssl": "sha256:d84029bfaf8a5452329d7e2535ba32d720b361b398e46051ee6090ff989dfd55"
+      },
+      "files": {
+        "libsqlcipher.so": {
+          "sha256": "88802168c9bc7f75ed769284d98e8b7396d2e791b4394ff9f9cf38a609ce8e77"
+        },
+        "libcrypto.so.3": {
+          "sha256": "8caadd25a8dcf89e31a2dc037806b249142a65f2dec2c67e723a6d1120ec1d86"
+        }
+      }
+    }
+  }
+}

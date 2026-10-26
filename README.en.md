@@ -414,7 +414,7 @@ npm run electron:build:mac    # macOS host-architecture DMG + ZIP (build on macO
 npm run electron:build:linux  # Linux x64 AppImage + DEB (build on Linux)
 ```
 
-> The macOS/Linux packages run the full desktop shell. Features that depend on Windows client files, DPAPI, PowerShell, or `.exe` helpers degrade on those platforms. Trae usage import also requires a platform SQLCipher library under `resources/sqlcipher/<platform>-<arch>/`; when absent, only that source is disabled. Configure Apple Developer signing and notarization before public macOS distribution.
+> The macOS/Linux packages run the full desktop shell. Features that depend on Windows client files, DPAPI, PowerShell, or `.exe` helpers degrade on those platforms. Trae usage import now ships SQLCipher libraries for macOS x64 / arm64 and Linux x64 (provenance and checksums in `resources/sqlcipher/NOTICE.md`); run `npm run native:verify` to check them. If the resources are stripped, only that source is disabled. Configure Apple Developer signing and notarization before public macOS distribution.
 
 Full end-to-end self-test for the proxy backend (fake upstream included: failover / auto-switch / streaming both modes / fingerprint headers):
 

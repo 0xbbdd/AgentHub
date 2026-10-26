@@ -1,3 +1,9 @@
 # 更新说明文件必须 LF：CI 检出 CRLF 会让 js-yaml 把 releaseNotes 输出成单行双引号标量，
 # LF 则输出标准多行块标量（客户端解析更稳）
 build/release-notes.md text eol=lf
+
+# SQLCipher 原生库：按二进制处理，禁止行尾转换与文本 diff
+resources/sqlcipher/**/*.dll binary
+resources/sqlcipher/**/*.dylib binary
+resources/sqlcipher/**/*.so binary
+resources/sqlcipher/**/*.so.* binary
