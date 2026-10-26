@@ -1,0 +1,83 @@
+# 常规 CI：只校验与打包未签名目录，不创建 Release、不推送资产。
+# 发版仍走 release.yml（手动 workflow_dispatch）。
+name: CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 校验三平台 SQLCipher 原生库
+        run: npm run native:verify -- --strict
+
+      - name: 类型检查、SFC/IPC 门禁与前端构建
+        run: npm run build
+
+      - name: 记忆中枢纯代码断言
+        run: npm run verify:memory -- --assert
+
+  package:
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win32
+            arch: x64
+          - os: macos-13
+            platform: darwin
+            arch: x64
+          - os: macos-14
+            platform: darwin
+            arch: arm64
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 构建前端
+        run: npm run build
+
+      - name: 准备目标平台原生资源
+        run: node tools/prepare-native-resources.cjs --platform=${{ matrix.platform }} --arch=${{ matrix.arch }}
+
+      - name: 验证当前平台 SQLCipher 可加载
+        run: npm run native:smoke
+
+      - name: 打包未签名目录（不发布）
+        run: npx electron-builder --dir --publish never
