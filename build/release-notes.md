@@ -98,8 +98,8 @@
 
 ## 文档
 
-- 新增 [SPONSOR.md](https://github.com/HUIdada1/AgentHub/blob/main/SPONSOR.md)：赞赏码、QQ 群、商务合作，中英双语。
-- 新增 [README.en.md](https://github.com/HUIdada1/AgentHub/blob/main/README.en.md)：完整英文版说明。
+- 新增 [SPONSOR.md](https://github.com/0xbbdd/AgentHub/blob/main/SPONSOR.md)：赞赏码、QQ 群、商务合作，中英双语。
+- 新增 [README.en.md](https://github.com/0xbbdd/AgentHub/blob/main/README.en.md)：完整英文版说明。
 - README 顶部增加语言切换与「社区和支持」板块。
 
 ## 说明

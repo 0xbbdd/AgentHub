@@ -57,11 +57,11 @@ async function main() {
     (svc.projects().projects || []).every((p) => !p.name || p.name !== p.slug || !String(p.slug).includes("--")),
     JSON.stringify((svc.projects().projects || []).filter((p) => p.name === p.slug && String(p.slug).includes("--")).map((p) => p.slug)));
 
-  const agenthub = card("huidada1--agenthub");
-  check("gitUrl 已回填（github.com/HUIdada1/AgentHub）", !!agenthub && agenthub.gitUrl === "github.com/HUIdada1/AgentHub", JSON.stringify(agenthub && agenthub.gitUrl));
+  const agenthub = card("0xbbdd--agenthub");
+  check("gitUrl 已回填（github.com/0xbbdd/AgentHub）", !!agenthub && agenthub.gitUrl === "github.com/0xbbdd/AgentHub", JSON.stringify(agenthub && agenthub.gitUrl));
   const alias = card("agenthub");
-  check("无远程卡片继承到 gitUrl（同仓库）", !!alias && alias.gitUrl === "github.com/HUIdada1/AgentHub", JSON.stringify(alias && alias.gitUrl));
-  check("无远程卡片继承到 remotes", !!alias && (alias.remotes || []).includes("HUIdada1/AgentHub"), JSON.stringify(alias && alias.remotes));
+  check("无远程卡片继承到 gitUrl（同仓库）", !!alias && alias.gitUrl === "github.com/0xbbdd/AgentHub", JSON.stringify(alias && alias.gitUrl));
+  check("无远程卡片继承到 remotes", !!alias && (alias.remotes || []).includes("0xbbdd/AgentHub"), JSON.stringify(alias && alias.remotes));
   check("其它有本地路径的项目也拿到 gitUrl",
     (svc.projects().projects || []).filter((p) => (p.localPaths || []).length).every((p) => !!p.gitUrl || (p.remotes || []).length === 0),
     JSON.stringify((svc.projects().projects || []).filter((p) => (p.localPaths || []).length && !p.gitUrl).map((p) => p.slug)));

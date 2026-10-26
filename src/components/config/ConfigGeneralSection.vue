@@ -624,7 +624,7 @@ onUnmounted(() => {
       <div class="set-row">
         <div class="set-info">
           <div class="set-name">GitHub 仓库</div>
-          <div class="set-desc">HUIdada1/AgentHub · 软件更新与安装包发布地址</div>
+          <div class="set-desc">0xbbdd/AgentHub · 软件更新与安装包发布地址</div>
         </div>
         <button class="btn btn-ghost" @click="openRepo">打开仓库</button>
       </div>

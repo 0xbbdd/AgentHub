@@ -51,7 +51,7 @@ AgentHub 是本地运行的中控台（Electron + Vue 3 + TypeScript），自身
 
 ### 安装版
 
-1. 打开 [Releases 页面](https://github.com/HUIdada1/AgentHub/releases/latest)
+1. 打开 [Releases 页面](https://github.com/0xbbdd/AgentHub/releases/latest)
 2. 下载 `AgentHub-Setup-x.y.z.exe`
 3. 双击安装。安装过程中可以改安装目录，装完会在桌面和开始菜单创建「AgentHub」快捷方式
 4. 启动后程序常驻系统托盘，关窗口不会退出；托盘图标双击可唤回窗口，右键菜单里能暂停同步、看今日用量
@@ -77,7 +77,7 @@ Docker 版只含**反代网关**（没有桌面端的技能 / 用量 / 记忆三
 前提：Docker 20.10+ 与 Compose v2，Linux 服务器 1 核 512MB 起。
 
 ```bash
-git clone https://github.com/HUIdada1/AgentHub.git && cd AgentHub
+git clone https://github.com/0xbbdd/AgentHub.git && cd AgentHub
 
 # 凭据加密密钥，务必留存好：丢了以后已加密的凭据不可恢复
 export AGENTHUB_SECRET_KEY=$(openssl rand -base64 32)

@@ -11,7 +11,7 @@
 /**
  * AgentHub · 记忆中枢（Memory Hub）
  * Copyright (c) 2026 沐晖 (HUIdada1)
- * https://github.com/HUIdada1/AgentHub
+ * https://github.com/0xbbdd/AgentHub
  * 本文件为开源项目 AgentHub 的组成部分，作者保留署名权；依据开源协议使用时禁止复制本声明。
  */
 
@@ -38,7 +38,7 @@ try {
 } catch { /* 没有 Local State 就跳过 */ }
 app.setPath("userData", tempUserData0);
 
-const PROJECT = process.argv[2] || "HUIdada1--AgentHub";
+const PROJECT = process.argv[2] || "0xbbdd--AgentHub";
 
 function copyMd(src, dst) {
   const fs = require("fs"), path = require("path");

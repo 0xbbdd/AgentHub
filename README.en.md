@@ -51,7 +51,7 @@ Full details are in [SPONSOR.md](./SPONSOR.md).
 
 ### Installer
 
-1. Open the [Releases page](https://github.com/HUIdada1/AgentHub/releases/latest)
+1. Open the [Releases page](https://github.com/0xbbdd/AgentHub/releases/latest)
 2. Download `AgentHub-Setup-x.y.z.exe`
 3. Double-click to install. You can change the install directory; the installer creates an "AgentHub" shortcut on the desktop and in the Start menu
 4. After launch the app stays in the system tray — closing the window does not exit. Double-click the tray icon to bring the window back; the right-click menu lets you pause sync and check today's usage
@@ -77,7 +77,7 @@ The Docker image contains **only the proxy gateway** (no skills / usage / memory
 Prerequisites: Docker 20.10+ with Compose v2, a Linux server with 1 core and 512 MB RAM to start.
 
 ```bash
-git clone https://github.com/HUIdada1/AgentHub.git && cd AgentHub
+git clone https://github.com/0xbbdd/AgentHub.git && cd AgentHub
 
 # Credential encryption key — keep it safe: once lost, encrypted credentials cannot be recovered
 export AGENTHUB_SECRET_KEY=$(openssl rand -base64 32)

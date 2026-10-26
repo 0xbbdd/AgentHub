@@ -481,7 +481,7 @@ function register({ appType, apiKey, model, port } = {}) {
         `INSERT INTO providers (${INSERT_COLS.join(", ")})
          VALUES (${INSERT_COLS.map(() => "?").join(", ")})`
       ).run(
-        FIXED[t], t, name, settings, "https://github.com/HUIdada1/AgentHub", "custom",
+        FIXED[t], t, name, settings, "https://github.com/0xbbdd/AgentHub", "custom",
         now, sortIndex, notes, ICONS[t].icon, ICONS[t].iconColor, meta, "0", "0"
       );
       action = "inserted";

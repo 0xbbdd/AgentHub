@@ -68,7 +68,7 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "HUIdada1",
+        "owner": "0xbbdd",
         "repo": "AgentHub",
         "releaseType": "release"
       }

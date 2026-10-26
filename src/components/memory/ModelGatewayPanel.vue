@@ -11,7 +11,7 @@
 <!--
   AgentHub · 记忆中枢（Memory Hub）
   Copyright (c) 2026 沐晖 (HUIdada1)
-  https://github.com/HUIdada1/AgentHub
+  https://github.com/0xbbdd/AgentHub
   本文件为开源项目 AgentHub 的组成部分，作者保留署名权；依据开源协议使用时禁止删除本声明。
 -->
 <!-- 记忆中枢 · 模型与网关面板：来源优先级（左拖拽小卡 + 右说明与操作的双栏）+ 供应商紧凑列表
