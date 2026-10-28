@@ -29,8 +29,9 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { execSync, spawn } = require("node:child_process");
+const { execSync } = require("node:child_process");
 const { localAppData } = require("../platform-paths.cjs");
+const hostPlatform = require("../platform/index.cjs");
 
 /** 渠道 → 客户端显示名 + 进程/可执行文件名（双区共用一个 auth 目录，只能靠这两样区分） */
 const WB_CLIENTS = {
@@ -42,69 +43,32 @@ function clientOf(channel) {
   return WB_CLIENTS[channel] || WB_CLIENTS.workbuddy;
 }
 
-/** 200ms 粒度无损休眠（不占 CPU，对齐 raccoonClient.syncSleep） */
-function syncSleep(ms) {
-  try {
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.max(1, ms));
-  } catch {
-    const end = Date.now() + ms;
-    while (Date.now() < end) { /* 降级兜底 */ }
-  }
-}
-
-/** tasklist 单进程探测：命中输出含 ".exe"，未命中输出中文提示（兜底输出乱码也不影响判定） */
-function procRunning(name) {
-  if (process.platform !== "win32") return false;
-  try {
-    const out = execSync(`tasklist /FI "IMAGENAME eq ${name}" /NH`, { encoding: "utf8", windowsHide: true, timeout: 8000 });
-    return /\.exe/i.test(out);
-  } catch {
-    return false;
-  }
-}
-
 /** 指定渠道的客户端是否在运行（只看自己那一份进程，双区互不牵连） */
 function isWorkbuddyRunning(channel) {
-  const main = procRunning(clientOf(channel).exe);
+  const main = hostPlatform.process.isRunning(clientOf(channel).exe);
   return { running: main, main };
 }
 
 /**
- * 关闭指定渠道的客户端并等待退出。先发关闭请求（taskkill 不带 /F，编辑器得以正常收尾）
- * 给 3 秒；仍在跑（例如被「有未保存内容」的确认框拦住）再强杀进程树。
+ * 关闭指定渠道的客户端并等待退出。platform/process 先发优雅关闭请求并等待 3 秒；
+ * 仍在跑（例如被「有未保存内容」的确认框拦住）再强杀进程树。
  * 默认 8s 总超时；杀不掉返回 false，调用方中止切换且不改动任何文件。
  * stdio 全静默：不带 /F 的那一趟对子进程必然报「只能强制终止此进程(带 /F 选项)」，
  * 强杀那趟也会对已退出的项报错——这些是预期噪音，漏到主进程 stderr 上只会刷屏。
  */
 function killWorkbuddy(channel, timeoutMs = 8000) {
-  if (process.platform !== "win32") return true;
-  const name = clientOf(channel).exe;
-  const total = Math.max(1000, timeoutMs);
-  const quiet = { encoding: "utf8", windowsHide: true, timeout: 8000, stdio: ["ignore", "ignore", "ignore"] };
-  if (procRunning(name)) {
-    // ① 优雅退出：向窗口发关闭请求，让编辑器保存/询问未保存内容
-    try { execSync(`taskkill /IM "${name}" /T`, quiet); } catch { /* 可能已退出 */ }
-    const softDeadline = Date.now() + Math.min(3000, total);
-    while (Date.now() < softDeadline) {
-      if (!procRunning(name)) return true;
-      syncSleep(200);
-    }
-    // ② 强杀（连带 Chromium 多进程树）
-    try { execSync(`taskkill /F /IM "${name}" /T`, quiet); } catch { /* 可能已退出 */ }
-  }
-  const deadline = Date.now() + total;
-  while (Date.now() < deadline) {
-    if (!procRunning(name)) return true;
-    syncSleep(200);
-  }
-  return !procRunning(name);
+  return hostPlatform.process.kill(clientOf(channel).exe, {
+    timeoutMs: Math.max(1000, timeoutMs),
+    graceMs: 3000,
+    tree: true,
+  });
 }
 
 /** 注册表 Uninstall 项的 DisplayIcon 全量取值（可能为空行 / 带 ",0" 图标索引 / 带引号）。
  *  必须先 Where-Object 过滤：卸载项里大量条目没有 DisplayIcon，直接 -ExpandProperty 会对
  *  每一条缺失该属性的项报一条错（实测刷出 80KB 噪音），且 2>$null 抑制不了这种流内错误记录。 */
 function registryDisplayIcons() {
-  if (process.platform !== "win32") return [];
+  if (!hostPlatform.isWindows()) return [];
   try {
     const out = execSync(
       'powershell -NoProfile -Command "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-ItemProperty \'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*\',\'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*\',\'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*\' -ErrorAction SilentlyContinue | Where-Object { $_.DisplayIcon } | Select-Object -ExpandProperty DisplayIcon"',
@@ -144,7 +108,7 @@ function exeCandidates(channel) {
 
 /** 定位客户端可执行文件（找不到返回空串，由调用方降级为「手动关闭/打开」提示） */
 function findWorkbuddyExe(channel) {
-  if (process.platform !== "win32") return "";
+  if (!hostPlatform.isWindows()) return "";
   const exe = clientOf(channel).exe;
   // ① 运行中进程反查（一次调用拿全部同名进程路径，取第一个存在的）
   try {
@@ -162,24 +126,13 @@ function findWorkbuddyExe(channel) {
     if (path.basename(icon).toLowerCase() === exe.toLowerCase() && fs.existsSync(icon)) return icon;
   }
   // ③ 候选目录表
-  for (const cand of exeCandidates(channel)) {
-    try {
-      if (fs.existsSync(cand)) return cand;
-    } catch { /* 下一个 */ }
-  }
-  return "";
+  return hostPlatform.process.findExecutable(exeCandidates(channel));
 }
 
 /** 启动客户端（分离进程，不阻塞；失败如实返回，不影响已完成的切号） */
 function launchWorkbuddy(exe) {
   if (!exe) return { ok: false, message: "未找到 WorkBuddy 可执行文件，请手动打开客户端" };
-  try {
-    const child = spawn(exe, [], { detached: true, stdio: "ignore", windowsHide: false });
-    child.unref();
-    return { ok: true, file: exe };
-  } catch (e) {
-    return { ok: false, message: String((e && e.message) || e) };
-  }
+  return hostPlatform.process.launch(exe, [], { windowsHide: false });
 }
 
 module.exports = { WB_CLIENTS, clientOf, isWorkbuddyRunning, killWorkbuddy, findWorkbuddyExe, launchWorkbuddy };

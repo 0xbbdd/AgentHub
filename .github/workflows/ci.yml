@@ -33,6 +33,9 @@ jobs:
       - name: 校验三平台 SQLCipher 原生库
         run: npm run native:verify -- --strict
 
+      - name: 发布工具自测
+        run: npm run release:verify
+
       - name: 类型检查、SFC/IPC 门禁与前端构建
         run: npm run build
 
@@ -81,3 +84,44 @@ jobs:
 
       - name: 打包未签名目录（不发布）
         run: npx electron-builder --dir --publish never
+        env:
+          SKIP_NOTARIZE: "1"
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: 准备 Linux GUI E2E 依赖
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb dbus-x11 gnome-keyring libsecret-1-0 libsecret-tools
+
+      - name: Linux Electron GUI E2E
+        if: matrix.platform == 'linux'
+        run: dbus-run-session -- xvfb-run -a npm run e2e:electron
+
+      - name: Windows/macOS Electron GUI E2E
+        if: matrix.platform != 'linux'
+        run: npm run e2e:electron
+
+      - name: Linux 真实 Secret Service 安全存储 E2E
+        if: matrix.platform == 'linux'
+        run: dbus-run-session -- bash tools/run-linux-keyring-e2e.sh
+
+      - name: Windows/macOS 真实系统安全存储 E2E
+        if: matrix.platform != 'linux'
+        run: npm run e2e:secure-storage
+
+      - name: Linux 轻量模式桌面 E2E
+        if: matrix.platform == 'linux'
+        run: dbus-run-session -- xvfb-run -a sh -c 'npm run e2e:window-mode && npm run e2e:window-mode:main'
+
+      - name: Windows/macOS 轻量模式桌面 E2E
+        if: matrix.platform != 'linux'
+        run: npm run e2e:window-mode && npm run e2e:window-mode:main
+
+      - name: 上传 GUI E2E 失败截图
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agenthub-gui-e2e-${{ matrix.platform }}-${{ matrix.arch }}-failure
+          if-no-files-found: ignore
+          path: |
+            gui-e2e-failure.png
+            window-mode-main-e2e-failure.png

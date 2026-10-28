@@ -22,20 +22,23 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { electronExecutable, guiArgs } = require("./electron-runtime.cjs");
 
 const ROOT = path.join(__dirname, "..");
-const ELECTRON = path.join(ROOT, "node_modules", "electron", "dist", "electron.exe");
+const ELECTRON = electronExecutable(ROOT);
 const HARNESS = path.join(os.tmpdir(), "ah-window-e2e", "harness.cjs");
 const OUTDIR = path.join(os.tmpdir(), "ah-window-e2e");
+const RESULT = path.join(OUTDIR, "result.jsonl");
 
 fs.mkdirSync(OUTDIR, { recursive: true });
+fs.rmSync(RESULT, { force: true });
 fs.writeFileSync(HARNESS, harnessSource(ROOT, OUTDIR), "utf8");
 
 const env = { ...process.env };
-delete env.ELECTRON_RUN_AS_NODE; // 否则 electron.exe 会当纯 node 跑，require("electron") 直接失败
+delete env.ELECTRON_RUN_AS_NODE; // 否则 Electron 会当纯 node 跑，require("electron") 直接失败
 
-console.log("  起 Electron 跑轻量模式端到端验证…");
-const r = spawnSync(ELECTRON, [HARNESS, "--user-data-dir=" + path.join(OUTDIR, "udd")], {
+console.log(`  起 Electron 跑轻量模式端到端验证… (${ELECTRON})`);
+const r = spawnSync(ELECTRON, [HARNESS, ...guiArgs(), "--user-data-dir=" + path.join(OUTDIR, "udd")], {
   cwd: ROOT,
   env,
   encoding: "utf8",
@@ -50,7 +53,8 @@ try {
 
 if (!rows.length) {
   console.log("  FAIL 无结果产出（退出码 " + r.status + "）");
-  console.log(String(r.stderr || "").split(/\r?\n/).slice(0, 20).join("\n"));
+  if (r.error) console.log(String(r.error.stack || r.error));
+  console.log(String(r.stderr || "").split(/\r?\n/).slice(0, 40).join("\n"));
   process.exit(1);
 }
 

@@ -16,7 +16,8 @@ const path = require("node:path");
 const fs = require("node:fs");
 
 const tmp = process.argv[2] || fs.mkdtempSync(path.join(os.tmpdir(), "agenthub-proxy-test-"));
-process.env.APPDATA = tmp; // config.cjs 纯 Node 模式退回 %APPDATA%\AgentHub
+process.env.AGENTHUB_DATA_DIR = path.join(tmp, "AgentHub"); // 三平台统一隔离，避免读到真实用户数据
+process.env.APPDATA = tmp; // 兼容仍直接读取 %APPDATA% 的 Windows 专属脚本
 
 async function main() {
   const assert = (cond, msg) => {

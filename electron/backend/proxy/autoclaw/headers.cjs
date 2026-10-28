@@ -18,6 +18,7 @@
 //      收到 X-Tm: linux 一律 403）；userapi 域按宿主平台如实发（win/linux）。
 "use strict";
 const crypto = require("node:crypto");
+const hostPlatform = require("../../platform/index.cjs");
 
 /** X-Auth-Sign：MD5(`${appId}&${秒级时间戳}&${appKey}`) 小写十六进制。时间戳单位是秒（毫秒会 400002） */
 function authSign(appId, appKey, nowMs) {
@@ -30,7 +31,7 @@ function authSign(appId, appKey, nowMs) {
 
 /** 平台值：恒不发 "linux"（LLM 域）——非 Windows 宿主回落 win，与 platform_tm 同口径 */
 function llmPlatformTm() {
-  return process.platform === "darwin" ? "mac" : "win";
+  return hostPlatform.isMac() ? "mac" : "win";
 }
 
 /** LLM 对话请求头（POST {userapiBase}{llmProxyPath}/chat/completions）。
@@ -64,7 +65,7 @@ function signedAuthHeaders(cfg, token) {
     "x-product": "autoclaw",
     "x-client-type": "pc",
     "x-harness-type": "zcode",
-    "x-tm": process.platform === "win32" ? "win" : "linux",
+    "x-tm": hostPlatform.isWindows() ? "win" : "linux",
     "x-lang": "zh-CN",
     "x-channel": "official",
     "x-auth-appid": String(cfg.authAppId || "100003"),

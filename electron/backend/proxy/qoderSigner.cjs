@@ -43,6 +43,7 @@ const { spawnSync } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
 const config = require("../config.cjs");
 const install = require("./qoderInstall.cjs");
+const hostPlatform = require("../platform/index.cjs");
 
 const ENTRY_MARK = "SY(),Bir("; // 0.4.x worker 入口；截断点（未命中则走通用提取）
 const WASM_MAGIC = "AGFzbQEAAAA"; // 内嵌 wasm 的 base64 魔数（\0asm）；下面 pickByStructure 的正则里是同一串
@@ -58,6 +59,23 @@ const BOOTSTRAP_NEAR_EOF = 8192;
 /** 客户端 resources 目录（多候选定位，见 qoderInstall.cjs） */
 function installResources(product) {
   return install.findResources(product) || "";
+}
+
+/** 文件健康度：存在、可读、可执行（Windows 只判存在，Unix 额外检查 X_OK）。 */
+function fileHealth(file) {
+  const out = { path: file || "", exists: false, readable: false, executable: false, mode: "" };
+  if (!file) return out;
+  try {
+    const st = fs.statSync(file);
+    out.exists = st.isFile();
+    out.mode = `0${(st.mode & 0o777).toString(8)}`;
+    try { fs.accessSync(file, fs.constants.R_OK); out.readable = true; } catch { /* 保留 false */ }
+    if (hostPlatform.isWindows()) out.executable = out.exists;
+    else {
+      try { fs.accessSync(file, fs.constants.X_OK); out.executable = true; } catch { /* 保留 false */ }
+    }
+  } catch { /* 不存在或无权 stat */ }
+  return out;
 }
 
 /** 定位 worker obf 与客户端版本 */
@@ -462,7 +480,15 @@ async function createSession({ product, token, uid, machineId }) {
 /** 供自测/诊断：返回定位与加载信息 */
 async function describe(product) {
   const loc = locate(product);
-  const info = { product, installed: !!loc, obf: loc ? loc.obf : null, version: loc ? loc.version : null, resources: loc ? loc.resources : null, sdk: loc ? loc.sdk : null };
+  const info = {
+    product,
+    installed: !!loc,
+    obf: loc ? loc.obf : null,
+    version: loc ? loc.version : null,
+    resources: loc ? loc.resources : null,
+    sdk: loc ? loc.sdk : null,
+    runtimeInfo: fileHealth(install.runtimeInfoPath(product)),
+  };
   if (loc) {
     try {
       const loaded = await loadGlue(product);
@@ -486,10 +512,14 @@ async function describe(product) {
  */
 function probe(product) {
   const loc = locate(product);
+  const resources = installResources(product);
+  const runtimeInfo = fileHealth(install.runtimeInfoPath(product));
   if (!loc) {
     return {
       product,
       installed: false,
+      resources: resources || "",
+      runtimeInfo,
       message:
         "客户端未安装，或 resources 目录未定位到（可用 AGENTHUB_QODER_RESOURCES / AGENTHUB_QODER_INTL_RESOURCES 直接指定 resources 目录）",
     };
@@ -507,8 +537,11 @@ function probe(product) {
     version: loc.version,
     sdk: loc.sdk,
     obf: loc.obf,
+    obfHealth: fileHealth(loc.obf),
     obfSize: st.size,
     obfMtime: new Date(Math.floor(st.mtimeMs)).toISOString(),
+    resources,
+    runtimeInfo,
     entryMark: { mark: ENTRY_MARK, hit: entryAt >= 0, offset: entryAt },
     inlineWasm: { magic: WASM_MAGIC, hit: wasmAt >= 0, offset: wasmAt },
     workerBootstrap: bootstrap ? { anchor: bootstrap.anchor, kind: bootstrap.kind, offset: bootstrap.at, fromEnd: bootstrap.fromEnd } : null,
@@ -534,4 +567,22 @@ function probeSnippets(text, entryAt) {
   };
 }
 
-module.exports = { locate, available, createSession, describe, probe, installResources, buildPatchedModule, patchText, pickByStructure, findWorkerBootstrap };
+/** 真机验收摘要：默认只读；loadGlue=true 时才构建/加载 WASM 签名胶水。 */
+async function diagnose(product, opts = {}) {
+  const structural = probe(product);
+  const result = {
+    platform: hostPlatform.name,
+    arch: hostPlatform.arch,
+    structural,
+  };
+  if (opts.loadGlue && structural.installed) {
+    try {
+      result.loaded = await describe(product);
+    } catch (error) {
+      result.loadError = String((error && error.message) || error).slice(0, 300);
+    }
+  }
+  return result;
+}
+
+module.exports = { locate, available, createSession, describe, diagnose, probe, installResources, fileHealth, buildPatchedModule, patchText, pickByStructure, findWorkerBootstrap };

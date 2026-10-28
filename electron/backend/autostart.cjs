@@ -4,9 +4,10 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const hostPlatform = require("./platform/index.cjs");
 
 function autostartDir(env = process.env, home = os.homedir()) {
-  return path.join(env.XDG_CONFIG_HOME || path.join(home, ".config"), "autostart");
+  return hostPlatform.paths.autostartDir({ env, home, platform: hostPlatform.name });
 }
 
 function desktopPath(env = process.env, home = os.homedir()) {
@@ -40,7 +41,7 @@ function desktopEntry(app) {
 }
 
 function applyLoginItem(app, enabled) {
-  if (process.platform === "linux") {
+  if (hostPlatform.isLinux()) {
     const file = desktopPath();
     if (!enabled) {
       fs.rmSync(file, { force: true });

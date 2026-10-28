@@ -45,6 +45,7 @@ const zcodeSwitch = require("./zcodeSwitch.cjs");
 const zcodeLocal = require("./zcodeLocal.cjs");
 const wbClient = require("./wbClient.cjs");
 const { roamingAppData } = require("../platform-paths.cjs");
+const hostPlatform = require("../platform/index.cjs");
 const wbCrypto = require("./wbCrypto.cjs");
 
 /** 渠道 → 本机登录文件名（两区共用一个 auth 目录，只能靠文件名区分） */
@@ -541,10 +542,10 @@ function wbDataDir() {
   if (process.env.LOCALAPPDATA) {
     dirs.push(path.join(process.env.LOCALAPPDATA, "CodeBuddyExtension", "Data"));
   }
-  if (process.platform === "darwin") {
+  if (hostPlatform.isMac()) {
     dirs.push(path.join(os.homedir(), "Library", "Application Support", "CodeBuddyExtension", "Data"));
   }
-  if (process.platform === "linux") {
+  if (hostPlatform.isLinux()) {
     if (process.env.XDG_DATA_HOME) dirs.push(path.join(process.env.XDG_DATA_HOME, "CodeBuddyExtension", "Data"));
     dirs.push(path.join(os.homedir(), ".local", "share", "CodeBuddyExtension", "Data"));
     if (process.env.XDG_CONFIG_HOME) dirs.push(path.join(process.env.XDG_CONFIG_HOME, "CodeBuddyExtension", "Data"));
@@ -973,7 +974,7 @@ function verifyWritten(file, token, uid, beforeKeys) {
 }
 
 /** IDE 切换能力探测（决定号池页按钮是否可用）：逐渠道报本机登录文件与当前 uid。
- *  刻意不做「客户端是否在运行」的进程探测：那要走同步 tasklist（单个约 350ms，多渠道累计 1 秒以上），
+ *  刻意不做「客户端是否在运行」的进程探测：那要走同步平台进程服务（多渠道累计会明显拖慢），
  *  而本接口在号池页每次刷新都会被调用，会把主进程反复堵死。该字段也一直没有消费方——
  *  切号确认框里的「正在运行」取自 precheckSwitch 的实时探测（那里必须实时，不能缓存）。
  *  将来若确有需要，请在切号流程内按需探测，不要加回这个高频接口。 */

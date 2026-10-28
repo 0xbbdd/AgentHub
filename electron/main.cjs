@@ -12,7 +12,17 @@
 // 技能仓库后台能力：定时 WebDAV 同步调度、自动感知收纳、软件自更新
 "use strict";
 const path = require("node:path");
+const hostPlatform = require("./backend/platform/index.cjs");
 const { app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain, nativeTheme, Notification, globalShortcut } = require("electron");
+const desktopSession = hostPlatform.desktop.session();
+// Wayland 下 Electron 全局快捷键依赖 XDG GlobalShortcutsPortal；必须在 app ready 前开启。
+hostPlatform.desktop.enableWaylandGlobalShortcuts(app);
+hostPlatform.runtimeState.setGlobalShortcut({
+  available: !!globalShortcut && typeof globalShortcut.register === "function",
+  reason: desktopSession.isWayland
+    ? (desktopSession.globalShortcutHint || "Wayland 全局快捷键由合成器授权")
+    : "",
+});
 
 // ===== 闪退取证（本地补丁 __agenthubCrashTrace）=====
 // 1.42.0 出现静默退出：Windows 无 Application Error 事件、无 minidump、应用自身零日志，
@@ -145,6 +155,7 @@ app.setName("AgentHub");
 
 let mainWindow = null;
 let tray = null;
+let trayAvailable = null;
 let quitting = false;
 
 /** 资源目录：打包后为 process.resourcesPath 的相邻 build，开发时为项目 build/ */
@@ -307,6 +318,7 @@ function createWindow() {
     const cfg = config.loadConfig();
     const action = windowMode.decideCloseAction({
       quitting,
+      trayAvailable,
       minimizeToTray: !!(cfg.schedule && cfg.schedule.minimizeToTray),
       lightweightMode: !!(cfg.schedule && cfg.schedule.lightweightMode),
     });
@@ -368,6 +380,12 @@ function setupShortcut() {
       log: (kind, detail) => __crashLog(kind, detail),
     });
   }
+  hostPlatform.runtimeState.setGlobalShortcut({
+    available: !!globalShortcut && typeof globalShortcut.register === "function",
+    reason: desktopSession.isWayland
+      ? (desktopSession.globalShortcutHint || "Wayland 全局快捷键由合成器授权")
+      : "",
+  });
   const st = shortcutRegistrar.set(acc);
   if (st.error) __crashLog("shortcut-invalid", String(st.error));
   return st;
@@ -640,12 +658,24 @@ function toggleLightweightMode(next) {
 }
 
 function createTray() {
-  const icon = iconPath("tray.png");
-  tray = new Tray(icon.isEmpty() ? iconPath("icon.png") : icon);
-  tray.setToolTip("AgentHub · Agent中控台");
-  refreshTrayMenu();
-  tray.on("double-click", showWindow);
-  if (process.platform === "linux") tray.on("click", showWindow);
+  try {
+    const icon = iconPath("tray.png");
+    tray = new Tray(icon.isEmpty() ? iconPath("icon.png") : icon);
+    tray.setToolTip("AgentHub · Agent中控台");
+    trayAvailable = true;
+    hostPlatform.runtimeState.setTray({ available: true, reason: desktopSession.trayHint || "" });
+    refreshTrayMenu();
+    tray.on("double-click", showWindow);
+    if (hostPlatform.isLinux()) tray.on("click", showWindow);
+    return true;
+  } catch (e) {
+    tray = null;
+    trayAvailable = false;
+    const reason = `系统托盘不可用：${String((e && e.message) || e)}`;
+    hostPlatform.runtimeState.setTray({ available: false, reason });
+    __crashLog("tray-unavailable", reason);
+    return false;
+  }
 }
 
 // ===== 桌面通知：默认仅同步失败提醒，设置里可开启「成功也通知」；失败持续期间不重复弹 =====
@@ -740,6 +770,15 @@ if (!gotLock) {
   if (!ALLOW_MULTI) app.on("second-instance", () => showWindow());
 
   app.whenReady().then(() => {
+    // 建窗前先处理历史明文凭据：有安全后端则就地迁移，生产无后端则清除并让 UI 明确提示。
+    for (const [name, mod] of [["framework", config], ["usage", usageConfig]]) {
+      try {
+        const r = mod.protectSensitiveDataAtRest();
+        if (r && r.changed) __crashLog("secure-storage-migration", `${name} migrated=${r.migrated} dropped=${r.dropped}`);
+      } catch (e) {
+        __crashLog("secure-storage-migration-failed", `${name}: ${__describe(e)}`);
+      }
+    }
     // 建窗前先应用主题，避免深色配置下标题栏先白后黑闪烁
     const bootCfg = config.loadConfig();
     // 同步配置留痕（issue #146 猜想 1）：崩溃日志里一眼能看出崩时有没有配 WebDAV、
@@ -785,8 +824,9 @@ if (!gotLock) {
     // 记忆中枢：仓库初始化 + 本地 HTTP API（供 MCP 桥转发）+ 目录监听；失败只影响本模块
     //（boot 内部有 modules.memory.enabled 短路，无需在此判断）
     memory.boot().catch((e) => __crashLog("memory-boot-failed", __describe(e)));
-    createWindow();
+    // 先创建托盘再加载窗口：能力矩阵首轮查询就能拿到真实 tray.available。
     createTray();
+    createWindow();
     if (on("skills")) {
       scheduler.start();
       watch.start();
@@ -844,6 +884,7 @@ if (!gotLock) {
   });
 
   app.on("window-all-closed", () => {
-    // Windows 下常驻托盘，不随窗口关闭退出（定时同步要后台跑）
+    // 有托盘时常驻后台；托盘创建失败时必须退出，避免窗口关闭后成为无入口进程。
+    if (trayAvailable === false) app.quit();
   });
 }

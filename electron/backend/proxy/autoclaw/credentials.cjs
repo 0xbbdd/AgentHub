@@ -9,14 +9,15 @@
  * ============================================================
  */
 // 反代网关 · AutoClaw 桌面端登录态读取
-// 新版按地区分别存于 %APPDATA%/AutoClaw-official 与 AutoClaw-oversea-official；
-// 旧版 %APPDATA%/AutoClaw/auth.json 与 ~/.openclaw-autoclaw/openclaw.json 继续兼容。
+// 新版按地区分别存于平台应用数据目录中的 AutoClaw-official / AutoClaw-oversea-official；
+// v10 登录态通过 DPAPI / Keychain / Secret Service 解密钥；旧版 auth.json 与 openclaw.json 继续兼容。
 "use strict";
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { roamingAppData } = require("../../platform-paths.cjs");
-const qoderAuth = require("../qoderAuth.cjs");
+const hostPlatform = require("../../platform/index.cjs");
+const chromiumCrypto = require("../../platform/chromium-crypto.cjs");
 const { jwtDecode } = require("../util.cjs");
 
 const MAX_AUTH_FILE_SIZE = 256 * 1024;
@@ -60,21 +61,37 @@ function readJsonFile(file, label) {
 }
 
 function loadOsCryptKey(localStatePath) {
-  if (process.platform !== "win32") return null;
   const state = readJsonFile(localStatePath, "AutoClaw Local State");
   const b64 = state && state.os_crypt && state.os_crypt.encrypted_key;
-  if (!b64) return null;
-  try { return qoderAuth.dpapiUnprotectKey(b64); } catch { return null; }
+  const product = path.basename(path.dirname(localStatePath));
+  try {
+    return chromiumCrypto.resolveMaterial({
+      platform: hostPlatform.name,
+      encryptedKeyB64: b64,
+      serviceNames: [
+        `${product} Safe Storage`,
+        "AutoClaw Safe Storage",
+        "AutoClaw CN Safe Storage",
+        "AutoClaw International Safe Storage",
+        "Electron Safe Storage",
+      ],
+      accountNames: [product, "AutoClaw", "AutoClaw-official", "AutoClaw-oversea-official"],
+      appNames: [product, "autoclaw", "AutoClaw", "electron"],
+      allowBasicText: false,
+    });
+  } catch {
+    return null;
+  }
 }
 
 function decryptV10Json(blob, key) {
   if (!Buffer.isBuffer(blob) || blob.length < 32 || blob.subarray(0, 3).toString("ascii") !== "v10") {
     throw new Error("AutoClaw 凭据不是合法 v10 信封");
   }
-  if (!key) throw new Error("登录态是加密格式但无法取得解密密钥（仅支持 Windows 上已登录的 AutoClaw 客户端）");
+  if (!key) throw new Error("登录态是加密格式但无法取得系统安全存储密钥");
   let plain;
-  try { plain = qoderAuth.decryptV10(blob, key).toString("utf8").replace(/^﻿/, ""); }
-  catch { throw new Error("AutoClaw 登录态解密失败（常见于与客户端不同的 Windows 用户）"); }
+  try { plain = chromiumCrypto.decryptV10Auto(blob, key).plain.toString("utf8").replace(/^﻿/, ""); }
+  catch { throw new Error("AutoClaw 登录态解密失败（需与客户端同一系统用户并允许访问钥匙串）"); }
   try { return JSON.parse(plain); }
   catch (e) { throw new Error(`AutoClaw 凭据解密后不是有效 JSON：${String((e && e.message) || e).slice(0, 80)}`); }
 }
@@ -86,9 +103,9 @@ function decryptEncValue(value, key) {
   const b64 = raw.slice(4).trim();
   const blob = Buffer.from(b64, "base64");
   if (!b64 || blob.length < 32 || blob.subarray(0, 3).toString("ascii") !== "v10") throw new Error("AutoClaw 加密字段不是合法 v10/base64");
-  if (!key) throw new Error("登录态是加密格式但无法取得解密密钥（仅支持 Windows 上已登录的 AutoClaw 客户端）");
-  try { return qoderAuth.decryptV10(blob, key).toString("utf8").replace(/^Bearer\s+/i, "").trim(); }
-  catch { throw new Error("AutoClaw 登录态解密失败（常见于与客户端不同的 Windows 用户）"); }
+  if (!key) throw new Error("登录态是加密格式但无法取得系统安全存储密钥");
+  try { return chromiumCrypto.decryptV10Auto(blob, key).plain.toString("utf8").replace(/^Bearer\s+/i, "").trim(); }
+  catch { throw new Error("AutoClaw 登录态解密失败（需与客户端同一系统用户并允许访问钥匙串）"); }
 }
 
 function uidFromToken(token) {

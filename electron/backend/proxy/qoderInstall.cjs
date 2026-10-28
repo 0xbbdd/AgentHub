@@ -29,6 +29,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { localAppData: defaultLocalAppData } = require("../platform-paths.cjs");
+const hostPlatform = require("../platform/index.cjs");
 
 /** 产品 → exeLabel（安装目录名，与 qoderAuth.PRODUCTS 共用同一份事实源） */
 const EXE_LABELS = { qoder: "Qoder CN", qoder_intl: "Qoder" };
@@ -68,8 +69,9 @@ function sameProductDir(dirName, exeLabel) {
   return wantCn === isCn;
 }
 
-/** launcher 形态候选：扫 %LOCALAPPDATA% 下属于该产品的目录里的 *Launcher*（不猜死目录名） */
+/** launcher 形态候选：扫 %LOCALAPPDATA% 下属于该产品的目录里的 *Launcher*（仅 Windows） */
 function launcherResources(exeLabel) {
+  if (!hostPlatform.isWindows()) return [];
   const local = localAppData();
   const out = [];
   let subs = [];
@@ -149,16 +151,44 @@ function registryResources(exeLabel) {
   return out;
 }
 
-/** 常规候选（文件系统直查，零外部进程）：环境变量覆盖 → 默认安装 → 解包直装 → launcher */
+/** 三平台文件系统候选（纯函数，便于跨平台测试）。 */
+function platformCandidates(product, opts = {}) {
+  const exeLabel = EXE_LABELS[product];
+  if (!exeLabel) return [];
+  const name = opts.platform || hostPlatform.name;
+  const home = opts.home || os.homedir();
+  const local = opts.localAppData || localAppData();
+  const out = [];
+  if (name === "win32") {
+    out.push(path.join(local, "Programs", exeLabel, "resources"));
+    out.push(path.join(local, exeLabel, "resources"));
+    return out;
+  }
+  if (name === "darwin") {
+    const wantCn = /\bCN\b/i.test(exeLabel);
+    const apps = wantCn ? ["Qoder CN.app", "QoderCN.app"] : ["Qoder.app", "Qoder International.app"];
+    for (const base of ["/Applications", path.join(home, "Applications")]) {
+      for (const app of apps) out.push(path.join(base, app, "Contents", "Resources"));
+    }
+    return out;
+  }
+  if (name === "linux") {
+    const slug = exeLabel.toLowerCase().replace(/\s+/g, "-");
+    out.push(`/opt/${exeLabel}/resources`, `/opt/${slug}/resources`, `/usr/lib/${slug}/resources`, `/usr/share/${slug}/resources`);
+    out.push(path.join(home, ".local", "share", exeLabel, "resources"), path.join(home, ".local", "share", slug, "resources"));
+    return out;
+  }
+  return out;
+}
+
+/** 常规候选（文件系统直查，零外部进程）：环境变量覆盖 → 平台默认安装 → Windows launcher */
 function fastCandidates(product) {
   const exeLabel = EXE_LABELS[product];
   if (!exeLabel) return [];
-  const local = localAppData();
   const out = [];
   const env = ENV_KEYS[product] && process.env[ENV_KEYS[product]];
   if (env) out.push(env);
-  out.push(path.join(local, "Programs", exeLabel, "resources"));
-  out.push(path.join(local, exeLabel, "resources"));
+  out.push(...platformCandidates(product));
   out.push(...launcherResources(exeLabel));
   return [...new Set(out.filter(Boolean))];
 }
@@ -170,6 +200,7 @@ function fastCandidates(product) {
  * 但调用方此前无条件执行，实现与注释不符）。
  */
 function registryCandidates(product) {
+  if (!hostPlatform.isWindows()) return [];
   const exeLabel = EXE_LABELS[product];
   if (!exeLabel) return [];
   return [...new Set(registryResources(exeLabel).filter(Boolean))];
@@ -203,7 +234,14 @@ function findResources(product) {
 /** 风控身份生成器（领取接口必需，见 qoderAuth.readRiskIdentity） */
 function runtimeInfoPath(product) {
   const res = findResources(product);
-  return res ? path.join(res, "umid", "runtime-info.exe") : "";
+  if (!res) return "";
+  const dir = path.join(res, "umid");
+  const names = hostPlatform.isWindows() ? ["runtime-info.exe"] : ["runtime-info", "runtime-info.exe"];
+  for (const name of names) {
+    const file = path.join(dir, name);
+    if (fs.existsSync(file)) return file;
+  }
+  return path.join(dir, names[0]);
 }
 
 /** 清缓存（自测用：安装目录是探测结果，测试要能重放） */
@@ -212,4 +250,4 @@ function clearCache() {
   regBlocks = null;
 }
 
-module.exports = { EXE_LABELS, ENV_KEYS, findResources, runtimeInfoPath, clearCache, readLauncherIni, sameProductDir, queryRegBlocks, localAppData };
+module.exports = { EXE_LABELS, ENV_KEYS, platformCandidates, findResources, runtimeInfoPath, clearCache, readLauncherIni, sameProductDir, queryRegBlocks, localAppData };

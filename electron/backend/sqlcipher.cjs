@@ -21,6 +21,7 @@
 "use strict";
 const fs = require("node:fs");
 const path = require("node:path");
+const hostPlatform = require("./platform/index.cjs");
 
 let koffi = null;
 function requireKoffi() {
@@ -42,11 +43,11 @@ let loadError = null;
 /** 当前平台 SQLCipher 动态库名。原生库按 resources/sqlcipher/<platform>-<arch>/ 存放；
  *  Windows x64 兼容旧版平铺目录，已有发布资源无需迁移即可继续工作。 */
 function nativeNames() {
-  if (process.platform === "win32") {
+  if (hostPlatform.isWindows()) {
     return { main: "sqlcipher.dll", deps: ["libcrypto-1_1-x64.dll", "libssl-1_1-x64.dll"] };
   }
-  if (process.platform === "darwin") return { main: "libsqlcipher.dylib", deps: ["libcrypto.3.dylib"] };
-  if (process.platform === "linux") return { main: "libsqlcipher.so", deps: ["libcrypto.so.3"] };
+  if (hostPlatform.isMac()) return { main: "libsqlcipher.dylib", deps: ["libcrypto.3.dylib"] };
+  if (hostPlatform.isLinux()) return { main: "libsqlcipher.so", deps: ["libcrypto.so.3"] };
   return null;
 }
 
@@ -57,9 +58,9 @@ function nativeDir() {
   if (process.resourcesPath) roots.push(path.join(process.resourcesPath, "sqlcipher"));
   roots.push(path.join(__dirname, "..", "..", "resources", "sqlcipher"));
   for (const root of roots) {
-    const dirs = [path.join(root, `${process.platform}-${process.arch}`)];
+    const dirs = [path.join(root, `${hostPlatform.name}-${hostPlatform.arch}`)];
     // 旧版平铺资源仅是 Windows x64 DLL；其他平台不能误把该目录当成本机原生库。
-    if (process.platform === "win32" && process.arch === "x64") dirs.push(root);
+    if (hostPlatform.isWindows() && hostPlatform.arch === "x64") dirs.push(root);
     for (const dir of dirs) {
       if (fs.existsSync(path.join(dir, names.main))) return dir;
     }
@@ -74,13 +75,13 @@ function ensureLib() {
   try {
     const ffi = requireKoffi();
     const names = nativeNames();
-    if (!names) throw new Error(`当前平台不支持 SQLCipher：${process.platform}-${process.arch}`);
+    if (!names) throw new Error(`当前平台不支持 SQLCipher：${hostPlatform.name}-${hostPlatform.arch}`);
     const dir = nativeDir();
-    if (!dir) throw new Error(`缺少 SQLCipher 原生库：resources/sqlcipher/${process.platform}-${process.arch}/${names.main}`);
+    if (!dir) throw new Error(`缺少 SQLCipher 原生库：resources/sqlcipher/${hostPlatform.name}-${hostPlatform.arch}/${names.main}`);
     for (const dep of names.deps) {
       const file = path.join(dir, dep);
       if (!fs.existsSync(file)) {
-        throw new Error(`缺少 SQLCipher 依赖库：resources/sqlcipher/${process.platform}-${process.arch}/${dep}`);
+        throw new Error(`缺少 SQLCipher 依赖库：resources/sqlcipher/${hostPlatform.name}-${hostPlatform.arch}/${dep}`);
       }
       ffi.load(file);
     }

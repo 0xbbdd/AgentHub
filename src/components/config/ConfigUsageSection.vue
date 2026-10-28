@@ -16,6 +16,7 @@ import { computed, ref, watch } from "vue";
 import { useSyncStore } from "../../stores/sync";
 import { useAppStore } from "../../stores/app";
 import { useUsageStore } from "../../stores/usage";
+import { usePlatformStore } from "../../stores/platform";
 import * as api from "../../api/sync";
 import { TOTAL_MODES, GROUP_PREFIX } from "../../types/sync";
 import type { TotalMode, SourceHealth, TopBarItem } from "../../types/sync";
@@ -23,6 +24,7 @@ import type { TotalMode, SourceHealth, TopBarItem } from "../../types/sync";
 const app = useSyncStore();
 const framework = useAppStore();
 const usage = useUsageStore();
+const platform = usePlatformStore();
 const cfg = app.config;
 
 // 页面内的二级子板块：数据源 / 工具栏切换项 / 调度 / 数据
@@ -62,7 +64,15 @@ async function autoSave() {
     window.setTimeout(() => { saveResult.value = null; }, 3200);
   }
 }
+function sourceBlocked(source: string): boolean {
+  return platform.sourceBlocked(source);
+}
+function sourceReason(source: string): string {
+  return platform.sourceReason(source);
+}
+
 async function detect(source: string) {
+  if (sourceBlocked(source)) return;
   const r = await api.detectSource(source);
   // 探测永远指向该源的默认目录，因此不写入 dataDir 钉死路径；
   // 并清掉旧版本可能留下的固定值，恢复「自动探测」语义（有变化才落盘）
@@ -79,6 +89,11 @@ async function detect(source: string) {
   }
 }
 async function toggleSource(source: string) {
+  if (sourceBlocked(source)) {
+    saveResult.value = { ok: false, message: `当前平台不可用：${sourceReason(source) || "该数据源缺少本平台实现"}` };
+    window.setTimeout(() => { saveResult.value = null; }, 3200);
+    return;
+  }
   const item = cfg.sources.find((entry) => entry.source === source);
   if (item) {
     item.enabled = !item.enabled;
@@ -254,10 +269,16 @@ async function resetCache() {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
           数据源
         </div>
-        <div v-for="h in health" :key="h.source" class="switch-row">
+        <div v-for="h in health" :key="h.source" class="switch-row" :class="{ 'platform-blocked-row': sourceBlocked(h.source) }">
           <div class="s-left">
-            <div class="s-title">{{ h.name }}</div>
-            <div class="s-desc">
+            <div class="s-title">
+              {{ h.name }}
+              <span v-if="sourceBlocked(h.source)" class="tag tag-err">当前平台不可用</span>
+            </div>
+            <div v-if="sourceBlocked(h.source)" class="s-desc source-platform-reason">
+              {{ sourceReason(h.source) || "该数据源缺少本平台实现" }}
+            </div>
+            <div v-else class="s-desc">
               <template v-if="h.readable">{{ h.dataDir }} · <span style="color: var(--ok)">可读取</span><span v-if="!app.isSourceEnabled(h.source)" style="color: var(--accent-strong)"> · 检测到可用数据，可一键启用</span></template>
               <template v-else-if="h.detected">{{ h.dataDir }} · <span style="color: var(--err)">数据不可读取</span></template>
               <template v-else>未检测到数据目录</template>
@@ -267,16 +288,18 @@ async function resetCache() {
             <el-tooltip v-if="h.readable && !app.isSourceEnabled(h.source)" content="检测到本机有该源的可用数据，点击立即接入" placement="top">
               <button
                 class="btn-outline"
+                :disabled="sourceBlocked(h.source)"
                 @click="toggleSource(h.source)"
               >一键启用</button>
             </el-tooltip>
-            <button class="btn-outline" @click="detect(h.source)">重新探测</button>
-            <el-tooltip :content="app.isSourceEnabled(h.source) ? '停用数据源' : '启用数据源'" placement="top">
+            <button class="btn-outline" :disabled="sourceBlocked(h.source)" @click="detect(h.source)">重新探测</button>
+            <el-tooltip :content="sourceBlocked(h.source) ? (sourceReason(h.source) || '当前平台不可用') : (app.isSourceEnabled(h.source) ? '停用数据源' : '启用数据源')" placement="top">
               <div
                 class="switch"
-                :class="{ on: cfg.sources.find((item) => item.source === h.source)?.enabled }"
+                :class="{ on: cfg.sources.find((item) => item.source === h.source)?.enabled, disabled: sourceBlocked(h.source) }"
                 role="switch"
                 :aria-checked="!!cfg.sources.find((item) => item.source === h.source)?.enabled"
+                :aria-disabled="sourceBlocked(h.source)"
                 @click="toggleSource(h.source)"
               ></div>
             </el-tooltip>
@@ -473,5 +496,16 @@ async function resetCache() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.platform-blocked-row {
+  opacity: 0.72;
+}
+.source-platform-reason {
+  color: var(--err, #e05555);
+}
+.switch.disabled {
+  opacity: 0.4;
+  pointer-events: none;
 }
 </style>

@@ -537,7 +537,7 @@ function register(ipcMain) {
     return ok({});
   }));
   ipcMain.handle("memory_config_export", handle(() => {
-    // 导出不带 Key：apiKeyRef 自 v1.23.0 起是明文，随 JSON 外发即泄密。
+    // 导出不带 Key：即使本地是信封，也没有把凭据随配置外发的必要。
     // settings() 返回的是 MemoryConfig 的内存缓存对象（all() 直接返回 _cache），必须深拷贝后再抹 Key——
     // 原地改会把运行中配置的 apiKeyRef 清空，此后所有 LLM 调用取不到 Key，直到配置文件被重新读取。
     const tree = JSON.parse(JSON.stringify(settings() || {}));

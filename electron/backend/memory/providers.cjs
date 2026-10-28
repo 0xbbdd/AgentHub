@@ -16,8 +16,8 @@
  */
 
 // 记忆中枢 · 供应商与模型管理：CRUD、API Key 落盘、拉取模型、能力/标签自动猜测、兼容性日志。
-// Key 自 v1.23.0 起明文存配置（用户明确要求），读取侧统一走 decryptSecret（明文直通，兼容旧密文）；
-// 渲染层拿到的一律是掩码；导出配置时不带 Key（修正清单 §27.3.2 / §27.7）。
+// Key 统一走 secure-store 信封：桌面用系统钥匙串，headless 用 AES-GCM；打包版无后端时拒绝明文落盘。
+// 读取侧兼容历史明文与旧密文；渲染层拿到的一律是掩码，导出配置时不带 Key。
 "use strict";
 
 const crypto = require("crypto");
@@ -86,15 +86,46 @@ class ProviderStore {
     this.gatewayResolver = opts.gatewayResolver || (() => null);
     /** 兼容性修正日志（内存 + 落盘到 llm_call 之外的轻量文件） */
     this.quirkLog = [];
+    /** 打包环境缺少安全存储时，旧明文 Key 无法自动迁移；新写入会直接失败 */
+    this.secretMigrationError = "";
+    try {
+      this.migratePlaintextKeys();
+    } catch (e) {
+      this.secretMigrationError = String((e && e.message) || e);
+    }
   }
 
   flat() {
     return this.service.flat();
   }
 
+  /** 写库前统一封信：历史明文 Key 在第一次成功保存时迁移，新 Key 不落明文。 */
+  _sealProviderKeys(list) {
+    return (Array.isArray(list) ? list : []).map((provider) => {
+      const ref = provider && provider.apiKeyRef;
+      if (!ref || frameworkConfig.isEncrypted(ref)) return provider;
+      return { ...provider, apiKeyRef: frameworkConfig.encryptSecret(ref) };
+    });
+  }
+
+  /** 启动时处理旧明文 Key：有后端则加密；生产无后端则清除，避免继续使用明文凭据。 */
+  migratePlaintextKeys() {
+    const list = this.flat()["models.providers"] || [];
+    if (!list.some((p) => p && p.apiKeyRef && !frameworkConfig.isEncrypted(p.apiKeyRef))) return false;
+    const status = frameworkConfig.secureStorageStatus();
+    if (!status.encrypted && status.policy && status.policy.failClosed) {
+      this._saveProviders(list.map((provider) => ({ ...provider, apiKeyRef: "" })));
+      this.secretMigrationError = status.reason || "安全存储不可用，历史明文 API Key 已清除";
+      return "dropped";
+    }
+    this._saveProviders(list);
+    return "migrated";
+  }
+
   // memCfg.set 校验失败返回 {ok:false}，必须抛出去，否则写库失败会被静默成成功
   _saveProviders(list) {
-    const r = this.memCfg.set({ "models.providers": list }, { local: true });
+    const sealed = this._sealProviderKeys(list);
+    const r = this.memCfg.set({ "models.providers": sealed }, { local: true });
     if (r && r.ok === false) throw new Error((r.errors || []).join("；") || "供应商配置写入失败");
     this.emit({ type: "provider-status", detail: "供应商配置已更新" });
   }
@@ -150,8 +181,8 @@ class ProviderStore {
     }
     let apiKeyRef = prev ? prev.apiKeyRef : "";
     if (hasNewKey) {
-      // v1.23.0 起按用户要求明文落盘（不再过 safeStorage 信封）；旧密文靠 decryptSecret 的明文直通与兼容读取
-      apiKeyRef = String(input.apiKey);
+      // 新 Key 立即封信；生产环境无系统钥匙串且未配置 AGENTHUB_SECRET_KEY 时这里会拒绝保存
+      apiKeyRef = frameworkConfig.encryptSecret(String(input.apiKey));
     }
     const entry = {
       id: prev ? prev.id : newId("prov"),

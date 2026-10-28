@@ -27,6 +27,7 @@
 "use strict";
 const fs = require("node:fs");
 const path = require("node:path");
+const hostPlatform = require("./platform/index.cjs");
 const { normalizeModel, providerName } = require("./adapter-zcode.cjs");
 
 const ID = "reasonix";
@@ -56,7 +57,7 @@ function candidateRoots() {
     const v = expand(process.env[key]);
     if (v) out.push(v);
   }
-  if (process.platform === "win32" && process.env.APPDATA) {
+  if (hostPlatform.isWindows() && process.env.APPDATA) {
     out.push(path.join(process.env.APPDATA, "reasonix"));
   }
   out.push(path.join(homeDir(), ".reasonix"));

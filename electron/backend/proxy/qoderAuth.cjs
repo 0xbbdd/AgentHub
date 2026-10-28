@@ -23,8 +23,8 @@
 //   · WB 有 .logged-out 标记与历史快照；Qoder 只有当前一份凭据（无考古能力）。
 //   · refresh_token 为轮换制：刷新返回新 dt-+drt-，旧 drt- 宽限期内仍可用一次（实测）。
 //
-// DPAPI 调用方式：Electron 主进程无内置 CryptUnprotectData，走 powershell.exe 一次性进程
-// （实测可用；后续可换原生模块优化启动耗时）。
+// 系统凭据：Windows 走 DPAPI；macOS 走 Keychain；Linux 走 Secret Service。
+// GCM/CBC 两种 v10 形态统一由 platform/chromium-crypto.cjs 处理。
 "use strict";
 const fs = require("node:fs");
 const os = require("node:os");
@@ -33,6 +33,8 @@ const crypto = require("node:crypto");
 const { execFileSync } = require("node:child_process");
 const qoderInstall = require("./qoderInstall.cjs");
 const { roamingAppData } = require("../platform-paths.cjs");
+const hostPlatform = require("../platform/index.cjs");
+const chromiumCrypto = require("../platform/chromium-crypto.cjs");
 
 /** 双渠道目录定义：appId 目录名 + 用户主目录 + 产品 id */
 const PRODUCTS = {
@@ -171,61 +173,63 @@ function detectAll() {
   return out;
 }
 
-// ===== DPAPI（powershell 一次性进程）=====
+// ===== 系统安全存储 / v10 信封 =====
 
 let dpapiCache = null;
+const keyMaterialCache = new Map();
 
-/**
- * 用 powershell.exe 调 CryptUnprotectData（CurrentUser）解出 32B AES key。
- * 输入：Local State 的 os_crypt.encrypted_key（base64，含 "DPAPI" 前缀）。
- * 返回 Buffer(32)；失败抛错（调用方降级为「无法解密，请确认 AgentHub 与客户端同一 Windows 用户」）。
- */
+/** Windows DPAPI 兼容入口；macOS/Linux 由 chromiumCrypto 读取 Keychain/Secret Service。 */
 function dpapiUnprotectKey(b64) {
   if (dpapiCache && dpapiCache.b64 === b64) return dpapiCache.key;
-  const raw = Buffer.from(b64, "base64");
-  const magic = raw.subarray(0, 5).toString("ascii");
-  if (magic !== "DPAPI") throw new Error(`os_crypt 前缀异常：${magic}`);
-  const wrapped = raw.subarray(5); // CryptUnprotectData 吃的是 DPAPI blob，不含 "DPAPI" 魔数
-  const script = [
-    "$ErrorActionPreference='Stop'",
-    "Add-Type -AssemblyName System.Security | Out-Null",
-    `$b=[Convert]::FromBase64String('${wrapped.toString("base64")}')`,
-    "$k=[System.Security.Cryptography.ProtectedData]::Unprotect($b,$null,[System.Security.Cryptography.DataProtectionScope]::CurrentUser)",
-    "[Convert]::ToBase64String($k)",
-  ].join("; ");
-  let out = "";
-  try {
-    out = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
-      encoding: "utf8",
-      windowsHide: true,
-      timeout: 15000,
-    }).trim();
-  } catch (e) {
-    throw new Error(`DPAPI 解密失败（需与 Qoder 客户端同一 Windows 用户）：${String((e && e.message) || e).slice(0, 120)}`);
-  }
-  const key = Buffer.from(out, "base64");
-  if (key.length !== 32) throw new Error(`DPAPI 返回密钥长度异常：${key.length}`);
+  const key = chromiumCrypto.dpapiUnprotectKey(b64);
   dpapiCache = { b64, key };
   return key;
 }
 
-// ===== v10 信封（AES-256-GCM）=====
+function keyMaterialFor(product, state, override) {
+  if (override) {
+    const candidate = typeof override === "function" ? override(state) : override;
+    if (Buffer.isBuffer(candidate)) return chromiumCrypto.materialFromKey(candidate, candidate.length === 16 ? "cbc" : "gcm");
+    if (candidate && Buffer.isBuffer(candidate.key)) return candidate;
+    throw new Error("注入的 Qoder 密钥材料无效");
+  }
+  const p = PRODUCTS[product];
+  const encryptedKeyB64 = state && state.os_crypt && state.os_crypt.encrypted_key;
+  const cacheKey = `${product}:${encryptedKeyB64 || ""}`;
+  if (keyMaterialCache.has(cacheKey)) return keyMaterialCache.get(cacheKey);
 
+  let material;
+  if (hostPlatform.isWindows()) {
+    if (!encryptedKeyB64) throw new Error("Local State 缺少 os_crypt.encrypted_key");
+    material = chromiumCrypto.materialFromKey(dpapiUnprotectKey(encryptedKeyB64), "gcm", "dpapi");
+  } else {
+    material = chromiumCrypto.resolveMaterial({
+      platform: hostPlatform.name,
+      encryptedKeyB64,
+      serviceNames: [
+        `${p.label} Safe Storage`,
+        "Qoder Safe Storage",
+        "Qoder CN Safe Storage",
+        "Qoder International Safe Storage",
+        p.appDir,
+        "Electron Safe Storage",
+      ],
+      accountNames: [p.label, "Qoder", p.appDir],
+      appNames: ["qoder", p.appDir, "Qoder", "electron"],
+      allowBasicText: false,
+    });
+  }
+  keyMaterialCache.set(cacheKey, material);
+  return material;
+}
+
+/** 兼容旧调用：显式 GCM 基元。 */
 function decryptV10(blob, key) {
-  if (blob.subarray(0, 3).toString("ascii") !== "v10") throw new Error("auth.v1.dat 魔数异常（非 v10 信封）");
-  const nonce = blob.subarray(3, 15);
-  const tag = blob.subarray(blob.length - 16);
-  const ct = blob.subarray(15, blob.length - 16);
-  const d = crypto.createDecipheriv("aes-256-gcm", key, nonce);
-  d.setAuthTag(tag);
-  return Buffer.concat([d.update(ct), d.final()]);
+  return chromiumCrypto.decryptGcm(blob, key);
 }
 
 function encryptV10(plain, key) {
-  const nonce = crypto.randomBytes(12);
-  const c = crypto.createCipheriv("aes-256-gcm", key, nonce);
-  const ct = Buffer.concat([c.update(plain), c.final()]);
-  return Buffer.concat([Buffer.from("v10", "ascii"), nonce, ct, c.getAuthTag()]);
+  return chromiumCrypto.encryptGcm(plain, key);
 }
 
 // ===== 读 / 写凭据 =====
@@ -244,15 +248,14 @@ function parseTimestampMs(v) {
 }
 
 /** 读渠道凭据：{ token, refreshToken, expiresAt(ms), refreshTokenExpiresAt(ms), user, machineId } */
-function readCredentials(product) {
+function readCredentials(product, opts = {}) {
   const p = pathsOf(product);
   if (!p) throw new Error(`未知渠道 ${product}`);
   if (!fs.existsSync(p.authFile)) throw new Error(`${PRODUCTS[product].label} 未登录（找不到 auth.v1.dat）`);
   const ls = JSON.parse(fs.readFileSync(p.localState, "utf8"));
-  const encKey = ls && ls.os_crypt && ls.os_crypt.encrypted_key;
-  if (!encKey) throw new Error("Local State 缺少 os_crypt.encrypted_key");
-  const key = dpapiUnprotectKey(encKey);
-  const store = JSON.parse(decryptV10(fs.readFileSync(p.authFile), key).toString("utf8"));
+  const material = keyMaterialFor(product, ls, opts.keyMaterial);
+  const decrypted = chromiumCrypto.decryptV10Auto(fs.readFileSync(p.authFile), material);
+  const store = JSON.parse(decrypted.plain.toString("utf8"));
   let machineId = "";
   try {
     machineId = fs.readFileSync(p.machineIdFile, "utf8").trim();
@@ -272,10 +275,14 @@ function readCredentials(product) {
  * 写回凭据（切号 / 与桌面端保持同步用）。
  * 元数据（machineId 等）**绝不写入此文件**——桌面端刷新时会整体覆盖它（对齐 raccoon 教训）。
  */
-function writeCredentials(product, cred) {
+function writeCredentials(product, cred, opts = {}) {
   const p = pathsOf(product);
   const ls = JSON.parse(fs.readFileSync(p.localState, "utf8"));
-  const key = dpapiUnprotectKey(ls.os_crypt.encrypted_key);
+  const material = keyMaterialFor(product, ls, opts.keyMaterial);
+  let mode = material.mode;
+  try {
+    mode = chromiumCrypto.decryptV10Auto(fs.readFileSync(p.authFile), material).mode;
+  } catch { /* 新文件/旧文件损坏时按平台默认模式写 */ }
   const iso = (ms) => (ms ? new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z") : "");
   const store = {
     schemaVersion: 1,
@@ -286,7 +293,7 @@ function writeCredentials(product, cred) {
     user: cred.user || {},
   };
   const tmp = `${p.authFile}.agenthub.tmp.${process.pid}`;
-  fs.writeFileSync(tmp, encryptV10(Buffer.from(JSON.stringify(store), "utf8"), key));
+  fs.writeFileSync(tmp, chromiumCrypto.encryptV10Auto(Buffer.from(JSON.stringify(store), "utf8"), material, mode));
   fs.renameSync(tmp, p.authFile); // 原子替换，避免桌面端读到半截文件
   return true;
 }

@@ -9,9 +9,24 @@
     "dev": "node tools/dev.cjs",
     "dev:web": "vite",
     "web": "vite --open",
-    "build": "npm run check:sfc && npm run check:ipc && vue-tsc --noEmit && vite build",
+    "build": "npm run verify:platform && npm run check:sfc && npm run check:ipc && vue-tsc --noEmit && vite build",
     "check:sfc": "node tools/check-sfc-components.cjs",
     "check:ipc": "node tools/check-ipc-commands.cjs",
+    "check:platform": "node tools/check-platform-boundaries.cjs",
+    "verify:platform": "npm run check:platform && node tools/check-platform-capabilities.cjs && node tools/platform-services-selftest.cjs && node tools/platform-process-selftest.cjs && node tools/chromium-crypto-selftest.cjs",
+    "platform:matrix": "node tools/print-platform-capabilities.cjs --all",
+    "platform:credential-check": "node tools/platform-credential-diagnose.cjs --attempt",
+    "platform:qoder-signer-check": "node tools/qoder-signer-acceptance.cjs --load-glue",
+    "release:assemble": "node tools/assemble-release.cjs",
+    "release:verify": "node tools/release-artifacts-selftest.cjs && node tools/release-signing-selftest.cjs && node tools/release-install-script-selftest.cjs && node tools/update-utils-selftest.cjs && node tools/secure-storage-selftest.cjs && node tools/crashlog-redaction-selftest.cjs && node tools/window-mode-selftest.cjs && node tools/release-workflow-selftest.cjs",
+    "security:storage-check": "node tools/secure-storage-selftest.cjs && node tools/crashlog-redaction-selftest.cjs",
+    "release:updater-e2e": "node tools/updater-e2e-smoke.cjs",
+    "release:updater-e2e:win": "node tools/updater-e2e-win.cjs",
+    "release:updater-e2e:mac": "node tools/updater-e2e-mac.cjs",
+    "e2e:electron": "node tools/electron-gui-e2e.cjs",
+    "e2e:window-mode": "node tools/window-mode-e2e.cjs",
+    "e2e:window-mode:main": "node tools/window-mode-main-e2e.cjs",
+    "e2e:secure-storage": "electron tools/electron-secure-storage-e2e.cjs",
     "preview": "vite preview",
     "electron:build": "npm run build && npm run native:prepare && electron-builder",
     "electron:pack": "npm run build && npm run native:prepare && electron-builder --dir",
@@ -46,7 +61,9 @@
     "electron": "^35.0.0",
     "electron-builder": "^24.13.3",
     "element-plus": "^2.14.5",
+    "js-yaml": "^4.3.2",
     "pinia": "^2.1.7",
+    "playwright-core": "^1.64.1",
     "typescript": "~5.3.3",
     "unplugin-vue-components": "^0.27.5",
     "vite": "^4.5.3",
@@ -86,6 +103,7 @@
       "**/*.node",
       "node_modules/@koromix/**"
     ],
+    "afterSign": "build/notarize.cjs",
     "extraResources": [
       {
         "from": "build/icon.png",
@@ -105,6 +123,10 @@
       }
     ],
     "win": {
+      "signingHashAlgorithms": [
+        "sha256"
+      ],
+      "rfc3161TimeStampServer": "http://timestamp.digicert.com",
       "target": [
         {
           "target": "nsis",
@@ -138,7 +160,8 @@
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.plist"
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "notarize": false
     },
     "linux": {
       "target": [

@@ -17,41 +17,22 @@ const path = require("node:path");
 // 数据源适配器（仅用于首次启动自动探测本机数据源，避免循环依赖时用 require 延迟加载）
 const adapter = require("./sync-adapter.cjs");
 
-// Electron safeStorage（主进程可用；纯 Node 环境如脚本直跑时降级明文）
-let safeStorage = null;
-try {
-  const electron = require("electron");
-  if (electron && typeof electron === "object" && electron.safeStorage) safeStorage = electron.safeStorage;
-} catch {
-  /* 非 Electron 环境 */
-}
-
-// 密文前缀：config.json 中 WebDAV 密码带此前缀表示经 safeStorage 加密（OS 级密钥，随系统用户绑定）
-const ENC_PREFIX = "enc:v1:";
+// 凭据信封与框架配置共用 secure-store：桌面走 safeStorage，headless 可用 AES-GCM，
+// 打包后的生产应用在后端不可用时 fail-closed，不再静默写明文。
+const secureStore = require("./platform/secure-store.cjs");
+const ENC_PREFIX = secureStore.ENC_PREFIX;
 // 密码掩码：load_config 回传渲染进程时用掩码替代明文（渲染层拿不到真实密码）；
 // save_config 收到精确掩码值时视为「未修改」，保留磁盘上的原密码
 const PASSWORD_MASK = "••••••••";
 
-/** 明文 → 密文；safeStorage 不可用时原样返回（降级明文存储） */
+/** 明文 → 信封；生产环境无可用后端时抛错，由 IPC 返回给用户。 */
 function encryptPassword(plain) {
-  if (!plain || typeof plain !== "string" || plain.startsWith(ENC_PREFIX)) return plain ?? "";
-  if (!safeStorage || !safeStorage.isEncryptionAvailable()) return plain;
-  try {
-    return ENC_PREFIX + safeStorage.encryptString(plain).toString("base64");
-  } catch {
-    return plain;
-  }
+  return secureStore.encrypt(plain);
 }
 
-/** 密文 → 明文；解密失败（密文来自其他机器/系统用户）返回空串，需重新填写 */
+/** 信封 → 明文；解不开或换机后密钥失效时返回空串，需重新填写。 */
 function decryptPassword(stored) {
-  if (!stored || typeof stored !== "string" || !stored.startsWith(ENC_PREFIX)) return stored ?? "";
-  if (!safeStorage) return "";
-  try {
-    return safeStorage.decryptString(Buffer.from(stored.slice(ENC_PREFIX.length), "base64"));
-  } catch {
-    return "";
-  }
+  return secureStore.decrypt(stored);
 }
 
 /**
@@ -511,6 +492,38 @@ function loadConfig() {
   }
 }
 
+/** 启动时迁移/清除历史明文；与框架 config.json 独立，因为用量模块有自己的配置目录。 */
+function protectSensitiveDataAtRest() {
+  const p = configPath();
+  if (!fs.existsSync(p)) return { ok: true, changed: false, migrated: 0, dropped: 0 };
+  let raw;
+  try {
+    raw = JSON.parse(fs.readFileSync(p, "utf8"));
+  } catch {
+    return { ok: false, changed: false, migrated: 0, dropped: 0, reason: "config.json 无法解析" };
+  }
+  const status = secureStore.status();
+  const canEncrypt = !!status.encrypted;
+  const strict = !!(status.policy && status.policy.failClosed);
+  if (!canEncrypt && !strict) return { ok: true, changed: false, migrated: 0, dropped: 0 };
+  let migrated = 0;
+  let dropped = 0;
+  const protect = (obj, key) => {
+    const value = obj && obj[key];
+    if (typeof value !== "string" || !value || secureStore.isEncrypted(value)) return;
+    obj[key] = canEncrypt ? encryptPassword(value) : "";
+    if (canEncrypt) migrated++;
+    else dropped++;
+  };
+  protect(raw.webdav, "password");
+  protect(raw.billing && raw.billing.newApi, "token");
+  if (!migrated && !dropped) return { ok: true, changed: false, migrated, dropped };
+  const tmp = `${p}.tmp.${process.pid}`;
+  fs.writeFileSync(tmp, JSON.stringify(raw, null, 2), "utf8");
+  fs.renameSync(tmp, p);
+  return { ok: true, changed: true, migrated, dropped };
+}
+
 /** 保存配置（先写临时文件再原子替换；WebDAV 密码落盘前经 safeStorage 加密） */
 function saveConfig(cfg) {
   const p = configPath();
@@ -527,7 +540,7 @@ function saveConfig(cfg) {
 
 
 module.exports = {
-  dataDir, dbPath, configPath, loadConfig, saveConfig, defaultConfig, isPortable, PASSWORD_MASK,
+  dataDir, dbPath, configPath, loadConfig, saveConfig, defaultConfig, isPortable, PASSWORD_MASK, protectSensitiveDataAtRest,
   defaultDataDir, customDataDir, setCustomDataDir, clearCustomDataDir, validateDataDir, migrateDataDir,
   resolveBackupDir, BACKUP_FILE,
 };

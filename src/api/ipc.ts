@@ -103,6 +103,15 @@ function unwrapResult<T>(cmd: string, res: unknown): T {
 
 /** 框架级命令永远走本地主进程：远程模式下也不能转发（否则「拉目标列表」会被转发到远程，成环） */
 const LOCAL_ONLY_CMDS = new Set([
+  "get_platform_capabilities",
+  "get_is_portable",
+  "get_update_status",
+  "check_update",
+  "download_update",
+  "install_update",
+  "clear_update_cache",
+  "open_release_page",
+  "open_repo_page",
   "remote_targets_list",
   "remote_targets_save",
   "remote_targets_delete",
@@ -143,6 +152,68 @@ export const saveConfig = (cfg: AppConfig) =>
 
 // ===== 框架：其它 =====
 export const getAppVersion = () => call<string>("get_app_version");
+
+export type PlatformCapabilityStatus = "supported" | "compatible" | "fallback" | "blocked" | "not-applicable";
+
+export interface PlatformCapabilityItem {
+  id: string;
+  label: string;
+  status: PlatformCapabilityStatus;
+  reason: string;
+}
+
+export interface PlatformChannelCapability {
+  id: string;
+  label: string;
+  localClient: boolean;
+  credentialDependency?: boolean;
+  inference: { status: PlatformCapabilityStatus; reason: string };
+  localImport: { status: PlatformCapabilityStatus; reason: string } | null;
+  ideSwitch: { status: PlatformCapabilityStatus; reason: string } | null;
+}
+
+export interface PlatformCapabilitySnapshot {
+  schema: number;
+  platform: { name: string; arch: string; supported: boolean };
+  runtime?: {
+    secureStorage: {
+      backend: "os-keychain" | "aes-256-gcm" | "plaintext-fallback";
+      encrypted: boolean;
+      platform: string;
+      policy?: {
+        failClosed: boolean;
+        plaintextAllowed: boolean;
+        packaged: boolean;
+        envFailClosed?: boolean;
+      };
+      reason?: string;
+    };
+    credentialBackend?: {
+      command: string;
+      path: string;
+      available: boolean;
+      reason: string;
+    };
+    desktop?: {
+      tray: { available: boolean | null; reason: string };
+      globalShortcut: { available: boolean | null; reason: string };
+      session: {
+        platform: string;
+        type: string;
+        desktop: string;
+        isWayland: boolean;
+        globalShortcutHint?: string;
+        trayHint?: string;
+      };
+    };
+  } | null;
+  features: Record<string, PlatformCapabilityItem>;
+  sources: PlatformCapabilityItem[];
+  channels: PlatformChannelCapability[];
+}
+
+/** 当前平台的真实能力矩阵。该命令只在本机主进程执行，不转发到远程网关。 */
+export const getPlatformCapabilities = () => call<PlatformCapabilitySnapshot>("get_platform_capabilities");
 export const getDataDir = () => call<string>("get_data_dir");
 export const openDataDir = () => call<void>("open_data_dir");
 // 等用户操作原生目录选择框，时长不可控，关掉看门狗
@@ -154,6 +225,7 @@ export const getUpdateStatus = () => call<UpdateStatus>("get_update_status");
 export const checkUpdate = () => call<UpdateStatus>("check_update");
 export const downloadUpdate = () => call<UpdateStatus>("download_update");
 export const installUpdate = () => call<UpdateStatus>("install_update");
+export const clearUpdateCache = () => call<UpdateStatus>("clear_update_cache");
 export const openReleasePage = () => call<void>("open_release_page");
 export const openRepoPage = () => call<void>("open_repo_page");
 
@@ -348,7 +420,7 @@ export const proxyCheckinAutoSet = (opts: { channel: ProxyChannelId; enabled: bo
     opts as unknown as Record<string, unknown>
   );
 /** 扫描本机已装软件的登录态（凭据不出主进程，只回候选信息） */
-export const proxyScan = () => call<ProxyScanCandidate[]>("proxy_scan");
+export const proxyScan = (channel?: ProxyChannelId) => call<ProxyScanCandidate[]>("proxy_scan", { channel });
 /** 导入本机候选；file/uid 用于身份核对（两次扫描之间文件变化时不至于导错账号） */
 export const proxyScanImport = (index: number, channel?: ProxyChannelId, file?: string, uid?: string) =>
   call<{ ok: boolean; id?: string; updated?: boolean; message?: string }>("proxy_scan_import", { index, channel, file, uid });

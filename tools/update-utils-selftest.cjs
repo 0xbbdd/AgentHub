@@ -1,0 +1,12 @@
+"use strict";
+const assert = require("node:assert/strict");
+const { classifyUpdateError, updaterCacheCandidates } = require("../electron/backend/update-utils.cjs");
+assert.equal(classifyUpdateError(new Error("sha512 checksum doesn't match")).kind, "checksum");
+assert.equal(classifyUpdateError(new Error("PublisherName mismatch in Authenticode signature")).kind, "signature");
+assert.equal(classifyUpdateError(new Error("EACCES: permission denied")).kind, "permission");
+assert.equal(classifyUpdateError(new Error("ENOSPC: no space left on device")).kind, "disk");
+assert.equal(classifyUpdateError(new Error("EROFS: read-only file system")).kind, "disk");
+assert.equal(classifyUpdateError(new Error("net::ERR_CONNECTION_RESET")).kind, "unknown");
+const candidates = updaterCacheCandidates({ cachePath: "/tmp/cache", name: "agenthub", productName: "AgentHub" });
+assert.deepEqual(candidates, ["/tmp/cache/agenthub-updater", "/tmp/cache/AgentHub-updater"]);
+console.log("更新错误分类自测通过");

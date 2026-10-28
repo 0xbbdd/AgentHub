@@ -40,9 +40,10 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { execSync, spawn } = require("node:child_process");
+const { execSync } = require("node:child_process");
 const config = require("../config.cjs");
 const { localAppData: defaultLocalAppData } = require("../platform-paths.cjs");
+const hostPlatform = require("../platform/index.cjs");
 
 const ENC_PREFIX = "enc:v1:";
 const NONCE_SIZE = 12;
@@ -54,7 +55,7 @@ function defaultSecret() {
   if (process.env.ZCODE_CREDENTIAL_SECRET) return process.env.ZCODE_CREDENTIAL_SECRET;
   let username = "unknown";
   try { username = os.userInfo().username; } catch { /* 拿不到用 unknown */ }
-  return `zcode-credential-fallback:${os.platform()}:${os.homedir()}:${username}`;
+  return `zcode-credential-fallback:${hostPlatform.name}:${os.homedir()}:${username}`;
 }
 
 function deriveKey(secret) {
@@ -841,46 +842,18 @@ function remoteMidState() {
 
 // ===== 进程控制（跨平台支持：Windows / macOS / Linux） =====
 
-/** 同步安全休眠（零 CPU 消耗，替代死循环忙等打满单核） */
-function syncSleep(ms) {
-  try {
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.max(1, ms));
-  } catch {
-    const end = Date.now() + ms;
-    while (Date.now() < end) { /* 降级兜底 */ }
-  }
-}
-
-/** ZCode 是否在跑（跨平台探测：Windows 用 tasklist，Unix 用 pgrep） */
+/** ZCode 是否在跑（Windows/macOS/Linux 共用参数化进程服务） */
 function isZcodeRunning() {
-  try {
-    if (process.platform === "win32") {
-      const out = execSync('tasklist /FI "IMAGENAME eq ZCode.exe" /NH', { encoding: "utf8", windowsHide: true });
-      return /^ZCode\.exe\s/im.test(out);
-    }
-    const out = execSync("pgrep -x ZCode || pgrep -x zcode || pgrep -i zcode", { encoding: "utf8", stdio: ["pipe", "pipe", "ignore"] });
-    return Boolean(out && out.trim());
-  } catch {
-    return false;
-  }
+  return hostPlatform.process.isAnyRunning(["ZCode", "zcode"]);
 }
 
 /** 强杀全部 ZCode 进程并等待退出（默认 8s 超时；杀不掉返回 false） */
 function killZcode(timeoutMs = 8000) {
-  if (!isZcodeRunning()) return true;
-  try {
-    if (process.platform === "win32") {
-      execSync("taskkill /F /IM ZCode.exe /T", { encoding: "utf8", windowsHide: true });
-    } else {
-      execSync("pkill -9 -x ZCode || pkill -9 -x zcode || pkill -9 -i zcode", { encoding: "utf8", stdio: ["pipe", "pipe", "ignore"] });
-    }
-  } catch { /* 进程可能刚退出 */ }
-  const deadline = Date.now() + Math.max(1000, timeoutMs);
-  while (Date.now() < deadline) {
-    if (!isZcodeRunning()) return true;
-    syncSleep(200); // 200ms 粒度无损休眠，不占 CPU
-  }
-  return !isZcodeRunning();
+  return hostPlatform.process.killMany(["ZCode", "zcode"], {
+    force: true,
+    tree: true,
+    timeoutMs: Math.max(1000, timeoutMs),
+  });
 }
 
 /** 安装路径候选表 + 运行中进程反查 */
@@ -903,13 +876,10 @@ function findZcodeExe() {
     "/opt/ZCode/zcode",
     path.join(home, ".local", "share", "ZCode", "zcode"),
   ];
-  for (const p of candidates) {
-    try {
-      if (fs.existsSync(p)) return p;
-    } catch { /* 下一个 */ }
-  }
+  const installed = hostPlatform.process.findExecutable(candidates);
+  if (installed) return installed;
   // Windows 下运行中进程反查（PowerShell 一次调用）
-  if (process.platform === "win32") {
+  if (hostPlatform.isWindows()) {
     try {
       const out = execSync('powershell -NoProfile -Command "Get-Process ZCode -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Path"', {
         encoding: "utf8",
@@ -919,11 +889,9 @@ function findZcodeExe() {
       if (out && fs.existsSync(out)) return out;
     } catch { /* 反查失败按未找到处理 */ }
   } else {
-    // Unix 平台 which 探测
-    try {
-      const out = execSync("which zcode || which ZCode", { encoding: "utf8", stdio: ["pipe", "pipe", "ignore"] }).trim();
-      if (out && fs.existsSync(out)) return out;
-    } catch { /* 未找到 */ }
+    // Unix 平台 PATH 探测
+    const found = hostPlatform.process.which("zcode") || hostPlatform.process.which("ZCode");
+    if (found && fs.existsSync(found)) return found;
   }
   return "";
 }
@@ -932,13 +900,7 @@ function findZcodeExe() {
 function launchZcode(exe) {
   const file = exe || findZcodeExe();
   if (!file) return { ok: false, message: "未找到 ZCode 可执行文件，请手动启动客户端" };
-  try {
-    const child = spawn(file, [], { detached: true, stdio: "ignore", windowsHide: false });
-    child.unref();
-    return { ok: true, file };
-  } catch (e) {
-    return { ok: false, message: String((e && e.message) || e) };
-  }
+  return hostPlatform.process.launch(file, [], { windowsHide: false });
 }
 
 // ===== 客户端自带的模型能力表（模态自动识别） =====

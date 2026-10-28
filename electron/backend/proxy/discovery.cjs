@@ -42,43 +42,18 @@ const wbCrypto = require("./wbCrypto.cjs");
 const qoderAuth = require("./qoderAuth.cjs");
 const clineCredentials = require("./cline/credentials.cjs");
 const clineLogin = require("./cline/login.cjs");
+const { localAppData, roamingAppData } = require("../platform-paths.cjs");
+const hostPlatform = require("../platform/index.cjs");
 
 const OAUTH_PORT = 17388; // 首选回环端口；被占用时退到系统随机端口（授权地址里会带实际端口）
 const OAUTH_TIMEOUT_MS = 180000;
 const POLL_INTERVAL_MS = 1500;
 
-// ===== 路径工具（跨平台适配：Windows / macOS / Linux） =====
-
-function localAppData() {
-  if (process.env.LOCALAPPDATA) return process.env.LOCALAPPDATA;
-  if (process.platform === "darwin") return path.join(os.homedir(), "Library", "Application Support");
-  if (process.platform === "linux") return process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share");
-  return path.join(os.homedir(), "AppData", "Local");
-}
-
-function roamingAppData() {
-  if (process.env.APPDATA) return process.env.APPDATA;
-  if (process.platform === "darwin") return path.join(os.homedir(), "Library", "Application Support");
-  if (process.platform === "linux") return process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
-  return path.join(os.homedir(), "AppData", "Roaming");
-}
+// ===== 路径工具（统一走 platform-paths；Linux 同时探测 XDG data/config） =====
 
 function wbAuthCandidateDirs() {
-  const dirs = [];
-  if (process.env.LOCALAPPDATA) {
-    dirs.push(path.join(process.env.LOCALAPPDATA, "CodeBuddyExtension", "Data", "Public", "auth"));
-  }
-  if (process.platform === "darwin") {
-    dirs.push(path.join(os.homedir(), "Library", "Application Support", "CodeBuddyExtension", "Data", "Public", "auth"));
-  }
-  if (process.platform === "linux") {
-    if (process.env.XDG_DATA_HOME) dirs.push(path.join(process.env.XDG_DATA_HOME, "CodeBuddyExtension", "Data", "Public", "auth"));
-    dirs.push(path.join(os.homedir(), ".local", "share", "CodeBuddyExtension", "Data", "Public", "auth"));
-    if (process.env.XDG_CONFIG_HOME) dirs.push(path.join(process.env.XDG_CONFIG_HOME, "CodeBuddyExtension", "Data", "Public", "auth"));
-    dirs.push(path.join(os.homedir(), ".config", "CodeBuddyExtension", "Data", "Public", "auth"));
-  }
-  dirs.push(path.join(localAppData(), "CodeBuddyExtension", "Data", "Public", "auth"));
-  return dirs;
+  const suffix = path.join("CodeBuddyExtension", "Data", "Public", "auth");
+  return [...new Set([path.join(localAppData(), suffix), path.join(roamingAppData(), suffix)])];
 }
 
 function wbAuthDir() {
@@ -100,15 +75,7 @@ const TRAE_APP_DIRS = {
 };
 
 function traeStoragePaths(appDirs) {
-  const roots = [];
-  if (process.env.APPDATA) roots.push(process.env.APPDATA);
-  if (process.platform === "darwin") roots.push(path.join(os.homedir(), "Library", "Application Support"));
-  if (process.platform === "linux") {
-    if (process.env.XDG_CONFIG_HOME) roots.push(process.env.XDG_CONFIG_HOME);
-    roots.push(path.join(os.homedir(), ".config"));
-  }
-  roots.push(roamingAppData());
-
+  const roots = [...new Set([roamingAppData(), hostPlatform.paths.configHome()])];
   const out = [];
   for (const root of roots) {
     for (const n of appDirs) {
@@ -590,8 +557,9 @@ function scanCatpaw() {
 }
 
 /** 全量扫描（本机全渠道候选） */
-function scanAll() {
-  return [...scanTrae(), ...scanWorkBuddy(), ...scanRaccoon(), ...scanZcode(), ...scanQoder(), ...scanCatpaw(), ...scanAutoclaw(), ...scanCline()];
+function scanAll(channel) {
+  const all = [...scanTrae(), ...scanWorkBuddy(), ...scanRaccoon(), ...scanZcode(), ...scanQoder(), ...scanCatpaw(), ...scanAutoclaw(), ...scanCline()];
+  return channel ? all.filter((candidate) => candidate.channel === channel) : all;
 }
 
 /** AutoClaw 本机登录态扫描：新版两个官方目录按地区归属；旧版共享来源仍同时产出双区候选。 */

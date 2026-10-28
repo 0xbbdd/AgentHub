@@ -22,6 +22,7 @@
 const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
+const hostPlatform = require("../platform/index.cjs");
 
 const agents = require("./agents.cjs");
 const inject = require("./inject.cjs");
@@ -47,7 +48,7 @@ function resolveBridge(appPath, resourcesPath) {
 function resolveHostExe(appPath) {
   // process.execPath 在开发态是 electron，在打包态是 AgentHub 自身；macOS/Linux 没有 .exe 后缀。
   const candidates = [appPath, process.execPath].filter(Boolean);
-  if (process.platform === "win32") {
+  if (hostPlatform.isWindows()) {
     candidates.push(
       path.join(localAppData(), "Programs", "AgentHub", "AgentHub.exe"),
       path.join(process.env.ProgramFiles || "C:\\Program Files", "AgentHub", "AgentHub.exe"),

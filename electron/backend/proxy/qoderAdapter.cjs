@@ -25,6 +25,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const os = require("node:os");
+const hostPlatform = require("../platform/index.cjs");
 
 /**
  * Cosy-MachineOS 的取值口径：客户端用 Windows 内核版本号（实测 "10.0.26200.0"）。
@@ -32,7 +33,7 @@ const os = require("node:os");
  */
 function osVersion() {
   try {
-    return process.platform === "win32" ? os.release() : `${process.platform}-${os.arch()}`;
+    return hostPlatform.hostFingerprint();
   } catch {
     return "";
   }

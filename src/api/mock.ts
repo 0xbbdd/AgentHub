@@ -760,6 +760,15 @@ export const mock = {
         return { ok: true, message: "设置保存成功" };
       case "get_app_version":
         return "0.1.0";
+      case "get_platform_capabilities":
+        return {
+          schema: 1,
+          platform: { name: "web", arch: "unknown", supported: false },
+          runtime: null,
+          features: {},
+          sources: [],
+          channels: [],
+        };
       case "get_data_dir":
         return "(浏览器预览)";
       case "open_data_dir":
@@ -776,6 +785,8 @@ export const mock = {
         return previewStatus("downloaded");
       case "install_update":
         return previewStatus("idle");
+      case "clear_update_cache":
+        return { ...previewStatus("idle"), message: "更新缓存已清理，可重新检查更新" };
       case "open_release_page":
       case "open_repo_page":
         return;

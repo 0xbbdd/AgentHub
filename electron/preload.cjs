@@ -18,6 +18,7 @@ const ALLOWED_COMMANDS = new Set([
   "load_config",
   "save_config",
   "get_app_version",
+  "get_platform_capabilities",
   "get_data_dir",
   "open_data_dir",
   "browse_dir",
@@ -27,6 +28,7 @@ const ALLOWED_COMMANDS = new Set([
   "check_update",
   "download_update",
   "install_update",
+  "clear_update_cache",
   "open_release_page",
   "open_repo_page",
   // ===== 技能仓库：WebDAV =====

@@ -16,13 +16,16 @@
 const path = require("node:path");
 const { app, BrowserWindow, Notification, nativeImage, shell, net, session } = require("electron");
 const config = require("./config.cjs");
+const { classifyUpdateError, updaterCacheCandidates } = require("./update-utils.cjs");
 
 const GITHUB_REPO_URL = "https://github.com/0xbbdd/AgentHub";
 const GITHUB_RELEASES_URL = GITHUB_REPO_URL + "/releases";
 // latest.yml 在每个 Release 里都有，latest 直链永远指最新版，不用调 API 也不用担心限流
 const LATEST_YML_URL = GITHUB_RELEASES_URL + "/latest/download/latest.yml";
-const FIRST_CHECK_DELAY_MS = 60 * 1000; // 启动一分钟后再查，避开启动高峰
+const FIRST_CHECK_DELAY_MS = Math.max(500, Number(process.env.AGENTHUB_UPDATE_FIRST_CHECK_MS) || 60 * 1000); // 测试可缩短
 const CHECK_INTERVAL_MS = 60 * 60 * 1000; // 每小时一次
+const UPDATE_TEST_URL = String(process.env.AGENTHUB_UPDATE_URL || "").trim();
+const UPDATE_SMOKE_RESULT_FILE = String(process.env.AGENTHUB_UPDATE_SMOKE_RESULT_FILE || "").trim();
 const MANUAL_COOLDOWN_MS = 30 * 1000;
 const FETCH_TIMEOUT_MS = 15 * 1000;
 // 本机代理回退候选：直连失败后逐个试，命中即记入会话；都没命中说明本机没可用代理
@@ -85,6 +88,7 @@ function notifyIcon() {
 }
 
 function notify(title, body) {
+  if (UPDATE_SMOKE_RESULT_FILE) return; // 测试环境通常没有通知守护进程，避免阻塞更新状态机
   if (!Notification.isSupported()) return;
   const n = new Notification({ title, body, icon: notifyIcon() });
   n.on("click", () => {
@@ -100,9 +104,29 @@ function broadcast(payload) {
   }
 }
 
+function smokeLog(message) {
+  if (UPDATE_SMOKE_RESULT_FILE) console.log(`[update-smoke] ${message}`);
+}
+
+function reportSmokeStatus() {
+  if (!UPDATE_SMOKE_RESULT_FILE) return;
+  try {
+    const fs = require("node:fs");
+    fs.writeFileSync(UPDATE_SMOKE_RESULT_FILE, JSON.stringify({
+      at: Date.now(),
+      status: status.status,
+      currentVersion: status.currentVersion,
+      latestVersion: status.latestVersion,
+      percent: status.percent,
+      message: status.message,
+    }, null, 2), "utf8");
+  } catch { /* 测试状态写入失败不影响更新 */ }
+}
+
 function setState(state, extra = {}) {
   status = { ...status, ...extra, status: state };
   broadcast({ event: "state", ...status });
+  reportSmokeStatus();
   if (onTrayRefresh) {
     try { onTrayRefresh(); } catch { /* 托盘刷新失败不影响更新流程 */ }
   }
@@ -267,6 +291,11 @@ async function onUpdateError(e) {
   const action =
     status.status === "checking" ? "检查更新失败" :
     status.status === "downloading" ? "下载更新失败" : "更新失败";
+  const classified = classifyUpdateError(e);
+  if (["checksum", "signature", "permission", "disk"].includes(classified.kind)) {
+    setState("error", { percent: 0, message: `${action}：${classified.hint}` });
+    return;
+  }
   // 网络类错误说明直连与代理候选都已试过，提示更贴近实际
   const hint = isNetworkError(e) ? "已自动尝试本机常见代理仍不可用，" : "";
   setState("error", { percent: 0, message: `${action}：${msg}。${hint}请前往 GitHub 手动下载更新` });
@@ -392,8 +421,9 @@ async function check(manual) {
 }
 
 function download() {
+  smokeLog(`download called status=${status.status} portable=${isPortable()} updater=${!!autoUpdater}`);
   if (isPortable() || status.status !== "available" || !autoUpdater) return status;
-  autoUpdater.downloadUpdate().catch(() => {});
+  autoUpdater.downloadUpdate().catch((error) => smokeLog(`downloadUpdate rejected: ${(error && error.message) || error}`));
   return status;
 }
 
@@ -418,6 +448,20 @@ function pendingInstall() {
   return !installTriggered && status.status === "downloaded" && !!autoUpdater && !isPortable();
 }
 
+/** 清理 electron-updater 下载缓存，用于完整性/签名失败后重新下载。 */
+function clearUpdateCache() {
+  if (status.status === "downloading") return status;
+  const fs = require("node:fs");
+  let cachePath = "";
+  try { cachePath = app.getPath("cache"); } catch { /* 无 Electron cache path 时保持空 */ }
+  const dirs = updaterCacheCandidates({ cachePath, name: app.getName(), productName: app.name });
+  for (const dir of dirs) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 权限/占用时保留，下一次仍可重试 */ }
+  }
+  setState("idle", { percent: 0, latestVersion: "", notes: "", message: "更新缓存已清理，可重新检查更新" });
+  return status;
+}
+
 function openReleases() {
   shell.openExternal(GITHUB_RELEASES_URL);
 }
@@ -430,6 +474,10 @@ function bindUpdaterEvents() {
   autoUpdater.on("checking-for-update", () => setState("checking"));
   autoUpdater.on("update-available", (info) => {
     setState("available", { latestVersion: info.version, notes: toNotes(info.releaseNotes), percent: 0, message: "" });
+    if (process.env.AGENTHUB_UPDATE_AUTO_DOWNLOAD === "1") {
+      smokeLog(`auto download scheduled version=${info.version}`);
+      setTimeout(() => { smokeLog("auto download fired"); download(); }, 100);
+    }
     if (!currentCheckIsManual) notifyAvailable(info.version);
   });
   autoUpdater.on("update-not-available", () => setState("up-to-date", { latestVersion: "", notes: "", percent: 0, message: "" }));
@@ -439,6 +487,7 @@ function bindUpdaterEvents() {
   autoUpdater.on("update-downloaded", () => {
     setState("downloaded", { percent: 100, message: "" });
     notify("新版本已就绪", "退出应用时自动安装，也可在更新中心立即重启安装");
+    if (process.env.AGENTHUB_UPDATE_AUTO_INSTALL === "1") setTimeout(() => triggerInstall(), 500);
   });
   autoUpdater.on("error", (e) => onUpdateError(e));
 }
@@ -450,6 +499,15 @@ function init(opts) {
   if (autoUpdater) {
     autoUpdater.autoDownload = false; // 下载让用户自己点
     autoUpdater.autoInstallOnAppQuit = false; // 退出安装自己接管，默认实现会弹向导
+    if (UPDATE_TEST_URL) {
+      try {
+        const parsed = new URL(UPDATE_TEST_URL);
+        if (!/^https?:$/.test(parsed.protocol)) throw new Error(`不支持更新测试协议：${parsed.protocol}`);
+        autoUpdater.setFeedURL({ provider: "generic", url: parsed.toString() });
+      } catch (error) {
+        onUpdateError(error);
+      }
+    }
     bindUpdaterEvents();
   }
   if (app.isPackaged) timer = setTimeout(tick, FIRST_CHECK_DELAY_MS);
@@ -466,4 +524,4 @@ function getStatus() {
   return status || idleStatus();
 }
 
-module.exports = { init, check, download, triggerInstall, pendingInstall, getStatus, openReleases, openRepo, isPortable };
+module.exports = { init, check, download, triggerInstall, pendingInstall, clearUpdateCache, getStatus, openReleases, openRepo, isPortable };
