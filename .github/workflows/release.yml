@@ -1,7 +1,5 @@
-# 发布流水线：手动触发（workflow_dispatch）。
-# 不用 tag 触发的原因：tag 由 electron-builder --publish always 在发版时创建，
-# 本地 tag 与远端 Release 各自独立；手动触发可保证「版本号校验 → 构建 → 发布」顺序可控。
-# 客户端（安装版 electron-updater）发布后立即可见，发版不可撤回。
+# 生产发布流水线：验证 → 三平台签名构建 → 单发布者汇总 → 校验 → 发布。
+# 不做 matrix 内直接 publish，避免多任务并发创建 tag/Release 与更新清单互相覆盖。
 name: Release
 
 on:
@@ -11,8 +9,21 @@ on:
         description: '版本号（留空则用 package.json 的 version）'
         required: false
         default: ''
+      upgrade_baseline_tag:
+        description: '升级 smoke 基线 tag（留空则使用 latest Release）'
+        required: false
+        default: ''
+      allow_missing_upgrade_baseline:
+        description: '首个跨平台版本或旧 Release 缺资产时，允许跳过升级 smoke'
+        type: boolean
+        required: false
+        default: false
+      dry_run:
+        description: '完整执行签名构建、更新 E2E、汇总与签名，但不创建 GitHub Release'
+        type: boolean
+        required: false
+        default: false
 
-# 防止两个 dispatch 并发竞争创建同一 tag/Release
 concurrency:
   group: release
   cancel-in-progress: false
@@ -24,28 +35,41 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
 
-      - name: 校验版本号（与输入一致 + 严格高于 GitHub 最新版 + tag 未被占用）
+      - name: 校验版本号、更新说明与 tag
         shell: bash
+        env:
+          RELEASE_INPUT_VERSION: ${{ inputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           PKG_VERSION="$(node -p "require('./package.json').version")"
-          INPUT_VERSION="${{ inputs.version }}"
-          # 直接校验 tag（electron-builder 发布时按 v{version} 创建 tag，已存在即失败）：
-          # tag 一旦发布版本号永久不可复用——发版不可撤回
+          INPUT_VERSION="${RELEASE_INPUT_VERSION:-}"
+          if [ -n "$INPUT_VERSION" ] && [ "$INPUT_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::输入版本 $INPUT_VERSION 与 package.json 的 $PKG_VERSION 不一致"
+            exit 1
+          fi
+          if ! grep -q "^# v${PKG_VERSION}$" build/release-notes.md; then
+            echo "::error::build/release-notes.md 首行必须是对应版本： # v${PKG_VERSION}"
+            exit 1
+          fi
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "::notice::Dry Run：跳过 tag 唯一性与版本递增检查"
+            exit 0
+          fi
           EXISTING_TAGS="$(git ls-remote --tags https://github.com/0xbbdd/AgentHub.git 'refs/tags/v*' | sed 's#.*refs/tags/##;s#\^{}##' || true)"
           LATEST_TAG="$(printf '%s\n' "$EXISTING_TAGS" | sort -V | tail -1 || true)"
-          node -e "
-            const argv = process.argv.slice(1);
-            const pkg = argv[0], input = argv[1], latest = argv[2] || '';
-            if (input && input !== pkg) { console.error('输入版本 ' + input + ' 与 package.json 的 ' + pkg + ' 不一致'); process.exit(1); }
+          node -e '
+            const [pkg, latest] = process.argv.slice(1);
             const gt = (a, b) => {
-              const pa = String(a).replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
-              const pb = String(b).replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
+              const pa = String(a).replace(/^v/, "").split(".").map((n) => parseInt(n, 10) || 0);
+              const pb = String(b).replace(/^v/, "").split(".").map((n) => parseInt(n, 10) || 0);
               for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
                 const d = (pa[i] || 0) - (pb[i] || 0);
                 if (d > 0) return true;
@@ -53,36 +77,311 @@ jobs:
               }
               return false;
             };
-            if (latest && !gt(pkg, latest)) { console.error('版本 ' + pkg + ' 必须严格高于 GitHub 当前最新 tag ' + latest + '（tag 一旦发布不可复用，请升级 package.json 版本号）'); process.exit(1); }
-            console.log('版本校验通过：' + pkg + (latest ? ' > ' + latest : '（首个版本）'));
-          " "$PKG_VERSION" "$INPUT_VERSION" "$LATEST_TAG"
+            if (latest && !gt(pkg, latest)) {
+              console.error(`版本 ${pkg} 必须严格高于当前最新 tag ${latest}`);
+              process.exit(1);
+            }
+            console.log(`版本校验通过：${pkg}${latest ? ` > ${latest}` : "（首个版本）"}`);
+          ' "$PKG_VERSION" "$LATEST_TAG"
+          if grep -qx "v${PKG_VERSION}" <<< "$EXISTING_TAGS"; then
+            echo "::error::tag v${PKG_VERSION} 已存在，版本号不可复用"
+            exit 1
+          fi
 
       - name: 安装依赖
         run: npm ci
 
-      - name: 校验三平台 SQLCipher 原生库
-        run: node tools/verify-native-resources.cjs --strict
+      - name: 发布工程与平台门禁
+        run: |
+          npm run release:verify
+          npm run verify:platform
+          npm run native:verify -- --strict
 
-      - name: 类型检查与前端构建（vue-tsc 门禁）
+      - name: 类型检查与前端构建
         run: npm run build
 
   package:
     needs: validate
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: windows-latest
-            command: npx electron-builder --win nsis --x64 --publish always
+            platform: win32
+            arch: x64
+            artifact: agenthub-win-x64
+            build: npx electron-builder --win nsis --x64 --publish never -c.forceCodeSigning=true -c.win.publisherName="$WIN_PUBLISHER_NAME"
           - os: macos-13
-            command: npx electron-builder --mac dmg zip --x64 --publish always
+            platform: darwin
+            arch: x64
+            artifact: agenthub-mac-x64
+            build: npx electron-builder --mac dmg zip --x64 --publish never -c.forceCodeSigning=true
           - os: macos-14
-            command: npx electron-builder --mac dmg zip --arm64 --publish always
+            platform: darwin
+            arch: arm64
+            artifact: agenthub-mac-arm64
+            build: npx electron-builder --mac dmg zip --arm64 --publish never -c.forceCodeSigning=true
           - os: ubuntu-latest
-            command: npx electron-builder --linux AppImage deb --x64 --publish always
-    runs-on: ${{ matrix.os }}
+            platform: linux
+            arch: x64
+            artifact: agenthub-linux-x64
+            build: npx electron-builder --linux AppImage deb --x64 --publish never
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 构建前端与平台门禁
+        run: npm run build
+
+      - name: 准备当前平台原生资源
+        run: node tools/prepare-native-resources.cjs --platform=${{ matrix.platform }} --arch=${{ matrix.arch }}
+
+      - name: 验证当前平台 SQLCipher 可加载
+        run: npm run native:smoke
+
+      - name: 准备 Linux GUI E2E 依赖
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb dbus-x11 gnome-keyring libsecret-1-0 libsecret-tools
+
+      - name: 检查 Windows 签名凭据
+        if: matrix.platform == 'win32'
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          WIN_PUBLISHER_NAME: ${{ secrets.WIN_PUBLISHER_NAME }}
+        run: |
+          if [ -z "$CSC_LINK" ] || [ -z "$CSC_KEY_PASSWORD" ]; then
+            echo "::error::缺少 WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD，生产发布拒绝构建未签名 EXE"
+            exit 1
+          fi
+          if [ -z "$WIN_PUBLISHER_NAME" ]; then
+            echo "::error::缺少 WIN_PUBLISHER_NAME，electron-updater 无法校验发布者签名"
+            exit 1
+          fi
+
+      - name: 准备 macOS 签名与公证凭据
+        if: matrix.platform == 'darwin'
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$CSC_LINK" ] || [ -z "$CSC_KEY_PASSWORD" ]; then
+            echo "::error::缺少 MAC_CSC_LINK / MAC_CSC_KEY_PASSWORD，生产发布拒绝构建未签名 DMG"
+            exit 1
+          fi
+          if [ -z "$APPLE_TEAM_ID" ]; then
+            echo "::error::缺少 APPLE_TEAM_ID"
+            exit 1
+          fi
+          if [ -n "$APPLE_API_KEY_BASE64" ]; then
+            if [ -z "$APPLE_API_KEY_ID" ] || [ -z "$APPLE_API_ISSUER" ]; then
+              echo "::error::API Key 公证需要 APPLE_API_KEY_ID / APPLE_API_ISSUER"
+              exit 1
+            fi
+            mkdir -p "$RUNNER_TEMP/apple"
+            node -e 'const fs=require("node:fs"); const s=fs.readFileSync(0,"utf8").trim(); fs.writeFileSync(process.argv[1], Buffer.from(s,"base64"));' "$RUNNER_TEMP/apple/AuthKey.p8" <<< "$APPLE_API_KEY_BASE64"
+            echo "APPLE_API_KEY=$RUNNER_TEMP/apple/AuthKey.p8" >> "$GITHUB_ENV"
+          elif [ -z "$APPLE_ID" ] || [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ]; then
+            echo "::error::缺少 Apple ID 公证凭据或 App Store Connect API Key"
+            exit 1
+          fi
+
+      - name: Windows 签名构建
+        if: matrix.platform == 'win32'
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          WIN_PUBLISHER_NAME: ${{ secrets.WIN_PUBLISHER_NAME }}
+        run: ${{ matrix.build }}
+
+      - name: macOS 签名、公证与打包
+        if: matrix.platform == 'darwin'
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: ${{ matrix.build }}
+
+      - name: Linux 打包
+        if: matrix.platform == 'linux'
+        run: ${{ matrix.build }}
+
+      - name: 验证 Windows Authenticode
+        if: matrix.platform == 'win32'
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem release -Filter *.exe | Select-Object -First 1
+          if (-not $exe) { throw "未生成 Windows EXE" }
+          $sig = Get-AuthenticodeSignature $exe.FullName
+          if ($sig.Status -ne "Valid") { throw "Authenticode 校验失败：$($exe.Name) status=$($sig.Status)" }
+          $appUpdate = Get-ChildItem release -Recurse -Filter app-update.yml | Select-Object -First 1
+          if (-not $appUpdate) { throw "未找到 app-update.yml" }
+          $updateConfig = Get-Content $appUpdate.FullName -Raw
+          if ($updateConfig -notmatch "publisherName:") { throw "app-update.yml 缺少 publisherName，更新包签名校验未启用" }
+          Write-Host "Authenticode + update publisherName OK: $($exe.Name)"
+
+      - name: 验证 macOS 签名、公证与 staple
+        if: matrix.platform == 'darwin'
+        shell: bash
+        run: |
+          APP_PATH="$(find release -maxdepth 3 -type d -name '*.app' | head -1)"
+          if [ -z "$APP_PATH" ]; then echo "::error::未找到 .app"; exit 1; fi
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          xcrun stapler validate "$APP_PATH"
+          spctl --assess --type execute --verbose=4 "$APP_PATH"
+          for dmg in release/*.dmg; do hdiutil verify "$dmg"; done
+
+      - name: Linux Electron GUI E2E
+        if: matrix.platform == 'linux'
+        run: dbus-run-session -- xvfb-run -a npm run e2e:electron
+
+      - name: Windows/macOS Electron GUI E2E
+        if: matrix.platform != 'linux'
+        run: npm run e2e:electron
+
+      - name: Linux 真实 Secret Service 安全存储 E2E
+        if: matrix.platform == 'linux'
+        run: dbus-run-session -- bash tools/run-linux-keyring-e2e.sh
+
+      - name: Windows/macOS 真实系统安全存储 E2E
+        if: matrix.platform != 'linux'
+        run: npm run e2e:secure-storage
+
+      - name: Linux 轻量模式桌面 E2E
+        if: matrix.platform == 'linux'
+        run: dbus-run-session -- xvfb-run -a sh -c 'npm run e2e:window-mode && npm run e2e:window-mode:main'
+
+      - name: Windows/macOS 轻量模式桌面 E2E
+        if: matrix.platform != 'linux'
+        run: npm run e2e:window-mode && npm run e2e:window-mode:main
+
+      - name: 上传 GUI E2E 失败截图
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agenthub-gui-e2e-${{ matrix.platform }}-${{ matrix.arch }}-failure
+          if-no-files-found: ignore
+          path: |
+            gui-e2e-failure.png
+            window-mode-main-e2e-failure.png
+
+      - name: 下载上一版升级基线
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASELINE_TAG: ${{ inputs.upgrade_baseline_tag }}
+          ALLOW_MISSING: ${{ inputs.allow_missing_upgrade_baseline }}
+          TARGET_PLATFORM: ${{ matrix.platform }}
+        run: |
+          TAG="$BASELINE_TAG"
+          if [ -z "$TAG" ]; then
+            TAG="$(gh release view --json tagName -q .tagName 2>/dev/null || true)"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::warning::没有可用的上一版 Release，首个版本将跳过升级 smoke"
+            echo "ALLOW_MISSING_UPGRADE_BASELINE=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          mkdir -p old-release
+          set +e
+          case "$TARGET_PLATFORM" in
+            win32) gh release download "$TAG" --dir old-release --pattern '*.exe' ;;
+            darwin) gh release download "$TAG" --dir old-release --pattern '*.dmg' ;;
+            linux) gh release download "$TAG" --dir old-release --pattern '*.deb' --pattern '*.AppImage' ;;
+            *) exit 1 ;;
+          esac
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            if [ "$ALLOW_MISSING" = "true" ]; then
+              echo "::warning::基线 $TAG 缺少当前平台安装包，已显式允许跳过升级 smoke"
+              echo "ALLOW_MISSING_UPGRADE_BASELINE=1" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            echo "::error::无法从基线 $TAG 下载当前平台安装包"
+            exit "$rc"
+          fi
+          echo "UPGRADE_BASELINE_TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Windows 安装/启动/卸载 smoke
+        if: matrix.platform == 'win32'
+        shell: pwsh
+        run: ./tools/release-install-smoke-win.ps1
+
+      - name: macOS DMG 挂载/启动 smoke
+        if: matrix.platform == 'darwin'
+        shell: bash
+        run: bash tools/release-install-smoke-mac.sh
+
+      - name: Linux AppImage/DEB 安装/启动/卸载 smoke
+        if: matrix.platform == 'linux'
+        shell: bash
+        env:
+          AGENTHUB_INSTALL_DEB: "1"
+        run: bash tools/release-install-smoke-linux.sh
+
+      - name: Windows 升级/回滚 smoke
+        if: matrix.platform == 'win32'
+        shell: pwsh
+        run: ./tools/release-upgrade-smoke-win.ps1
+
+      - name: macOS 升级/回滚 smoke
+        if: matrix.platform == 'darwin'
+        shell: bash
+        run: bash tools/release-upgrade-smoke-mac.sh
+
+      - name: Linux 升级/回滚 smoke
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: bash tools/release-upgrade-smoke-linux.sh
+
+      - name: 上传当前平台构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          if-no-files-found: error
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.zip
+            release/*.AppImage
+            release/*.deb
+            release/*.blockmap
+            release/latest.yml
+            release/latest-mac.yml
+            release/latest-linux.yml
+
+  updater-e2e:
+    needs: validate
+    runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -91,55 +390,184 @@ jobs:
           cache: npm
       - name: 安装依赖
         run: npm ci
-      - name: 构建前端
-        run: npm run build
-      - name: 准备当前平台原生资源
-        run: npm run native:prepare
-      - name: 验证当前平台 SQLCipher 可加载
-        run: npm run native:smoke
-      - name: 打包并发布当前平台资产
-        run: ${{ matrix.command }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: 准备 Linux GUI 冒烟依赖
+        run: sudo apt-get update && sudo apt-get install -y xvfb dbus-x11
+      - name: 真实 AppImage 更新 E2E
+        run: npm run release:updater-e2e
+      - name: 上传更新 E2E 失败诊断
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: updater-e2e-diagnostics
+          if-no-files-found: ignore
+          path: .updater-e2e/**
 
-  finalize:
-    needs: package
-    runs-on: ubuntu-latest
+  updater-e2e-win:
+    needs: validate
+    runs-on: windows-latest
     permissions:
-      contents: write
+      contents: read
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: 补 Release 更新说明（build/release-notes.md → Release body）
-        # electron-builder 创建 Release 不传 body；body 为空则 Release 页无说明、
-        # atom feed 兜底路径也拿不到更新说明。校验 latest.yml 之前先补好
+          cache: npm
+      - name: 安装依赖
+        run: npm ci
+      - name: 真实 NSIS 更新 E2E
+        shell: pwsh
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          WIN_PUBLISHER_NAME: ${{ secrets.WIN_PUBLISHER_NAME }}
+        run: npm run release:updater-e2e:win
+      - name: 上传更新 E2E 失败诊断
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: updater-e2e-win-diagnostics
+          if-no-files-found: ignore
+          path: .updater-e2e-win/**
+
+  updater-e2e-mac:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-13, macos-14]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: 安装依赖
+        run: npm ci
+      - name: 真实 macOS 更新 E2E
         shell: bash
+        env:
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+        run: npm run release:updater-e2e:mac
+      - name: 上传更新 E2E 失败诊断
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: updater-e2e-mac-${{ matrix.os }}-diagnostics
+          if-no-files-found: ignore
+          path: .updater-e2e-mac/**
+
+  publish:
+    needs: [package, updater-e2e, updater-e2e-win, updater-e2e-mac]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装发布工具依赖
+        run: npm ci
+
+      - name: 下载三平台制品
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          pattern: agenthub-*
+
+      - name: 汇总资产、合并 macOS 双架构清单并生成 SHA256SUMS
+        run: node tools/assemble-release.cjs release-artifacts release-assets
+
+      - name: 导入并验证 Linux GPG 签名密钥
+        shell: bash
+        env:
+          LINUX_GPG_PRIVATE_KEY: ${{ secrets.LINUX_GPG_PRIVATE_KEY }}
+          LINUX_GPG_PASSPHRASE: ${{ secrets.LINUX_GPG_PASSPHRASE }}
         run: |
-          if [ ! -s build/release-notes.md ]; then
-            echo "::error::build/release-notes.md 缺失或为空（客户端与 Release 页的更新说明都源自它）"
+          if [ -z "$LINUX_GPG_PRIVATE_KEY" ] || [ -z "$LINUX_GPG_PASSPHRASE" ]; then
+            echo "::error::缺少 LINUX_GPG_PRIVATE_KEY / LINUX_GPG_PASSPHRASE，生产发布拒绝无签名校验和"
             exit 1
           fi
-          node tools/patch-release-notes.cjs "$(node -p "require('./package.json').version")" build/release-notes.md
+          printf '%s' "$LINUX_GPG_PRIVATE_KEY" | base64 --decode | gpg --batch --import
+          FPR="$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "fpr" { print $10; exit }')"
+          test -n "$FPR"
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$LINUX_GPG_PASSPHRASE" \
+            --local-user "$FPR" --armor --detach-sign \
+            --output release-assets/SHA256SUMS.txt.asc release-assets/SHA256SUMS.txt
+          gpg --verify release-assets/SHA256SUMS.txt.asc release-assets/SHA256SUMS.txt
+          gpg --armor --export "$FPR" > release-assets/AgentHub-Linux-GPG-KEY.asc
+          echo "LINUX_GPG_FPR=$FPR" >> "$GITHUB_ENV"
+
+      - name: 创建草稿 Release
+        if: ${{ inputs.dry_run != true }}
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          TAG="v${VERSION}"
+          gh release create "$TAG" --draft --title "AgentHub ${TAG}" --notes-file build/release-notes.md
+          gh release upload "$TAG" release-assets/* --clobber
 
-      - name: 校验 latest.yml 已正确发布
+      - name: 发布前校验草稿 Release 资产与更新清单
+        if: ${{ inputs.dry_run != true }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          TAG="v${VERSION}"
+          mkdir -p remote-verify
+          gh release download "$TAG" --pattern 'latest*.yml' --dir remote-verify
+          node -e '
+            const fs = require("node:fs");
+            const yaml = require("js-yaml");
+            const version = require("./package.json").version;
+            for (const name of ["latest.yml", "latest-mac.yml", "latest-linux.yml"]) {
+              const doc = yaml.load(fs.readFileSync(`remote-verify/${name}`, "utf8"));
+              if (String(doc.version) !== version) throw new Error(`${name} version=${doc.version}`);
+              if (!doc.releaseNotes || !String(doc.releaseNotes).trim()) throw new Error(`${name} 缺 releaseNotes`);
+              if (!Array.isArray(doc.files) || !doc.files.length) throw new Error(`${name} 缺 files[]`);
+            }
+            const mac = yaml.load(fs.readFileSync("remote-verify/latest-mac.yml", "utf8"));
+            if (!mac.files.some((f) => /x64/i.test(f.url)) || !mac.files.some((f) => /arm64/i.test(f.url))) {
+              throw new Error("latest-mac.yml 未同时包含 x64/arm64");
+            }
+            console.log("三平台更新清单校验通过");
+          '
+
+      - name: 发布 Release
+        if: ${{ inputs.dry_run != true }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          gh release edit "v${VERSION}" --draft=false --latest
+          gh release view "v${VERSION}" --json tagName,isDraft,isLatest,assets
+
+      - name: 上传 Dry Run 发布制品
+        if: ${{ inputs.dry_run == true }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: agenthub-release-dry-run-${{ github.run_id }}
+          if-no-files-found: error
+          path: release-assets/**
+
+      - name: Dry Run 完成
+        if: ${{ inputs.dry_run == true }}
         shell: bash
         run: |
-          PKG_VERSION="$(node -p "require('./package.json').version")"
-          # 用带 tag 的直链（无 latest 路由索引延迟）；安装版的更新检查依赖该资产
-          URL="https://github.com/0xbbdd/AgentHub/releases/download/v${PKG_VERSION}/latest.yml"
-          for i in 1 2 3 4 5 6; do
-            YML="$(curl -fsSL "$URL" 2>/dev/null || true)"
-            # 版本匹配 + releaseNotes 非空：更新说明随 latest.yml 下发，客户端检查更新即展示
-            if grep -q "^version: ${PKG_VERSION}$" <<< "$YML" && grep -q "^releaseNotes:" <<< "$YML"; then
-              echo "latest.yml 校验通过：version ${PKG_VERSION} + releaseNotes 已下发"
-              exit 0
-            fi
-            echo "第 $i 次校验未通过，20 秒后重试…"
-            sleep 20
-          done
-          echo "::error::latest.yml 发布校验失败（2 分钟内仍不可下载、版本不匹配或缺 releaseNotes），请检查 Release 资产"
-          exit 1
+          VERSION="$(node -p "require('./package.json').version")"
+          echo "::notice::Dry Run v${VERSION} 完成；未创建 tag/Release，制品已作为 workflow artifact 上传"

@@ -17,6 +17,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import * as api from "../../api/ipc";
 import type { ProxyChannelView, ProxyAccount, ProxyChannelId, ProxyPoolStrategy, ProxyCostTier, ProxyScanCandidate, ProxyCheckinRow, ZcodeDeviceRow } from "../../types";
 import { useAppStore } from "../../stores/app";
+import { usePlatformStore, type ChannelCapabilityAction } from "../../stores/platform";
 import { fmtInt, fmtK, fmtDate, fmtAgo, fmtCredits, ACCOUNT_STATUS, SOURCE_NAMES, channelName, fmtBalance, fmtPkgTotal, fmtPkgUsed, pkgFallbackName, balanceUnit, isQoderChannel, isClineChannel, costTierName, checkinLabels, todayStr } from "./format";
 // 顶部渠道切换（收起态方块）与「上游启闭」弹窗共用同一份渠道图标映射
 import { CHANNEL_ICONS, channelInitial } from "./channelIcons";
@@ -25,6 +26,7 @@ import { commandMode } from "../../api/caps";
 import { solveCaptcha, cancelCaptcha, CaptchaCancelledError } from "../../utils/aliyunCaptcha";
 
 const app = useAppStore();
+const platform = usePlatformStore();
 const pool = ref<ProxyChannelView[]>([]);
 const refreshingChannel = ref(false);
 const refreshingId = ref("");
@@ -127,6 +129,49 @@ type AddMethod = "oauth" | "sms" | "local" | "file" | "paste";
 const addOpen = ref(false);
 const addChannel = ref<ProxyChannelId>("trae");
 const addMethod = ref<AddMethod>("oauth");
+
+/** 平台能力提示：能力 Store 未加载时保持旧行为，仅对后端明确 blocked 的入口做门控。 */
+function capabilityOf(channel: string, action: ChannelCapabilityAction) {
+  return platform.capability(channel, action);
+}
+function capabilityBlocked(channel: string, action: ChannelCapabilityAction) {
+  return platform.blocked(channel, action);
+}
+const addInferenceCapability = computed(() => capabilityOf(addChannel.value, "inference"));
+const addLocalImportCapability = computed(() => capabilityOf(addChannel.value, "localImport"));
+const activeInferenceCapability = computed(() => capabilityOf(activeChannel.value, "inference"));
+const addPlatformNotice = computed(() => {
+  const inference = addInferenceCapability.value;
+  if (inference && (inference.status === "blocked" || inference.status === "not-applicable")) {
+    return `当前平台暂不能使用 ${channelName(addChannel.value)}：${inference.reason || "缺少本平台运行依赖"}`;
+  }
+  const local = addLocalImportCapability.value;
+  if (local && (local.status === "blocked" || local.status === "not-applicable")) {
+    return `当前平台无法从本机客户端导入：${local.reason || "缺少本平台客户端适配"}。仍可使用 OAuth、文件、粘贴或号池同步。`;
+  }
+  return "";
+});
+const addLocalImportWarning = computed(() => {
+  const local = addLocalImportCapability.value;
+  if (!local || local.status === "supported") return "";
+  if (local.status === "compatible") return local.reason || "当前平台为兼容实现，尚未完成真机验收";
+  if (local.status === "fallback") return local.reason || "当前平台使用降级路径";
+  return "";
+});
+const activePlatformNotice = computed(() => {
+  const inference = activeInferenceCapability.value;
+  if (!inference || inference.status !== "blocked") return "";
+  return `当前平台暂不可用：${inference.reason || "该渠道缺少本平台运行依赖"}`;
+});
+const secureStorageWarning = computed(() => {
+  const state = platform.secureStorage;
+  if (!state || state.encrypted) return "";
+  const reason = state.reason || "系统钥匙串不可用且未设置 AGENTHUB_SECRET_KEY";
+  if (state.policy?.failClosed) {
+    return `安全存储不可用：${reason}。生产环境已拒绝明文落盘，新增或修改凭据会保存失败。`;
+  }
+  return `安全存储不可用：${reason}。当前为开发兼容模式，新增凭据可能以明文落盘。`;
+});
 const pasteJson = ref("");
 const pasteMsg = ref("");
 const pasteErr = ref(false);
@@ -206,6 +251,7 @@ function addTabAllowed(key: AddMethod, channel: ProxyChannelId = activeChannel.v
   if (key === "oauth" && commandMode("proxy_oauth_begin") === "deny") return false;
   if (key === "file" && commandMode("proxy_account_import_file") === "deny") return false;
   if (key === "local" && (commandMode("proxy_scan") === "deny" || commandMode("proxy_scan_import") === "deny")) return false;
+  if (key === "local" && capabilityBlocked(channel, "localImport")) return false;
   if (key === "oauth" && NO_OAUTH_CHANNELS.includes(channel)) return false;
   // 手机验证码页签只给 AutoClaw 国内版；它自身也没有 OAuth 页签可放
   if (key === "sms") return SMS_ONLY_CHANNELS.includes(channel);
@@ -907,6 +953,7 @@ const devHasIssue = computed(() => devRows.value.some((r) => r.conflictWith.leng
 
 /** 该账号能否写回本地客户端（Trae 的登录态是加密信封，写不了） */
 function ideSupported(acc: ProxyAccount) {
+  if (capabilityBlocked(acc.channel, "ideSwitch")) return false;
   if (acc.channel === "trae") return false;
   // LobsterAI：官方登录态在客户端 SQLite 里，且本渠道本就无需装客户端（走回环 OAuth），不做写回
   if (acc.channel === "lobster") return false;
@@ -919,6 +966,9 @@ function ideSupported(acc: ProxyAccount) {
 }
 
 function ideTitle(acc: ProxyAccount) {
+  if (capabilityBlocked(acc.channel, "ideSwitch")) {
+    return platform.reason(acc.channel, "ideSwitch") || "当前平台不支持写回本机客户端登录态";
+  }
   if (acc.channel === "trae") return "Trae 本地登录态为 ByteCrypto 加密信封（绑定设备密钥），无法构造合法信封，暂不支持写回";
   if (acc.channel === "lobster") return "LobsterAI 渠道走应用内回环 OAuth 登录（无需安装官方客户端），不支持写回本机登录态";
   if (acc.channel === "modelscope") return "ModelScope 渠道用你自建的 ms- 访问令牌（官方公开 API，无客户端登录态），不支持写回本机";
@@ -1081,8 +1131,11 @@ function openAdd(ch: ProxyChannelView) {
   smsErr.value = false;
   scanMsg.value = "";
   scanErr.value = false;
+  scanList.value = [];
   addOpen.value = true;
-  loadScan(); // 打开即扫描本机，切到「从本机软件导入」时结果已经在了
+  // 只在本机导入是默认方式时才扫描：macOS Keychain / Linux Secret Service 可能弹授权，
+  // 不能因为用户只想用 OAuth 就在后台触发系统凭据访问。
+  if (addMethod.value === "local") loadScan();
 }
 
 /** 关弹窗：正在等待 OAuth 回调时一并取消，不留后台悬挂的授权流程 */
@@ -1286,7 +1339,7 @@ async function loadScan() {
   scanBusy.value = true;
   scanErr.value = false;
   try {
-    scanList.value = await api.proxyScan();
+    scanList.value = await api.proxyScan(addChannel.value);
     scanMsg.value = scanList.value.length ? `发现 ${scanList.value.length} 个候选登录态` : "未在本机发现可导入的登录态";
   } catch (e) {
     scanErr.value = true;
@@ -1697,6 +1750,9 @@ onUnmounted(() => {
             </button>
           </span>
         </div>
+        <div v-if="activePlatformNotice" class="platform-banner">
+          <i class="ph ph-warning-circle"></i><span>{{ activePlatformNotice }}</span>
+        </div>
         <!-- 聚合顶部（单一数据源实时推导） -->
         <div class="agg">
           <div class="agg-item">
@@ -2002,6 +2058,12 @@ onUnmounted(() => {
           <div v-if="containerForm" class="add-msg">
             容器形态推荐：设置 → 号池同步（WebDAV/S3）；也可粘贴含 token/refreshToken 的凭据 JSON，或调用管理 API <code>/api/accounts/import</code>。桌面端号池「导出」按钮的产物已含明文凭据（<code>format=agenthub-credentials</code>），可以直接拿来灌号。
           </div>
+          <div v-if="secureStorageWarning" class="add-msg warn platform-note">
+            <i class="ph ph-warning-circle"></i>{{ secureStorageWarning }}
+          </div>
+          <div v-if="addPlatformNotice" class="add-msg warn platform-note">
+            <i class="ph ph-warning-circle"></i>{{ addPlatformNotice }}
+          </div>
 
           <!-- 方式内容：各面板共用固定高度，切换时弹窗不跳高度 -->
           <div class="add-body">
@@ -2064,6 +2126,9 @@ onUnmounted(() => {
 
             <!-- 从本机软件导入：读本机已登录客户端的凭据，零请求入池 -->
             <div v-else-if="addMethod === 'local'" class="add-pane">
+              <div v-if="addLocalImportWarning" class="add-msg warn local-compat-note">
+                <i class="ph ph-info"></i>{{ addLocalImportWarning }}
+              </div>
               <div class="scan-head">
                 <span class="scan-hint">读取本机已登录客户端的登录态，凭据不出本机</span>
                 <button class="btn btn-sm" :disabled="scanBusy" @click="loadScan">{{ scanBusy ? "扫描中…" : "重新扫描" }}</button>
@@ -3105,6 +3170,41 @@ onUnmounted(() => {
 }
 .add-msg.err {
   color: var(--err, #e05555);
+}
+.add-msg.warn {
+  color: var(--warn, #e5b454);
+}
+.platform-note {
+  margin: 8px 18px 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.platform-note i {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.local-compat-note {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.platform-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--warn, #e5b454) 35%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--warn, #e5b454) 8%, transparent);
+  color: var(--warn, #e5b454);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.platform-banner i {
+  flex-shrink: 0;
+  margin-top: 1px;
 }
 /* 粘贴面板：标签 + 撑满的文本域 */
 .paste-pane {

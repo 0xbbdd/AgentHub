@@ -1024,8 +1024,8 @@ function register(ipcMain) {
   }));
 
   // ===== 凭据接入：本机软件导入 =====
-  ipcMain.handle("proxy_scan", handle(() => {
-    const found = discovery.scanAll();
+  ipcMain.handle("proxy_scan", handle(({ channel } = {}) => {
+    const found = discovery.scanAll(channel);
     const existing = store.listAccounts();
     return found.map((c) => ({
       ...c,
@@ -1037,7 +1037,7 @@ function register(ipcMain) {
   // 导入本机候选：index 指向 proxy_scan 返回的数组下标；
   // 同时带上 channel/file 做一次身份核对 —— 两次扫描之间文件可能增减，只认下标会导错账号
   ipcMain.handle("proxy_scan_import", handle(({ index, channel, file, uid }) => {
-    const found = discovery.scanAll();
+    const found = discovery.scanAll(channel);
     let c = found[Number(index)];
     if (file || uid) {
       // 身份核对：以 file/uid 为准回查，防止两次扫描之间候选增减导致按下标导错账号

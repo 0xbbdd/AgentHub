@@ -430,6 +430,7 @@ async function e2e() {
     // 旧版 auth.json 无地区标识时仍双区候选。
     const credentialsMod = require("../electron/backend/proxy/autoclaw/credentials.cjs");
     const qoderAuth = require("../electron/backend/proxy/qoderAuth.cjs");
+    const chromiumCrypto = require("../electron/backend/platform/chromium-crypto.cjs");
     const testKey = crypto.randomBytes(32);
     const keyLoader = () => testKey;
     const mkOfficial = (productDir, accountKey, plain, profile, deviceId) => {
@@ -470,6 +471,12 @@ async function e2e() {
     });
     assert(partial.autoclaw && partial.autoclaw.uid === "874974", "一区解密失败时另一区仍正常解出（不互相掩盖）");
     assert(!partial.autoclaw_intl && /解密失败/.test(partial.errors.autoclaw_intl || ""), "失败地区单独记入 errors，不影响成功地区");
+    const cbcMaterial = chromiumCrypto.materialFromPassword("fixture-keychain-password", "fixture");
+    const cbcPlain = Buffer.from(JSON.stringify({ access_token: jwtOf("cbc-user", Math.floor(Date.now() / 1000) + 86400), refresh_token: "rt-cbc" }), "utf8");
+    const cbcJson = credentialsMod.decryptV10Json(chromiumCrypto.encryptCbc(cbcPlain, cbcMaterial.key), cbcMaterial);
+    assert(cbcJson.access_token && cbcJson.refresh_token === "rt-cbc", "AutoClaw CBC v10 集成解密可用");
+    const cbcEncValue = credentialsMod.decryptEncValue(`enc:${chromiumCrypto.encryptCbc(Buffer.from("Bearer cbc-token", "utf8"), cbcMaterial.key).toString("base64")}`, cbcMaterial);
+    assert(cbcEncValue === "cbc-token", "AutoClaw CBC 加密字段可解密");
 
     // e2e（仅 win32）：真 DPAPI 包密钥写 Local State，走完整 scanAutoclaw → importCandidate
     // 沙箱/CI 里 powershell.exe 可能起不来（DPAPI 要靠它 Protect），给一条跳过路径：

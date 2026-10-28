@@ -39,7 +39,11 @@ function printProbe(r, label) {
   console.log(`  客户端版本 : ${r.version}`);
   console.log(`  SDK 目录   : ${r.sdk}`);
   console.log(`  obf 路径   : ${r.obf}`);
+  console.log(`  obf 健康   : ${ok(r.obfHealth && r.obfHealth.readable)} 可读  mode ${r.obfHealth && r.obfHealth.mode || "-"}`);
   console.log(`  obf 体积   : ${num(r.obfSize)} B   (mtime ${r.obfMtime})`);
+  const ri = r.runtimeInfo || {};
+  console.log(`  runtime    : ${ri.path || "(未找到)"}`);
+  if (ri.path) console.log(`               exists=${ok(ri.exists)} executable=${ok(ri.executable)} mode=${ri.mode || "-"}`);
   console.log(`  入口标记   : ${ok(r.entryMark.hit)} ${r.entryMark.hit ? "命中" : "未命中"}   "${r.entryMark.mark}"${r.entryMark.hit ? ` @ offset ${r.entryMark.offset}` : ""}`);
   console.log(`  内嵌 wasm  : ${ok(r.inlineWasm.hit)} ${r.inlineWasm.hit ? "在" : "不在"}     "${r.inlineWasm.magic}"${r.inlineWasm.hit ? ` @ offset ${r.inlineWasm.offset}` : ""}`);
   console.log(`  提取路径   : ${r.path}`);

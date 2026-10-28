@@ -2,8 +2,15 @@
 node_modules/
 
 # 构建产物
+.updater-e2e/
+.updater-e2e-win/
+.updater-e2e-mac/
 dist/
 release/
+
+# GUI/E2E 失败截图
+gui-e2e-failure.png
+window-mode-main-e2e-failure.png
 
 # 日志
 *.log

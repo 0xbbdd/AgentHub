@@ -408,13 +408,15 @@ npm install
 
 npm run dev          # desktop development (Electron + Vite HMR)
 npm run dev:web      # browser-only UI preview (mock data, no Electron)
-npm run build        # type check + frontend build
+npm run build        # platform gates + type check + frontend build
+npm run verify:platform     # cross-platform paths/capability matrix/boundary checks
+npm run platform:matrix     # print the full three-platform capability matrix
 npm run electron:build:win    # Windows x64 NSIS (build on Windows)
 npm run electron:build:mac    # macOS host-architecture DMG + ZIP (build on macOS; build Intel and Apple Silicon separately)
 npm run electron:build:linux  # Linux x64 AppImage + DEB (build on Linux)
 ```
 
-> The macOS/Linux packages run the full desktop shell. Features that depend on Windows client files, DPAPI, PowerShell, or `.exe` helpers degrade on those platforms. Trae usage import now ships SQLCipher libraries for macOS x64 / arm64 and Linux x64 (provenance and checksums in `resources/sqlcipher/NOTICE.md`); run `npm run native:verify` to check them. If the resources are stripped, only that source is disabled. Configure Apple Developer signing and notarization before public macOS distribution.
+> See [PLATFORM.md](./PLATFORM.md) for the current capability matrix and production release gates, and [RELEASE.md](./RELEASE.md) for signing secrets and the release process. The macOS/Linux packages run the full desktop shell. Features that depend on Windows client files, DPAPI, PowerShell, or `.exe` helpers degrade on those platforms. Trae usage import now ships SQLCipher libraries for macOS x64 / arm64 and Linux x64 (provenance and checksums in `resources/sqlcipher/NOTICE.md`); run `npm run native:verify` to check them. If the resources are stripped, only that source is disabled. Configure Apple Developer signing and notarization before public macOS distribution.
 
 Full end-to-end self-test for the proxy backend (fake upstream included: failover / auto-switch / streaming both modes / fingerprint headers):
 

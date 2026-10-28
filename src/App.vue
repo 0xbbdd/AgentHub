@@ -14,8 +14,9 @@ import zhCn from "element-plus/es/locale/lang/zh-cn";
 import { ElConfigProvider } from "element-plus";
 import { defineAsyncComponent, onMounted, onUnmounted, ref, watch } from "vue";
 import { useAppStore } from "./stores/app";
-import { useSyncStore } from "./stores/sync";
+import { useSyncStore, ALL_SOURCES } from "./stores/sync";
 import { useUsageStore } from "./stores/usage";
+import { usePlatformStore } from "./stores/platform";
 import Sidebar from "./components/Sidebar.vue";
 import PageTabs from "./components/PageTabs.vue";
 import SettingsDialog from "./components/config/SettingsDialog.vue";
@@ -70,6 +71,7 @@ import type { UpdateEvent } from "./types";
 const app = useAppStore();
 const usage = useSyncStore();
 const memory = useMemoryStore();
+const platform = usePlatformStore();
 
 /** 记忆中枢默认页签：ui.defaultTab（只在首次进入该模块时生效，之后记住用户点过的页） */
 let memoryDefaultApplied = false;
@@ -79,6 +81,7 @@ let dispose: (() => void)[] = [];
 
 onMounted(() => {
   app.load();
+  platform.load(); // 平台能力矩阵：页面入口门控与兼容性提示
   usage.load(); // 用量同步：加载配置/数据源/进度快照；仅任务运行期间轮询
   usageData.startDayWatcher(); // 跨天换日守护：过 0 点自动把「今日/本月」口径的数据换到新一天
   app.refreshUpdateStatus(); // 启动拉一次更新状态，维护设置齿轮红点
@@ -119,6 +122,15 @@ onUnmounted(() => {
   dispose.forEach((fn) => fn());
   dispose = [];
 });
+
+/** 能力矩阵到达后，若用户上次停留在当前平台不可用的数据源，回到「全部」。 */
+watch(
+  [() => platform.ready, () => usage.activeSource],
+  ([ready, source]) => {
+    if (ready && source !== ALL_SOURCES && platform.sourceBlocked(source)) usage.setActiveSource(ALL_SOURCES);
+  },
+  { immediate: true },
+);
 
 /** 记忆中枢默认页签：ui.defaultTab（首次进入该模块时落到配置页签，之后记住用户点过的页） */
 watch(

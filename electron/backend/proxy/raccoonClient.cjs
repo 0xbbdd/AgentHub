@@ -26,43 +26,21 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { execSync, spawn } = require("node:child_process");
+const { execSync } = require("node:child_process");
 const { roamingAppData, localAppData } = require("../platform-paths.cjs");
+const hostPlatform = require("../platform/index.cjs");
 
 /** 客户端进程：主进程 + 内嵌 ACP 运行时，两者运行期间都会回写 auth.json */
 const PROC_MAIN = "商汤小浣熊.exe";
 const PROC_ACP = "box-agent-acp.exe";
 
-/** 200ms 粒度无损休眠（不占 CPU，对齐 zcodeLocal.syncSleep） */
-function syncSleep(ms) {
-  try {
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.max(1, ms));
-  } catch {
-    const end = Date.now() + ms;
-    while (Date.now() < end) { /* 降级兜底 */ }
-  }
-}
-
-/** tasklist 单进程探测：命中输出含 ".exe"，未命中输出中文提示（兜底输出乱码也不影响判定） */
-function procRunning(name) {
-  if (process.platform !== "win32") return false;
-  try {
-    const out = execSync(`tasklist /FI "IMAGENAME eq ${name}" /NH`, { encoding: "utf8", windowsHide: true, timeout: 8000 });
-    return /\.exe/i.test(out);
-  } catch {
-    return false;
-  }
-}
-
 /** Electron lockfile PID 查活（宽松解析：取首个 ≥2 位数字串；格式随 Electron 版本变，不依赖具体形状） */
 function lockfileAlive() {
-  if (process.platform !== "win32") return false;
+  if (!hostPlatform.isWindows()) return false;
   try {
     const lf = path.join(roamingAppData(), "office-raccoon", "lockfile");
     const m = String(fs.readFileSync(lf, "utf8")).match(/\d{2,}/);
-    if (!m) return false;
-    const out = execSync(`tasklist /FI "PID eq ${m[0]}" /NH`, { encoding: "utf8", windowsHide: true, timeout: 8000 });
-    return /\.exe/i.test(out);
+    return !!m && hostPlatform.process.isPidRunning(Number(m[0]));
   } catch {
     return false;
   }
@@ -70,8 +48,8 @@ function lockfileAlive() {
 
 /** 客户端是否在运行（三线索取或；main=桌面主进程，acp=ACP 运行时，lock=lockfile） */
 function isRaccoonRunning() {
-  const main = procRunning(PROC_MAIN);
-  const acp = procRunning(PROC_ACP);
+  const main = hostPlatform.process.isRunning(PROC_MAIN);
+  const acp = hostPlatform.process.isRunning(PROC_ACP);
   const lock = lockfileAlive();
   return { running: main || acp || lock, main, acp, lock };
 }
@@ -79,22 +57,17 @@ function isRaccoonRunning() {
 /** 关闭全部相关进程并等待退出（默认 8s 超时；杀不掉返回 false，调用方中止切换）。
  *  等待只盯两个进程是否消失（lockfile 可能异常残留，不参与退出判定，避免 PID 复用误判拖死流程） */
 function killRaccoon(timeoutMs = 8000) {
-  if (process.platform !== "win32") return true;
-  // 先主客户端（/T 连带 Chromium 多进程树与子服务），再 ACP 运行时
-  for (const n of [PROC_MAIN, PROC_ACP]) {
-    try { execSync(`taskkill /F /IM "${n}" /T`, { encoding: "utf8", windowsHide: true, timeout: 8000 }); } catch { /* 可能已退出 */ }
-  }
-  const deadline = Date.now() + Math.max(1000, timeoutMs);
-  while (Date.now() < deadline) {
-    if (!procRunning(PROC_MAIN) && !procRunning(PROC_ACP)) return true;
-    syncSleep(200);
-  }
-  return !procRunning(PROC_MAIN) && !procRunning(PROC_ACP);
+  // 主客户端与 ACP 运行时都必须退出；强制关闭避免内存态再次回写登录文件。
+  return hostPlatform.process.killMany([PROC_MAIN, PROC_ACP], {
+    force: true,
+    tree: true,
+    timeoutMs: Math.max(1000, timeoutMs),
+  });
 }
 
 /** 安装路径候选表 + 运行中进程反查（找不到返回空串，由调用方降级为"手动打开"提示） */
 function findRaccoonExe() {
-  if (process.platform !== "win32") return "";
+  if (!hostPlatform.isWindows()) return "";
   const localData = localAppData();
   const pf = process.env.ProgramFiles || "C:\\Program Files";
   const pf86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
@@ -109,12 +82,8 @@ function findRaccoonExe() {
     "E:\\raccoon-ai",
     "F:\\raccoon-ai",
   ];
-  for (const d of dirs) {
-    const p = path.join(d, PROC_MAIN);
-    try {
-      if (fs.existsSync(p)) return p;
-    } catch { /* 下一个 */ }
-  }
+  const installed = hostPlatform.process.findExecutable(dirs.map((dir) => path.join(dir, PROC_MAIN)));
+  if (installed) return installed;
   // 运行中进程反查：ACP 等子进程路径含 <install>\resources\ → 上溯出安装根再拼主程序名
   try {
     const out = execSync(
@@ -138,13 +107,7 @@ function findRaccoonExe() {
 function launchRaccoon(exe) {
   const file = exe || findRaccoonExe();
   if (!file) return { ok: false, message: "未找到小浣熊可执行文件，请手动打开客户端" };
-  try {
-    const child = spawn(file, [], { detached: true, stdio: "ignore", windowsHide: false });
-    child.unref();
-    return { ok: true, file };
-  } catch (e) {
-    return { ok: false, message: String((e && e.message) || e) };
-  }
+  return hostPlatform.process.launch(file, [], { windowsHide: false });
 }
 
 module.exports = { PROC_MAIN, PROC_ACP, isRaccoonRunning, killRaccoon, findRaccoonExe, launchRaccoon };

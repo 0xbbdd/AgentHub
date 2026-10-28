@@ -19,6 +19,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { roamingAppData } = require("./platform-paths.cjs");
 const autostart = require("./autostart.cjs");
+const secureStore = require("./platform/secure-store.cjs");
 
 // Electron app（主进程）；纯 Node 脚本直跑（tools 自测等）时为 null
 let electronApp = null;
@@ -34,61 +35,23 @@ function isPortable() {
   return !!process.env.PORTABLE_EXECUTABLE_DIR;
 }
 
-// 凭据信封按前缀分派，加密后端二选一（桌面 safeStorage / headless AES）：
-//   enc:v1: — Electron safeStorage（Windows 下即 DPAPI），OS 用户绑定、原理上不可跨机
-//   enc:v2: — AES-256-GCM，密钥取自 AGENTHUB_SECRET_KEY，桌面与 headless 形态通用
-// 两种前缀并存是刻意的：统一成"通用信封"只会退化成把密钥一起搬走（等于没有加密）。
-// 无 safeStorage 且无 key 时保持明文降级（自测环境依赖此行为）；生产形态由网关入口强制 key
-let safeStorage = null;
-try { safeStorage = require("electron").safeStorage; } catch { /* 自测环境无 electron */ }
-const ENC_PREFIX = "enc:v1:";
-const AES_PREFIX = "enc:v2:";
-
-function aesKey() {
-  const secret = String(process.env.AGENTHUB_SECRET_KEY || "");
-  return secret ? crypto.createHash("sha256").update(secret).digest() : null;
-}
-
-/** 是否本模块产出的密文信封（敏感 meta 判定用：enc:v2: 同样算密文，不能当明文剥掉） */
-function isEncrypted(v) {
-  return typeof v === "string" && (v.startsWith(ENC_PREFIX) || v.startsWith(AES_PREFIX));
-}
+// 凭据信封统一由 platform/secure-store.cjs 处理。
+// enc:v1 = Electron safeStorage；enc:v2 = AGENTHUB_SECRET_KEY 派生 AES-256-GCM。
+// 开发环境无安全后端时保留历史明文透传；打包后的生产应用默认 fail-closed。
+const ENC_PREFIX = secureStore.ENC_PREFIX;
+const AES_PREFIX = secureStore.AES_PREFIX;
+const isEncrypted = secureStore.isEncrypted;
 
 function encryptSecret(plain) {
-  const s = String(plain || "");
-  if (!s || isEncrypted(s)) return s; // 空值或已是密文不重复加密
-  if (safeStorage && safeStorage.isEncryptionAvailable()) {
-    return ENC_PREFIX + safeStorage.encryptString(s).toString("base64");
-  }
-  const key = aesKey();
-  if (!key) return s; // 明文降级（历史行为；生产形态的 key 由网关入口把关）
-  const nonce = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv("aes-256-gcm", key, nonce);
-  const ct = Buffer.concat([cipher.update(s, "utf8"), cipher.final()]);
-  return AES_PREFIX + [nonce, cipher.getAuthTag(), ct].map((b) => b.toString("base64url")).join(".");
+  return secureStore.encrypt(plain);
 }
 
 function decryptSecret(stored) {
-  const s = String(stored || "");
-  if (s.startsWith(AES_PREFIX)) {
-    const key = aesKey();
-    if (!key) return ""; // 密钥缺失/不符：与 enc:v1: 跨环境解不开同语义，交由上层"保留磁盘密文"的保护兜底
-    try {
-      const [n, tag, ct] = s.slice(AES_PREFIX.length).split(".");
-      const d = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(n, "base64url"));
-      d.setAuthTag(Buffer.from(tag, "base64url"));
-      return Buffer.concat([d.update(Buffer.from(ct, "base64url")), d.final()]).toString("utf8");
-    } catch {
-      return ""; // 密钥不符或密文损坏，让用户重填
-    }
-  }
-  if (!s.startsWith(ENC_PREFIX)) return s; // 明文（降级环境存的）直接用
-  if (!safeStorage || !safeStorage.isEncryptionAvailable()) return "";
-  try {
-    return safeStorage.decryptString(Buffer.from(s.slice(ENC_PREFIX.length), "base64"));
-  } catch {
-    return ""; // 密文来自其他机器解不开，让用户重填
-  }
+  return secureStore.decrypt(stored);
+}
+
+function secureStorageStatus() {
+  return secureStore.status();
 }
 
 /** 数据目录：Electron 用 userData（%APPDATA%\AgentHub，目录名由 main.cjs 的 setName 决定）；
@@ -612,6 +575,12 @@ function saveConfig(cfg, opts = {}) {
   const p = configPath();
   const disk = JSON.parse(JSON.stringify(cfg));
   disk.webdav.password = encryptSecret(disk.webdav.password);
+  if (Array.isArray(disk.remoteTargets)) {
+    disk.remoteTargets = disk.remoteTargets.map((target) => ({
+      ...target,
+      tokenEnc: target && target.tokenEnc ? encryptSecret(target.tokenEnc) : "",
+    }));
+  }
   if (disk.webdavShared) {
     disk.webdavShared = normalizeShared(disk.webdavShared);
     // 解密失败保护（issue #95）：loadConfig 解不开 enc:v1: 密文（换机 / DPAPI 变化）时
@@ -656,6 +625,43 @@ function saveConfig(cfg, opts = {}) {
  *  restoreOnLaunch 刻意不进名单：设置页「记住网关开关」就是经整份保存写盘的，
  *  磁盘优先会架空那个开关；渲染层快照由总览页每次启停同步（ProxyHomeView），不会过期。 */
 const OUT_OF_BAND_PROXY_FIELDS = ["channelEnabled", "checkinAutoRules", "enableAnthropic", "enableResponses"];
+
+/** 启动时保护已有配置：有安全后端就把历史明文就地封信，生产无后端则清除明文。
+ *  直接处理磁盘 JSON，避免 loadConfig → saveConfig 因解密失败或字段归一化造成数据损失。 */
+function protectSensitiveDataAtRest() {
+  const p = configPath();
+  if (!fs.existsSync(p)) return { ok: true, changed: false, migrated: 0, dropped: 0 };
+  let raw;
+  try {
+    raw = JSON.parse(fs.readFileSync(p, "utf8"));
+  } catch {
+    return { ok: false, changed: false, migrated: 0, dropped: 0, reason: "config.json 无法解析" };
+  }
+  const status = secureStorageStatus();
+  const canEncrypt = !!status.encrypted;
+  const strict = !!(status.policy && status.policy.failClosed);
+  if (!canEncrypt && !strict) return { ok: true, changed: false, migrated: 0, dropped: 0 };
+  let migrated = 0;
+  let dropped = 0;
+  const protect = (obj, key) => {
+    const value = obj && obj[key];
+    if (typeof value !== "string" || !value || isEncrypted(value)) return;
+    obj[key] = canEncrypt ? encryptSecret(value) : "";
+    if (canEncrypt) migrated++;
+    else dropped++;
+  };
+  protect(raw.webdav, "password");
+  protect(raw.webdavShared, "password");
+  protect(raw.webdavShared, "encryptionPassphrase");
+  if (Array.isArray(raw.remoteTargets)) {
+    for (const target of raw.remoteTargets) protect(target, "tokenEnc");
+  }
+  if (!migrated && !dropped) return { ok: true, changed: false, migrated, dropped };
+  const tmp = `${p}.tmp.${process.pid}`;
+  fs.writeFileSync(tmp, JSON.stringify(raw, null, 2), "utf8");
+  fs.renameSync(tmp, p);
+  return { ok: true, changed: true, migrated, dropped };
+}
 
 /** 设置页保存路径专用：先把 out-of-band 字段以**磁盘值**为准，再落盘。
  *
@@ -721,7 +727,7 @@ function applyAutoStart(cfg) {
 
 module.exports = {
   dataDir, configPath, hubDir, ensureHub, loadConfig, saveConfig, defaultConfig, ENC_PREFIX,
-  getUpdateNotified, setUpdateNotified, isPortable, encryptSecret, decryptSecret, isEncrypted, applyAutoStart,
+  getUpdateNotified, setUpdateNotified, isPortable, encryptSecret, decryptSecret, isEncrypted, secureStorageStatus, protectSensitiveDataAtRest, applyAutoStart,
   loadSharedWebdav, saveSharedWebdav, clearSharedWebdav, maskedSharedWebdav, moduleWebdav, sharedEncryptionPassphrase, PASSWORD_MASK,
   normalizeHm, normalizeJitter,
   saveConfigFromUI, OUT_OF_BAND_PROXY_FIELDS,

@@ -23,6 +23,7 @@
 const os = require("node:os");
 const path = require("node:path");
 const fs = require("node:fs");
+const crypto = require("node:crypto");
 
 const tmp = process.argv[2] || fs.mkdtempSync(path.join(os.tmpdir(), "agenthub-qoder-test-"));
 process.env.APPDATA = process.env.APPDATA || tmp; // 仅在缺省时隔离；本机自测需读真实 APPDATA 下的凭据
@@ -35,6 +36,68 @@ const assert = (cond, msg) => {
 async function main() {
   const auth = require("../electron/backend/proxy/qoderAuth.cjs");
   const signer = require("../electron/backend/proxy/qoderSigner.cjs");
+  const chromiumCrypto = require("../electron/backend/platform/chromium-crypto.cjs");
+  const qoderInstall = require("../electron/backend/proxy/qoderInstall.cjs");
+
+  // ===== 0. macOS/Linux CBC 凭据 fixture（不依赖真实钥匙串） =====
+  console.log("\n[0] CBC 凭据 fixture");
+  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agenthub-qoder-cbc-"));
+  const savedAppData = process.env.APPDATA;
+  process.env.APPDATA = fixtureRoot;
+  try {
+    const p = auth.pathsOf("qoder");
+    fs.mkdirSync(p.appData, { recursive: true });
+    fs.writeFileSync(p.localState, JSON.stringify({ os_crypt: {} }), "utf8");
+    const material = chromiumCrypto.materialFromPassword("fixture-keychain-password", "fixture");
+    const fixtureStore = {
+      schemaVersion: 1,
+      token: "dt-fixture-token",
+      refreshToken: "drt-fixture-refresh",
+      expiresAt: new Date(Date.now() + 3600000).toISOString(),
+      refreshTokenExpiresAt: new Date(Date.now() + 7200000).toISOString(),
+      user: { id: "fixture-user" },
+    };
+    fs.writeFileSync(p.authFile, chromiumCrypto.encryptCbc(Buffer.from(JSON.stringify(fixtureStore), "utf8"), material.key));
+    const read = auth.readCredentials("qoder", { keyMaterial: material });
+    assert(read.token === "dt-fixture-token" && read.refreshToken === "drt-fixture-refresh" && read.user.id === "fixture-user", "CBC v10 可完整读出 Qoder 凭据");
+    auth.writeCredentials("qoder", read, { keyMaterial: material });
+    const round = auth.readCredentials("qoder", { keyMaterial: material });
+    assert(round.token === read.token && round.refreshToken === read.refreshToken, "CBC v10 写回后仍可完整读出");
+  } finally {
+    if (savedAppData == null) delete process.env.APPDATA; else process.env.APPDATA = savedAppData;
+  }
+
+  // ===== 0b. 三平台 resources / runtime-info 定位 =====
+  console.log("\n[0b] 客户端资源定位");
+  const macCn = qoderInstall.platformCandidates("qoder", { platform: "darwin", home: "/Users/fixture" });
+  const macIntl = qoderInstall.platformCandidates("qoder_intl", { platform: "darwin", home: "/Users/fixture" });
+  assert(macCn.some((p) => p.includes("Qoder CN.app/Contents/Resources")), "macOS CN resources 候选存在");
+  assert(macIntl.some((p) => p.includes("Qoder.app/Contents/Resources")), "macOS INTL resources 候选存在");
+  const linux = qoderInstall.platformCandidates("qoder", { platform: "linux", home: "/home/fixture" });
+  assert(linux.includes("/opt/Qoder CN/resources") && linux.some((p) => p.includes(".local/share")), "Linux 系统与用户级 resources 候选存在");
+  const fixtureResources = fs.mkdtempSync(path.join(os.tmpdir(), "agenthub-qoder-resources-"));
+  fs.mkdirSync(path.join(fixtureResources, "app.asar.unpacked"), { recursive: true });
+  fs.mkdirSync(path.join(fixtureResources, "umid"), { recursive: true });
+  const runtimeName = process.platform === "win32" ? "runtime-info.exe" : "runtime-info";
+  const runtimeFile = path.join(fixtureResources, "umid", runtimeName);
+  fs.writeFileSync(runtimeFile, "fixture", "utf8");
+  if (process.platform !== "win32") fs.chmodSync(runtimeFile, 0o755);
+  const envKey = qoderInstall.ENV_KEYS.qoder;
+  const savedResources = process.env[envKey];
+  process.env[envKey] = fixtureResources;
+  qoderInstall.clearCache();
+  try {
+    assert(qoderInstall.runtimeInfoPath("qoder") === runtimeFile, "runtime-info 按当前平台可定位");
+    const health = signer.fileHealth(runtimeFile);
+    assert(health.exists && health.readable && health.executable, "runtime-info 诊断识别存在/可读/可执行");
+    const diag = await signer.diagnose("qoder");
+    assert(diag.structural.runtimeInfo.path === runtimeFile, "签名器 diagnose 带 runtime-info 路径");
+    assert(diag.structural.runtimeInfo.executable, "签名器 diagnose 识别 runtime-info 可执行位");
+  } finally {
+    if (savedResources == null) delete process.env[envKey]; else process.env[envKey] = savedResources;
+    qoderInstall.clearCache();
+    fs.rmSync(fixtureResources, { recursive: true, force: true });
+  }
 
   // ===== 1. 凭据层 =====
   console.log("\n[1] 凭据层");

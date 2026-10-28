@@ -66,6 +66,11 @@ T("S4 托盘常驻 + 轻量开 → destroy（释放渲染进程，本次新增�
   eq(mode.decideCloseAction({ quitting: false, minimizeToTray: true, lightweightMode: true }), "destroy");
 });
 
+T("S4b 托盘创建失败 → quit（不得留下无入口后台进程）", () => {
+  eq(mode.decideCloseAction({ quitting: false, trayAvailable: false, minimizeToTray: true, lightweightMode: false }), "quit");
+  eq(mode.decideCloseAction({ quitting: false, trayAvailable: false, minimizeToTray: false, lightweightMode: true }), "quit");
+});
+
 T("S5 缺字段/畸形输入不炸，且按最保守语义回落", () => {
   // 全空：minimizeToTray 非 true → destroy（保守：宁可释放也不悄悄改成常驻）
   eq(mode.decideCloseAction({}), "destroy");
@@ -81,7 +86,10 @@ T("S6 releasesRenderer 只对 destroy 为真", () => {
   eq(mode.releasesRenderer("quit"), false);
 });
 
-T("S7 开关可用性：未开托盘常驻时置灰并给理由", () => {
+T("S7 开关可用性：未开托盘常驻或托盘不可用时置灰并给理由", () => {
+  const noTray = mode.lightweightToggleState({ trayAvailable: false, minimizeToTray: true });
+  eq(noTray.enabled, false);
+  if (!/托盘不可用/.test(noTray.reason)) throw new Error("托盘不可用时必须说明真实原因");
   const off = mode.lightweightToggleState({ minimizeToTray: false });
   eq(off.enabled, false);
   if (!off.reason) throw new Error("置灰时必须给出理由（否则用户点了没反应）");

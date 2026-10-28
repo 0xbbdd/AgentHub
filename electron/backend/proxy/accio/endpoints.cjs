@@ -32,6 +32,8 @@
 // 地区做成账号字段会让界面与选路分不清「哪条账号走哪个站点」。两个地区 = 两个渠道 id（accio / accio_cn）。
 "use strict";
 
+const hostPlatform = require("../../platform/index.cjs");
+
 const DEFAULT_GATEWAY_BASE = "https://phoenix-gw.alibaba.com";
 const ADK_LLM_PATH = "/api/adk/llm";
 const OAUTH_TOKEN_PATH = "/api/oauth/token";
@@ -79,7 +81,7 @@ function apiHeaders(region) {
     "Accept-Language": ACCEPT_LANGUAGE,
     "x-language": ACCEPT_LANGUAGE,
     "x-platform": "desktop",
-    "x-os": process.platform,
+    "x-os": hostPlatform.name,
     "x-app-version": envText("ACCIO_APP_VERSION") || DEFAULT_APP_VERSION,
     "x-package-region": region.packageRegion,
   };

@@ -28,6 +28,9 @@ const watch = require("./watch.cjs");
 const proxy = require("./proxy/index.cjs");
 const proxyRemote = require("./proxy/remote.cjs");
 const memory = require("./memory/index.cjs");
+const capabilities = require("./platform/capabilities.cjs");
+const secureStore = require("./platform/secure-store.cjs");
+const runtimePlatform = require("./platform/index.cjs");
 
 // 渲染层拿到的密码一律是掩码；保存/测试连接收到精确掩码时回填磁盘真值
 const PASSWORD_MASK = "••••••••";
@@ -129,6 +132,25 @@ function register(ctx) {
 
   // ===== 框架：其它 =====
   ipcMain.handle("get_app_version", () => app.getVersion());
+  ipcMain.handle("get_platform_capabilities", () => {
+    const credentialCommand = runtimePlatform.isMac() ? "security" : runtimePlatform.isLinux() ? "secret-tool" : "powershell.exe";
+    const credentialPath = runtimePlatform.process.which(credentialCommand);
+    return capabilities.snapshot({
+      runtime: {
+        secureStorage: secureStore.status(),
+        credentialBackend: {
+          command: credentialCommand,
+          path: credentialPath,
+          available: !!credentialPath,
+          reason: credentialPath ? "" : `未找到系统凭据命令 ${credentialCommand}`,
+        },
+        desktop: {
+          ...runtimePlatform.runtimeState.snapshot(),
+          session: runtimePlatform.desktop.session(),
+        },
+      },
+    });
+  });
   ipcMain.handle("get_data_dir", () => config.dataDir());
   ipcMain.handle("open_data_dir", async () => {
     await shell.openPath(config.dataDir());
@@ -144,6 +166,7 @@ function register(ctx) {
   ipcMain.handle("check_update", () => updater.check(true));
   ipcMain.handle("download_update", () => updater.download());
   ipcMain.handle("install_update", () => updater.triggerInstall());
+  ipcMain.handle("clear_update_cache", () => updater.clearUpdateCache());
   ipcMain.handle("open_release_page", () => updater.openReleases());
   ipcMain.handle("open_repo_page", () => updater.openRepo());
 

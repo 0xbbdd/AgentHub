@@ -515,7 +515,7 @@ async function restoreRemoteMid(opts) {
 }
 
 /** 切号能力探测（ideSwitchStatus 的 zcode 段）：装了没 / 当前登录 uid / 是否新代际。
- *  刻意不探进程存活：isZcodeRunning 是同步 tasklist（约 350ms），而本函数被高频的 ideSwitchStatus
+ *  刻意不探进程存活：isZcodeRunning 会同步调用平台进程服务，而本函数被高频的 ideSwitchStatus
  *  调用（号池页每次刷新都走），会把主进程反复堵死，且该字段没有任何消费方。切号要用的实时存活
  *  判断由 precheckSwitch 直接调 zcodeLocal.isZcodeRunning() 完成——每次切号只探一次，可以接受 */
 function zcodeIdeStatus() {

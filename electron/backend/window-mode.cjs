@@ -28,12 +28,14 @@ const ACTIONS = Object.freeze(["quit", "hide", "destroy"]);
 /**
  * 决定「用户点了关闭按钮」时该做什么。
  *
- * @param {{quitting?: boolean, minimizeToTray?: boolean, lightweightMode?: boolean}} input
+ * @param {{quitting?: boolean, trayAvailable?: boolean|null, minimizeToTray?: boolean, lightweightMode?: boolean}} input
  * @returns {"quit"|"hide"|"destroy"}
  */
 function decideCloseAction(input) {
   const it = input || {};
   if (it.quitting === true) return "quit";
+  // 托盘实际创建失败时，隐藏/释放窗口会让应用失去唯一入口：直接退出。
+  if (it.trayAvailable === false) return "quit";
   // 没开托盘常驻：关窗就是关窗（既有行为）。此时应用仍靠托盘活着，
   // 但窗口本身会被销毁 —— 与轻量模式殊途同归，故直接归到 destroy。
   if (it.minimizeToTray !== true) return "destroy";
@@ -54,6 +56,9 @@ function releasesRenderer(action) {
  */
 function lightweightToggleState(input) {
   const it = input || {};
+  if (it.trayAvailable === false) {
+    return { enabled: false, reason: "系统托盘不可用：关闭窗口将直接退出，轻量模式不可用" };
+  }
   if (it.minimizeToTray !== true) {
     return { enabled: false, reason: "已关闭「关闭最小化到托盘」：关窗本身就会释放界面，无需轻量模式" };
   }

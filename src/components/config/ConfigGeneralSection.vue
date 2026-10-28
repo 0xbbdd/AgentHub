@@ -5,10 +5,12 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { ElMessageBox } from "element-plus";
 import { useAppStore } from "../../stores/app";
+import { usePlatformStore } from "../../stores/platform";
 import * as api from "../../api/ipc";
 import type { UpdateStatus, UpdateEvent } from "../../types";
 
 const app = useAppStore();
+const platform = usePlatformStore();
 const version = ref("v0.1.0");
 const dataDir = ref("");
 const isPortable = ref(false);
@@ -125,6 +127,14 @@ async function doInstall() {
     /* 同上 */
   }
 }
+async function clearCacheAndRetry() {
+  try {
+    update.value = await api.clearUpdateCache();
+    await doCheck();
+  } catch {
+    /* 失败态由主进程事件给出 */
+  }
+}
 function openReleases() {
   api.openReleasePage().catch(() => {});
 }
@@ -143,10 +153,23 @@ async function toggleAppBehavior() {
   await app.save();
 }
 
-/** 未开托盘常驻时轻量模式无意义（关窗本来就释放界面）—— 置灰并说明理由，而不是点了没反应 */
-const lightweightDisabledReason = computed(() =>
-  app.config.schedule.minimizeToTray ? "" : "已关闭「关闭最小化到托盘」：关窗本身就会释放界面，无需轻量模式"
+function featureDisabledReason(id: string) {
+  const cap = platform.feature(id);
+  if (!cap || (cap.status !== "blocked" && cap.status !== "not-applicable")) return "";
+  return cap.reason || "当前平台不支持该功能";
+}
+
+const autoStartDisabledReason = computed(() =>
+  isPortable.value ? "便携版不支持开机自启（注册的会是临时副本）" : featureDisabledReason("desktop.autostart")
 );
+const trayDisabledReason = computed(() => featureDisabledReason("desktop.tray"));
+const shortcutDisabledReason = computed(() => featureDisabledReason("desktop.global-shortcut"));
+
+/** 未开托盘常驻时轻量模式无意义（关窗本来就释放界面）—— 置灰并说明理由，而不是点了没反应 */
+const lightweightDisabledReason = computed(() => {
+  if (trayDisabledReason.value) return trayDisabledReason.value;
+  return app.config.schedule.minimizeToTray ? "" : "已关闭「关闭最小化到托盘」：关窗本身就会释放界面，无需轻量模式";
+});
 
 /** 轻量模式开关：开启前确认一次（重建窗口有秒级等待，且会重置界面内的临时状态） */
 async function toggleLightweightMode(v: string | number | boolean | undefined) {
@@ -472,29 +495,29 @@ onUnmounted(() => {
       <div class="set-row">
         <div class="set-info">
           <div class="set-name">开机自启</div>
-          <div class="set-desc">{{ isPortable ? "便携版不支持开机自启（注册的会是临时副本）" : "登录 Windows 后自动运行 AgentHub，改动即时生效" }}</div>
+          <div class="set-desc">{{ autoStartDisabledReason || "登录系统后自动运行 AgentHub，改动即时生效" }}</div>
         </div>
-        <el-tooltip :content="'便携版不支持开机自启'" :disabled="!isPortable" placement="top">
+        <el-tooltip :content="autoStartDisabledReason" :disabled="!autoStartDisabledReason" placement="top">
           <div
             class="switch"
-            :class="{ on: app.config.schedule.autoStart, disabled: isPortable }"
+            :class="{ on: app.config.schedule.autoStart, disabled: !!autoStartDisabledReason }"
             role="switch"
             :aria-checked="!!app.config.schedule.autoStart"
-            @click="!isPortable && (app.config.schedule.autoStart = !app.config.schedule.autoStart, toggleAppBehavior())"
+            @click="!autoStartDisabledReason && (app.config.schedule.autoStart = !app.config.schedule.autoStart, toggleAppBehavior())"
           ></div>
         </el-tooltip>
       </div>
       <div class="set-row">
         <div class="set-info">
           <div class="set-name">关闭最小化到托盘</div>
-          <div class="set-desc">点关闭按钮不退出，仅最小化到托盘（托盘菜单「退出」才是真正退出）</div>
+          <div class="set-desc">{{ trayDisabledReason || "点关闭按钮不退出，仅最小化到托盘（托盘菜单「退出」才是真正退出）" }}</div>
         </div>
         <div
           class="switch"
-          :class="{ on: app.config.schedule.minimizeToTray }"
+          :class="{ on: app.config.schedule.minimizeToTray, disabled: !!trayDisabledReason }"
           role="switch"
           :aria-checked="!!app.config.schedule.minimizeToTray"
-          @click="app.config.schedule.minimizeToTray = !app.config.schedule.minimizeToTray; toggleAppBehavior()"
+          @click="!trayDisabledReason && (app.config.schedule.minimizeToTray = !app.config.schedule.minimizeToTray, toggleAppBehavior())"
         ></div>
       </div>
       <!-- 全局快捷键：桌面专属（Web/容器端无全局快捷键概念） -->
@@ -506,6 +529,7 @@ onUnmounted(() => {
             必须是「功能键 + 字符键」，如 <code>Alt+`</code>、<code>Ctrl+Shift+K</code>；留空表示不启用。<br />
             <b>注意</b>：不要用 <code>~</code> —— 它需要 Shift，实际会变成三键（<code>Alt+Shift+`</code>）；填 <code>Alt+~</code> 会自动按 <code>Alt+`</code> 处理。
           </div>
+          <div v-if="shortcutDisabledReason" class="set-desc sc-err">{{ shortcutDisabledReason }}</div>
           <div v-if="shortcutMsg" class="set-desc" :class="shortcutMsg.ok ? 'sc-ok' : 'sc-err'">{{ shortcutMsg.text }}</div>
         </div>
         <div class="sc-edit">
@@ -514,9 +538,10 @@ onUnmounted(() => {
             class="sc-input"
             size="small"
             :placeholder="app.config.schedule.shortcutToggle || '未启用'"
+            :disabled="!!shortcutDisabledReason"
             @keyup.enter="saveShortcut"
           />
-          <el-button size="small" type="primary" :loading="shortcutBusy" @click="saveShortcut">保存</el-button>
+          <el-button size="small" type="primary" :loading="shortcutBusy" :disabled="!!shortcutDisabledReason" @click="saveShortcut">保存</el-button>
           <el-button size="small" :disabled="shortcutBusy || !app.config.schedule.shortcutToggle" @click="clearShortcut">清除</el-button>
         </div>
       </div>
@@ -574,7 +599,8 @@ onUnmounted(() => {
             <button class="btn btn-cta" @click="openReleases">前往下载</button>
             <span class="dot-ping"></span>
           </span>
-          <button v-else-if="update.status === 'error'" class="btn btn-ghost" @click="openReleases">前往下载</button>
+          <button v-if="update.status === 'error'" class="btn btn-ghost" @click="clearCacheAndRetry">清理缓存并重试</button>
+          <button v-if="update.status === 'error'" class="btn btn-ghost" @click="openReleases">前往下载</button>
           <button class="btn btn-ghost" :disabled="updateBusy" @click="doCheck">
             {{ updateBusy ? "处理中…" : "检查更新" }}
           </button>

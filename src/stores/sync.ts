@@ -13,6 +13,7 @@
 import { defineStore } from "pinia";
 import type { SyncConfig, SourceInfo, SourceVisibility, SyncProgress, SyncStage, TotalMode, TopBarItem } from "../types/sync";
 import { GROUP_PREFIX, SOURCE_GROUPS, sourceGroupOf } from "../types/sync";
+import { usePlatformStore } from "./platform";
 import * as api from "../api/sync";
 import { useAppStore } from "./app";
 
@@ -132,6 +133,8 @@ export const useSyncStore = defineStore("sync", {
     topItems: (s) => (includeHidden: boolean): TopBarItem[] => {
       const vis = s.config.sourceVisibility;
       const hidden = new Set(vis.hidden || []);
+      const platform = usePlatformStore();
+      const unavailable = (id: string) => !includeHidden && platform.sourceBlocked(id);
       const byId = new Map(s.sources.map((x) => [x.id, x]));
       const items: TopBarItem[] = [];
       const used = new Set<string>();
@@ -144,7 +147,7 @@ export const useSyncStore = defineStore("sync", {
           if (!def) continue;
           const children = childOrderOfList(vis, key)
             .map((id) => byId.get(id))
-            .filter((x): x is SourceInfo => !!x && (includeHidden || !hidden.has(x.id)));
+            .filter((x): x is SourceInfo => !!x && (includeHidden || (!hidden.has(x.id) && !unavailable(x.id))));
           if (!children.length) continue;
           children.forEach((c) => used.add(c.id));
           shown.add(key);
@@ -156,6 +159,7 @@ export const useSyncStore = defineStore("sync", {
           const src = byId.get(token);
           if (!src) continue;
           if (!includeHidden && hidden.has(token)) continue;
+          if (unavailable(token)) continue;
           used.add(token);
           items.push({ kind: "source", source: src });
         }
@@ -164,6 +168,7 @@ export const useSyncStore = defineStore("sync", {
       for (const src of s.sources) {
         if (used.has(src.id)) continue;
         if (!includeHidden && hidden.has(src.id)) continue;
+        if (unavailable(src.id)) continue;
         if (sourceGroupOf(src.id)) continue;
         used.add(src.id);
         items.push({ kind: "source", source: src });
@@ -175,7 +180,7 @@ export const useSyncStore = defineStore("sync", {
         if (shown.has(g.key)) continue;
         const children = childOrderOfList(vis, g.key)
           .map((id) => byId.get(id))
-          .filter((x): x is SourceInfo => !!x && (includeHidden || !hidden.has(x.id)));
+          .filter((x): x is SourceInfo => !!x && (includeHidden || (!hidden.has(x.id) && !unavailable(x.id))));
         if (!children.length) continue;
         children.forEach((c) => used.add(c.id));
         items.push({ kind: "group", key: g.key, label: g.label, children });
@@ -187,8 +192,9 @@ export const useSyncStore = defineStore("sync", {
       const vis = s.config.sourceVisibility;
       const hidden = new Set(vis.hidden || []);
       const rank = new Map((vis.order || []).map((id, i) => [id, i]));
+      const platform = usePlatformStore();
       return [...s.sources]
-        .filter((item) => !hidden.has(item.id))
+        .filter((item) => !hidden.has(item.id) && !platform.sourceBlocked(item.id))
         .sort((a, b) => (rank.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.id) ?? Number.MAX_SAFE_INTEGER));
     },
   },

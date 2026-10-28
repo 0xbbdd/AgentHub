@@ -19,6 +19,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { roamingAppData } = require("./platform-paths.cjs");
+const { redact } = require("./platform/log-redact.cjs");
 const MAX_BYTES = 1024 * 1024;
 
 function logDir() {
@@ -64,7 +65,7 @@ function write(kind, detail) {
       if (typeof detail === "string") raw = detail;
       else { try { raw = JSON.stringify(detail); } catch { raw = String(detail); } }
     }
-    const text = raw.replace(/\s+/g, " ").trim().slice(0, 3000);
+    const text = redact(raw.replace(/\s+/g, " ").trim()).slice(0, 3000);
     fs.appendFileSync(file, `[${new Date().toISOString()}] [pid=${process.pid}] ${kind}${text ? " " + text : ""}\n`);
   } catch { /* 取证日志自身绝不反噬主流程 */ }
 }

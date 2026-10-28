@@ -419,13 +419,15 @@ npm install
 
 npm run dev          # 桌面端开发（Electron + Vite HMR）
 npm run dev:web      # 纯浏览器预览 UI（mock 数据，不启动 Electron）
-npm run build        # 类型检查 + 前端构建
+npm run build        # 平台门禁 + 类型检查 + 前端构建
+npm run verify:platform     # 三平台路径/能力矩阵/边界检查
+npm run platform:matrix     # 输出三平台能力矩阵
 npm run electron:build:win    # Windows x64 NSIS（在 Windows 构建）
 npm run electron:build:mac    # macOS 宿主架构 DMG + ZIP（在 macOS 构建；Intel/Apple Silicon 分别构建）
 npm run electron:build:linux  # Linux x64 AppImage + DEB（在 Linux 构建）
 ```
 
-> macOS/Linux 安装包可运行完整桌面框架；依赖 Windows 客户端文件、DPAPI、PowerShell 或 `.exe` 的导入/切换功能会在这些平台降级。Trae 系用量读取已随包附带 macOS x64 / arm64 与 Linux x64 的 SQLCipher 原生库（来源与校验见 `resources/sqlcipher/NOTICE.md`）；可用 `npm run native:verify` 检查。若资源被裁剪，缺少时只禁用该数据源。macOS 正式分发前还需配置 Apple Developer 签名与公证。
+> 三平台当前能力状态与生产发布门禁见 [PLATFORM.md](./PLATFORM.md)，签名发布 secrets 与流程见 [RELEASE.md](./RELEASE.md)。macOS/Linux 安装包可运行完整桌面框架；依赖 Windows 客户端文件、DPAPI、PowerShell 或 `.exe` 的导入/切换功能会在这些平台降级。Trae 系用量读取已随包附带 macOS x64 / arm64 与 Linux x64 的 SQLCipher 原生库（来源与校验见 `resources/sqlcipher/NOTICE.md`）；可用 `npm run native:verify` 检查。若资源被裁剪，缺少时只禁用该数据源。macOS 正式分发前还需配置 Apple Developer 签名与公证。
 
 反代网关后端全链路自测（含假上游端到端：换号 / 自动切换 / 流式双态 / 指纹头）：
 

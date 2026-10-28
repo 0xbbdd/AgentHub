@@ -14,6 +14,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const hub = require("./hub.cjs");
+const hostPlatform = require("./platform/index.cjs");
 
 function isLink(p) {
   try {
@@ -25,13 +26,13 @@ function isLink(p) {
 
 // Windows 用 junction（免管理员权限），其他平台用目录符号链接；记录到 manifest 的类型名随之走
 function linkType() {
-  return process.platform === "win32" ? "junction" : "symlink";
+  return hostPlatform.isWindows() ? "junction" : "symlink";
 }
 
 // junction 的 readlink 会带 \\?\ 前缀和尾部反斜杠，比较前去掉；Windows 不区分大小写
 function normalizeTarget(t) {
   const s = String(t || "").replace(/^\\\?\\/, "").replace(/[\\/]+$/, "");
-  return process.platform === "win32" ? s.toLowerCase() : s;
+  return hostPlatform.isWindows() ? s.toLowerCase() : s;
 }
 
 function pointsTo(linkPath, expectedTarget) {
@@ -61,7 +62,7 @@ function mount(skillName, toolDir, mode, mountName) {
     fs.cpSync(target, linkPath, { recursive: true });
     return { action: "copied", linkPath };
   }
-  fs.symlinkSync(target, linkPath, process.platform === "win32" ? "junction" : "dir");
+  fs.symlinkSync(target, linkPath, hostPlatform.isWindows() ? "junction" : "dir");
   return fs.existsSync(linkPath) ? { action: "mounted", linkPath } : { action: "error", message: "链接创建失败", linkPath };
 }
 

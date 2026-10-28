@@ -259,6 +259,9 @@ function open() {
   try {
     db.exec("ALTER TABLE usage_requests ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0");
   } catch { /* 已存在 */ }
+  // 自本版本起，生产包在无安全后端时不允许继续使用历史明文凭据：
+  // 有加密后端则就地迁移，没有则清除凭据并标记重新登录。
+  migrateCredentialsAtRest();
   // ===== 一次性数据迁移：小浣熊账号 uid 由「签发方域名」纠正为账号 ID（sub）=====
   // 旧版 tokenUid 取 JWT 的 iss（= "xiaohuanxiong.com/iam" 签发方常量，所有账号都相同），
   // 于是历史行 uid 被写成该域名：号池里加不进第二个小浣熊号，跨机还会把不同账号当同一个
@@ -908,17 +911,107 @@ function addAccount({ channel, uid, name, token, refreshToken, source, expiresAt
  *  （lastError/checkin/onboardingGrants/domain/enterpriseId/provider/email 等）不受影响；
  *  值已是密文信封（enc:v1: 桌面 / enc:v2: headless）的键保留——落库方已加密，剥掉会把
  *  oauthClientSecret/msCookie 这类加密会话凭据一并清空，续期链随之断裂 */
-const META_SENSITIVE_RE = /token|secret|password|apikey|api[-_]key|jwt|credential/i;
-function stripSensitiveMeta(meta) {
+const META_SENSITIVE_RE = /token|secret|password|apikey|api[-_]key|jwt|credential|cookie|session/i;
+
+/** 递归保护 meta 中的敏感字符串：有后端时就地加密，生产无后端时丢弃，开发环境保持兼容。
+ *  返回 { value, dropped, migrated }，供启动迁移决定是否回落登录态。 */
+function protectMetaSecrets(meta, canEncrypt, strict) {
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) return { value: meta, dropped: false, migrated: false };
   const out = {};
+  let dropped = false;
+  let migrated = false;
   for (const [k, v] of Object.entries(meta)) {
     if (META_SENSITIVE_RE.test(k)) {
-      if (config.isEncrypted(v)) out[k] = v;
-      continue;
+      if (typeof v === "string" && v) {
+        if (config.isEncrypted(v)) {
+          out[k] = v;
+        } else if (canEncrypt) {
+          out[k] = config.encryptSecret(v);
+          migrated = true;
+        } else if (!strict) {
+          out[k] = v;
+        } else {
+          dropped = true;
+        }
+      } else if (v && typeof v === "object") {
+        const nested = protectMetaSecrets(v, canEncrypt, strict);
+        if (nested.dropped) dropped = true;
+        if (nested.migrated) migrated = true;
+        if (!nested.dropped || Object.keys(nested.value || {}).length) out[k] = nested.value;
+      } else {
+        out[k] = v;
+      }
+    } else if (v && typeof v === "object" && !Array.isArray(v)) {
+      const nested = protectMetaSecrets(v, canEncrypt, strict);
+      if (nested.dropped) dropped = true;
+      if (nested.migrated) migrated = true;
+      out[k] = nested.value;
+    } else {
+      out[k] = v;
     }
-    out[k] = v;
   }
-  return out;
+  return { value: out, dropped, migrated };
+}
+
+function stripSensitiveMeta(meta) {
+  const status = config.secureStorageStatus();
+  return protectMetaSecrets(meta, !!status.encrypted, !!(status.policy && status.policy.failClosed)).value;
+}
+
+/** 存量凭据迁移/清除：只在 open 时执行一次。
+ *  有系统密钥链或 AGENTHUB_SECRET_KEY 时把历史明文就地封信；生产无后端时清空凭据，
+ *  避免应用继续使用或保留明文。开发环境保留历史明文以维持自测与本地调试。 */
+function migrateCredentialsAtRest() {
+  const status = config.secureStorageStatus();
+  const canEncrypt = !!status.encrypted;
+  const strict = !!(status.policy && status.policy.failClosed);
+  if (!canEncrypt && !strict) return;
+
+  for (const row of db.prepare("SELECT id, token_enc, refresh_enc, meta, status, cool_reason FROM accounts").all()) {
+    let token = row.token_enc || "";
+    let refresh = row.refresh_enc || "";
+    let changed = false;
+    let dropped = false;
+    if (token && !config.isEncrypted(token)) {
+      token = canEncrypt ? config.encryptSecret(token) : "";
+      dropped = !canEncrypt;
+      changed = true;
+    }
+    if (refresh && !config.isEncrypted(refresh)) {
+      refresh = canEncrypt ? config.encryptSecret(refresh) : "";
+      dropped = dropped || !canEncrypt;
+      changed = true;
+    }
+    const meta = parseMeta(row.meta);
+    const protectedMeta = protectMetaSecrets(meta, canEncrypt, strict);
+    if (protectedMeta.dropped || protectedMeta.migrated) {
+      changed = true;
+      dropped = dropped || protectedMeta.dropped;
+    }
+    if (!changed) continue;
+    if (dropped) {
+      db.prepare("UPDATE accounts SET token_enc=?, refresh_enc=?, meta=?, status=?, cool_reason=? WHERE id=?").run(
+        token,
+        refresh,
+        JSON.stringify(protectedMeta.value || {}),
+        row.status === "online" ? "relogin" : row.status,
+        "安全存储不可用，历史明文凭据已清除，请重新登录",
+        row.id
+      );
+    } else {
+      db.prepare("UPDATE accounts SET token_enc=?, refresh_enc=?, meta=? WHERE id=?").run(
+        token,
+        refresh,
+        JSON.stringify(protectedMeta.value || {}),
+        row.id
+      );
+    }
+  }
+
+  for (const row of db.prepare("SELECT id, key_enc FROM keys WHERE key_enc <> ''").all()) {
+    if (config.isEncrypted(row.key_enc)) continue;
+    db.prepare("UPDATE keys SET key_enc=? WHERE id=?").run(canEncrypt ? config.encryptSecret(row.key_enc) : "", row.id);
+  }
 }
 
 function updateAccount(id, patch) {
